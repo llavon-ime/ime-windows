@@ -27,8 +27,9 @@ The package target performs these steps:
 - Builds and installs `ime-windows-frontend` into `dist/ime-windows-frontend`.
 - Restores WiX `4.0.4` from NuGet into the build tree.
 - Installs `WixToolset.UI.wixext` into a build-local WiX extension cache.
+- Collects vcpkg package license files from both child projects.
 - Downloads `llavon-ime-llama-250m-Q4_K_M.gguf` from the hard-coded Hugging Face URL.
-- Packages `bin`, `tables`, and `models` into an x64 per-machine MSI.
+- Packages `bin`, `tables`, `models`, and `licenses` into an x64 per-machine MSI.
 - Registers `llavon-ime.dll` with `regsvr32` during install and unregisters it during uninstall.
 - Adds a per-machine startup entry for the backend service and removes it during uninstall.
 - The frontend also starts the backend on demand if the named pipe is not available.
@@ -51,6 +52,12 @@ The installed layout is:
     start-llavon-ime-service.vbs
   models/
     llavon-ime-llama-250m-Q4_K_M.gguf
+  licenses/
+    LICENSE.txt
+    THIRD-PARTY-vcpkg-LICENSES.txt
+    vcpkg/
+      ime-service/
+      ime-windows-frontend/
   tables/
     bopomofo_char.json
     tokens/

@@ -58,6 +58,10 @@ set(LLAVON_IME_DOWNLOAD_DIR
 set(LLAVON_IME_MODEL_PATH "${LLAVON_IME_DOWNLOAD_DIR}/${LLAVON_IME_MODEL_FILENAME}")
 set(LLAVON_IME_WIX_EXE "${LLAVON_IME_WIX_TOOLS_DIR}/wix.cmd")
 set(LLAVON_IME_WIX_MARKER "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.UI.wixext-${LLAVON_IME_WIX_UI_EXTENSION_VERSION}.stamp")
+set(LLAVON_IME_VCPKG_TRIPLET "x64-windows" CACHE STRING "vcpkg triplet used by child projects")
+set(LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/licenses/vcpkg")
+set(LLAVON_IME_VCPKG_LICENSE_AGGREGATE "${CMAKE_CURRENT_BINARY_DIR}/licenses/THIRD-PARTY-vcpkg-LICENSES.txt")
+set(LLAVON_IME_VCPKG_LICENSE_MARKER "${CMAKE_CURRENT_BINARY_DIR}/licenses/vcpkg-licenses.stamp")
 
 if(NOT EXISTS "${LLAVON_IME_CMAKE_TOOLCHAIN_FILE}")
     message(FATAL_ERROR
@@ -114,6 +118,26 @@ add_custom_target(llavon-ime-artifacts
         llavon-ime-frontend-build
 )
 
+add_custom_target(llavon-ime-vcpkg-licenses
+    COMMAND
+        "${CMAKE_COMMAND}"
+            "-DLLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR=${LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR}"
+            "-DLLAVON_IME_VCPKG_LICENSE_AGGREGATE=${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
+            "-DLLAVON_IME_VCPKG_LICENSE_MARKER=${LLAVON_IME_VCPKG_LICENSE_MARKER}"
+            "-DLLAVON_IME_VCPKG_TRIPLET=${LLAVON_IME_VCPKG_TRIPLET}"
+            "-DLLAVON_IME_SERVICE_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-service-build/vcpkg_installed"
+            "-DLLAVON_IME_FRONTEND_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-frontend-build/vcpkg_installed"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CollectVcpkgLicenses.cmake"
+    DEPENDS
+        llavon-ime-artifacts
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CollectVcpkgLicenses.cmake"
+    BYPRODUCTS
+        "${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
+        "${LLAVON_IME_VCPKG_LICENSE_MARKER}"
+    COMMENT "Collecting vcpkg package licenses"
+    VERBATIM
+)
+
 add_custom_command(
     OUTPUT "${LLAVON_IME_MODEL_PATH}"
     COMMAND
@@ -153,6 +177,7 @@ add_custom_target(llavon-ime-wix
 add_custom_target(llavon-ime-package-inputs
     DEPENDS
         llavon-ime-artifacts
+        llavon-ime-vcpkg-licenses
         llavon-ime-model
         llavon-ime-wix
 )
@@ -196,6 +221,21 @@ install(FILES "${LLAVON_IME_MODEL_PATH}"
 
 install(PROGRAMS "${LLAVON_IME_SERVICE_STARTUP_LAUNCHER}"
     DESTINATION bin
+    COMPONENT Runtime
+)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt"
+    DESTINATION licenses
+    COMPONENT Runtime
+)
+
+install(FILES "${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
+    DESTINATION licenses
+    COMPONENT Runtime
+)
+
+install(DIRECTORY "${LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR}/"
+    DESTINATION licenses/vcpkg
     COMPONENT Runtime
 )
 
