@@ -52,6 +52,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-model-
 
+      - name: Create cache directories
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force .vcpkg-cache, build/windows/downloads | Out-Null
+
       - name: Bootstrap vcpkg
         shell: pwsh
         run: ./vcpkg/bootstrap-vcpkg.bat -disableMetrics
@@ -63,6 +67,17 @@ jobs:
       - name: Build MSI
         shell: pwsh
         run: cmake --build --preset package --parallel
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llavon-ime-build-logs
+          path: |
+            build/windows/**/*.log
+            vcpkg/buildtrees/**/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Show MSI
         shell: pwsh
