@@ -1,0 +1,120 @@
+name: Build MSI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+  VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-cache,readwrite
+
+jobs:
+  build-msi:
+    name: Build Windows MSI
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .vcpkg-cache
+            vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('ime-service/vcpkg.json', 'ime-service/vcpkg-configuration.json', 'ime-windows-frontend/vcpkg.json', 'ime-windows-frontend/vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Cache model download
+        uses: actions/cache@v4
+        with:
+          path: build/windows/downloads
+          key: ${{ runner.os }}-model-${{ hashFiles('CMakeLists.txt', 'cmake/DownloadModel.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-model-
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: ./vcpkg/bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset windows
+
+      - name: Build MSI
+        shell: pwsh
+        run: cmake --build --preset package --parallel
+
+      - name: Show MSI
+        shell: pwsh
+        run: Get-ChildItem build/windows -Filter *.msi | Select-Object FullName, Length, LastWriteTime
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: llavon-ime-windows-msi
+          path: build/windows/*.msi
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish latest release
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $msi = Get-ChildItem build/windows -Filter *.msi | Select-Object -First 1
+          if (-not $msi) {
+            throw "No MSI found under build/windows"
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --force latest "${{ github.sha }}"
+          git push --force origin refs/tags/latest
+
+          gh release view latest *> $null
+          $releaseExists = ($LASTEXITCODE -eq 0)
+
+          if (-not $releaseExists) {
+            gh release create latest $msi.FullName `
+              --title "Latest Windows build" `
+              --notes "Automatically updated from the latest successful build on the default branch." `
+              --latest
+            exit $LASTEXITCODE
+          }
+
+          $assetNames = gh release view latest --json assets --jq ".assets[].name"
+          foreach ($assetName in $assetNames) {
+            if ($assetName -like "*.msi") {
+              gh release delete-asset latest $assetName --yes
+            }
+          }
+
+          gh release upload latest $msi.FullName --clobber
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          gh release edit latest `
+            --title "Latest Windows build" `
+            --notes "Automatically updated from commit ${{ github.sha }} on the default branch." `
+            --latest
