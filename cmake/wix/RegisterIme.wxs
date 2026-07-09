@@ -1,0 +1,22 @@
+<CPackWiXPatch>
+  <CPackWiXFragment Id="#PRODUCT">
+    <CustomAction
+      Id="RegisterLlavonIme"
+      Directory="INSTALL_ROOT"
+      Execute="deferred"
+      Impersonate="no"
+      Return="check"
+      ExeCommand="&quot;[System64Folder]regsvr32.exe&quot; /s &quot;[INSTALL_ROOT]bin\llavon-ime.dll&quot;" />
+    <CustomAction
+      Id="UnregisterLlavonIme"
+      Directory="INSTALL_ROOT"
+      Execute="deferred"
+      Impersonate="no"
+      Return="ignore"
+      ExeCommand="&quot;[System64Folder]regsvr32.exe&quot; /u /s &quot;[INSTALL_ROOT]bin\llavon-ime.dll&quot;" />
+    <InstallExecuteSequence>
+      <Custom Action="RegisterLlavonIme" After="InstallFiles" Condition="NOT REMOVE" />
+      <Custom Action="UnregisterLlavonIme" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+  </CPackWiXFragment>
+</CPackWiXPatch>

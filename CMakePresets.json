@@ -1,0 +1,38 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows",
+      "displayName": "Windows",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "LLAVON_IME_CONFIGURATION": "Release",
+        "LLAVON_IME_ARTIFACT_DIR": "${sourceDir}/dist",
+        "LLAVON_IME_VCPKG_ROOT": "${sourceDir}/vcpkg"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows",
+      "configurePreset": "windows",
+      "configuration": "Release",
+      "targets": [
+        "llavon-ime-artifacts"
+      ]
+    },
+    {
+      "name": "package",
+      "configurePreset": "windows",
+      "configuration": "Release",
+      "targets": [
+        "llavon-ime-msi"
+      ]
+    }
+  ]
+}
