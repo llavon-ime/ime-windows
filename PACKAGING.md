@@ -30,9 +30,46 @@ The package target performs these steps:
 - Downloads `llavon-ime-llama-250m-Q4_K_M.gguf` from the hard-coded Hugging Face URL.
 - Packages `bin`, `tables`, and `models` into an x64 per-machine MSI.
 - Registers `llavon-ime.dll` with `regsvr32` during install and unregisters it during uninstall.
+- Adds a per-machine startup entry for the backend service and removes it during uninstall.
 
 The MSI is written under:
 
 ```text
 build/windows/llavon-ime-0.1.0-windows.msi
 ```
+
+## Runtime Paths
+
+The installed layout is:
+
+```text
+<install-root>/
+  bin/
+    llavon-ime.dll
+    llavon-ime-service.exe
+    start-llavon-ime-service.vbs
+  models/
+    llavon-ime-llama-250m-Q4_K_M.gguf
+  tables/
+    bopomofo_char.json
+    tokens/
+      bpmf.json
+      chars.json
+      latin.json
+      special_tokens.json
+```
+
+The backend service resolves paths in this order:
+
+- Explicit command line: `llavon-ime-service.exe <model-path> <tables-dir>`.
+- Environment: `LLAVON_IME_MODEL_PATH` and `LLAVON_IME_TABLES_DIR`.
+- Installed layout relative to the executable: `bin/../models` and `bin/../tables`.
+
+The frontend DLL resolves `bopomofo_char.json` in this order:
+
+- Environment: `LLAVON_IME_TABLES_DIR`.
+- Installed layout relative to the DLL: `bin/../tables`.
+- A source-location fallback for development builds.
+
+This keeps development builds and MSI deployments independent of the current
+working directory.

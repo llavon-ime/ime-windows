@@ -47,8 +47,8 @@ set(LLAVON_IME_WIX_EXTENSIONS_DIR
 )
 
 set(LLAVON_IME_MODEL_FILENAME "llavon-ime-llama-250m-Q4_K_M.gguf")
-set(LLAVON_IME_SERVICE_LAUNCHER
-    "${CMAKE_CURRENT_BINARY_DIR}/run-llavon-ime-service.cmd"
+set(LLAVON_IME_SERVICE_STARTUP_LAUNCHER
+    "${CMAKE_CURRENT_BINARY_DIR}/start-llavon-ime-service.vbs"
 )
 set(LLAVON_IME_DOWNLOAD_DIR
     "${CMAKE_CURRENT_BINARY_DIR}/downloads"
@@ -68,8 +68,8 @@ if(NOT EXISTS "${LLAVON_IME_CMAKE_TOOLCHAIN_FILE}")
 endif()
 
 file(GENERATE
-    OUTPUT "${LLAVON_IME_SERVICE_LAUNCHER}"
-    CONTENT "@echo off\r\n\"%~dp0llavon-ime-service.exe\" \"%~dp0..\\models\\${LLAVON_IME_MODEL_FILENAME}\" \"%~dp0..\\tables\"\r\n"
+    OUTPUT "${LLAVON_IME_SERVICE_STARTUP_LAUNCHER}"
+    CONTENT "Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\nSet shell = CreateObject(\"WScript.Shell\")\r\nbinDir = fso.GetParentFolderName(WScript.ScriptFullName)\r\nexePath = fso.BuildPath(binDir, \"llavon-ime-service.exe\")\r\nshell.Run Chr(34) & exePath & Chr(34), 0, False\r\n"
 )
 
 configure_file(
@@ -194,7 +194,7 @@ install(FILES "${LLAVON_IME_MODEL_PATH}"
     COMPONENT Runtime
 )
 
-install(PROGRAMS "${LLAVON_IME_SERVICE_LAUNCHER}"
+install(PROGRAMS "${LLAVON_IME_SERVICE_STARTUP_LAUNCHER}"
     DESTINATION bin
     COMPONENT Runtime
 )
@@ -222,6 +222,7 @@ set(CPACK_WIX_UPGRADE_GUID "FD29FA2D-C02C-47CB-AA80-B334BACAABF0")
 set(CPACK_WIX_UI_REF "WixUI_InstallDir")
 set(CPACK_WIX_PROGRAM_MENU_FOLDER "Llavon IME")
 set(CPACK_WIX_PATCH_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/RegisterIme.wxs")
+set(CPACK_WIX_EXTRA_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/Autostart.wxs")
 set(CPACK_WIX_PROPERTY_ARPCOMMENTS "Llavon IME Windows installer")
 set(CPACK_WIX_PROPERTY_ARPURLINFOABOUT "https://github.com/llavon-ime")
 

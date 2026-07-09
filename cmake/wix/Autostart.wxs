@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <DirectoryRef Id="INSTALL_ROOT">
+      <Component Id="LlavonImeBackendAutostart" Guid="*">
+        <RegistryValue
+          Root="HKLM"
+          Key="Software\Microsoft\Windows\CurrentVersion\Run"
+          Name="Llavon IME Backend"
+          Type="string"
+          Value="&quot;[SystemFolder]wscript.exe&quot; &quot;[INSTALL_ROOT]bin\start-llavon-ime-service.vbs&quot;"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <FeatureRef Id="ProductFeature">
+      <ComponentRef Id="LlavonImeBackendAutostart" />
+    </FeatureRef>
+  </Fragment>
+</Wix>
