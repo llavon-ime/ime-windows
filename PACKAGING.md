@@ -31,6 +31,7 @@ The package target performs these steps:
 - Packages `bin`, `tables`, and `models` into an x64 per-machine MSI.
 - Registers `llavon-ime.dll` with `regsvr32` during install and unregisters it during uninstall.
 - Adds a per-machine startup entry for the backend service and removes it during uninstall.
+- The frontend also starts the backend on demand if the named pipe is not available.
 
 The MSI is written under:
 
@@ -70,6 +71,11 @@ The frontend DLL resolves `bopomofo_char.json` in this order:
 - Environment: `LLAVON_IME_TABLES_DIR`.
 - Installed layout relative to the DLL: `bin/../tables`.
 - A source-location fallback for development builds.
+
+When the frontend cannot connect to `\\.\pipe\llavon-ime`, it attempts to start
+the backend with no arguments, then retries the pipe briefly. The backend
+executable is resolved from `LLAVON_IME_SERVICE_PATH` first, then from
+`llavon-ime-service.exe` next to the frontend DLL.
 
 This keeps development builds and MSI deployments independent of the current
 working directory.
