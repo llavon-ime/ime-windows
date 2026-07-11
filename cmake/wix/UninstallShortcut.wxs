@@ -8,15 +8,25 @@
   </Fragment>
 
   <Fragment>
-    <DirectoryRef Id="LlavonImeProgramMenuFolder">
+    <DirectoryRef Id="INSTALL_ROOT">
       <Component Id="LlavonImeUninstallShortcut" Guid="*">
         <Shortcut
-          Id="UninstallLlavonIme"
+          Id="UninstallLlavonImeFromInstallDirectory"
           Name="解除安裝拉風輸入法"
           Description="解除安裝拉風輸入法"
           Target="[SystemFolder]msiexec.exe"
           Arguments="/x [ProductCode]" />
-        <RemoveFolder Id="RemoveLlavonImeProgramMenuFolder" On="uninstall" />
+        <Shortcut
+          Id="UninstallLlavonImeFromProgramMenu"
+          Directory="LlavonImeProgramMenuFolder"
+          Name="解除安裝拉風輸入法"
+          Description="解除安裝拉風輸入法"
+          Target="[SystemFolder]msiexec.exe"
+          Arguments="/x [ProductCode]" />
+        <RemoveFolder
+          Id="RemoveLlavonImeProgramMenuFolder"
+          Directory="LlavonImeProgramMenuFolder"
+          On="uninstall" />
         <RegistryValue
           Root="HKLM"
           Key="Software\Llavon IME"
@@ -26,11 +36,5 @@
           KeyPath="yes" />
       </Component>
     </DirectoryRef>
-  </Fragment>
-
-  <Fragment>
-    <FeatureRef Id="ProductFeature">
-      <ComponentRef Id="LlavonImeUninstallShortcut" />
-    </FeatureRef>
   </Fragment>
 </Wix>

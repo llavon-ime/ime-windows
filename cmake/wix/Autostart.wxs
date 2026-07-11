@@ -14,9 +14,4 @@
       </Component>
     </DirectoryRef>
   </Fragment>
-  <Fragment>
-    <FeatureRef Id="ProductFeature">
-      <ComponentRef Id="LlavonImeBackendAutostart" />
-    </FeatureRef>
-  </Fragment>
 </Wix>
