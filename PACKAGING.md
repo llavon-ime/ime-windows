@@ -37,6 +37,8 @@ The package target performs these steps:
 - Adds a Start menu uninstall shortcut that invokes Windows Installer for the
   installed product, preserving the same elevated TSF unregistration and file
   removal sequence as uninstalling from Windows Settings or maintenance mode.
+- Removes files left in the known installation tree by older builds or runtime
+  diagnostics, then removes the empty installation directories during uninstall.
 - The frontend also starts the backend on demand if the named pipe is not available.
 
 The MSI is written under:

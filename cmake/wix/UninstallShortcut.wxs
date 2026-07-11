@@ -27,6 +27,45 @@
           Id="RemoveLlavonImeProgramMenuFolder"
           Directory="LlavonImeProgramMenuFolder"
           On="uninstall" />
+
+        <!--
+          Windows Installer normally removes only files tracked by the MSI.
+          Also remove files left by older builds or runtime diagnostics from
+          the known installation tree, then remove the directories bottom-up.
+        -->
+        <RemoveFile Id="RemoveLlavonImeRootFiles" Directory="INSTALL_ROOT" Name="*" On="uninstall" />
+        <RemoveFile Id="RemoveLlavonImeBinFiles" Directory="CM_DP_bin" Name="*" On="uninstall" />
+        <RemoveFile Id="RemoveLlavonImeModelFiles" Directory="CM_DP_models" Name="*" On="uninstall" />
+        <RemoveFile Id="RemoveLlavonImeTableFiles" Directory="CM_DP_tables" Name="*" On="uninstall" />
+        <RemoveFile Id="RemoveLlavonImeTokenFiles" Directory="CM_DP_tables.tokens" Name="*" On="uninstall" />
+        <RemoveFile Id="RemoveLlavonImeLicenseFiles" Directory="CM_DP_licenses" Name="*" On="uninstall" />
+        <RemoveFile
+          Id="RemoveLlavonImeServiceLicenseFiles"
+          Directory="CM_DP_licenses.vcpkg.ime_service"
+          Name="*"
+          On="uninstall" />
+        <RemoveFile
+          Id="RemoveLlavonImeFrontendLicenseFiles"
+          Directory="CM_DP_licenses.vcpkg.ime_windows_frontend"
+          Name="*"
+          On="uninstall" />
+
+        <RemoveFolder Id="RemoveLlavonImeTokensFolder" Directory="CM_DP_tables.tokens" On="uninstall" />
+        <RemoveFolder
+          Id="RemoveLlavonImeServiceLicensesFolder"
+          Directory="CM_DP_licenses.vcpkg.ime_service"
+          On="uninstall" />
+        <RemoveFolder
+          Id="RemoveLlavonImeFrontendLicensesFolder"
+          Directory="CM_DP_licenses.vcpkg.ime_windows_frontend"
+          On="uninstall" />
+        <RemoveFolder Id="RemoveLlavonImeVcpkgLicensesFolder" Directory="CM_DP_licenses.vcpkg" On="uninstall" />
+        <RemoveFolder Id="RemoveLlavonImeBinFolder" Directory="CM_DP_bin" On="uninstall" />
+        <RemoveFolder Id="RemoveLlavonImeModelsFolder" Directory="CM_DP_models" On="uninstall" />
+        <RemoveFolder Id="RemoveLlavonImeTablesFolder" Directory="CM_DP_tables" On="uninstall" />
+        <RemoveFolder Id="RemoveLlavonImeLicensesFolder" Directory="CM_DP_licenses" On="uninstall" />
+        <RemoveFolder Id="RemoveLlavonImeInstallRoot" Directory="INSTALL_ROOT" On="uninstall" />
+
         <RegistryValue
           Root="HKLM"
           Key="Software\Llavon IME"
