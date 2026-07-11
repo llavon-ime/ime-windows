@@ -28,6 +28,8 @@ The package target performs these steps:
 - Restores WiX `4.0.4` from NuGet into the build tree.
 - Installs `WixToolset.UI.wixext` into a build-local WiX extension cache.
 - Collects vcpkg package license files from both child projects.
+- Includes the model attribution and CC BY-NC 4.0 terms in the MSI license
+  agreement and as a separately installed license file.
 - Downloads `llavon-ime-llama-250m-Q4_K_M.gguf` from the hard-coded Hugging Face URL.
 - Packages `bin`, `tables`, `models`, and `licenses` into an x64 per-machine MSI.
 - Registers `llavon-ime.dll` with `regsvr32` during install and unregisters it during uninstall.
@@ -54,6 +56,7 @@ The installed layout is:
     llavon-ime-llama-250m-Q4_K_M.gguf
   licenses/
     LICENSE.txt
+    MODEL-LICENSE.txt
     THIRD-PARTY-vcpkg-LICENSES.txt
     vcpkg/
       ime-service/

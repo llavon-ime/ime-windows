@@ -1,0 +1,23 @@
+Llavon IME model license and attribution
+========================================
+
+Model file:
+  llavon-ime-llama-250m-Q4_K_M.gguf
+
+Model source:
+  https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF
+
+Creator and licensor:
+  tony65535
+
+License:
+  Creative Commons Attribution-NonCommercial 4.0 International
+  (CC BY-NC 4.0)
+
+License terms:
+  https://creativecommons.org/licenses/by-nc/4.0/legalcode
+
+The model weights are licensed separately from the Llavon IME software.
+They may be used and redistributed for non-commercial purposes only, subject
+to the attribution and other conditions of CC BY-NC 4.0. No warranties are
+given. This distribution does not modify the packaged GGUF model file.
