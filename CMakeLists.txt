@@ -281,7 +281,10 @@ set(CPACK_WIX_UPGRADE_GUID "FD29FA2D-C02C-47CB-AA80-B334BACAABF0")
 set(CPACK_WIX_UI_REF "WixUI_InstallDir")
 set(CPACK_WIX_PROGRAM_MENU_FOLDER "Llavon IME")
 set(CPACK_WIX_PATCH_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/RegisterIme.wxs")
-set(CPACK_WIX_EXTRA_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/Autostart.wxs")
+set(CPACK_WIX_EXTRA_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/Autostart.wxs"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/UninstallShortcut.wxs"
+)
 set(CPACK_WIX_PROPERTY_ARPCOMMENTS "拉風輸入法 Windows 安裝程式")
 set(CPACK_WIX_PROPERTY_ARPURLINFOABOUT "https://github.com/llavon-ime")
 

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="LlavonImeProgramMenuFolder" Name="Llavon IME" />
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <DirectoryRef Id="LlavonImeProgramMenuFolder">
+      <Component Id="LlavonImeUninstallShortcut" Guid="*">
+        <Shortcut
+          Id="UninstallLlavonIme"
+          Name="解除安裝拉風輸入法"
+          Description="解除安裝拉風輸入法"
+          Target="[SystemFolder]msiexec.exe"
+          Arguments="/x [ProductCode]" />
+        <RemoveFolder Id="RemoveLlavonImeProgramMenuFolder" On="uninstall" />
+        <RegistryValue
+          Root="HKLM"
+          Key="Software\Llavon IME"
+          Name="UninstallShortcut"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
+  <Fragment>
+    <FeatureRef Id="ProductFeature">
+      <ComponentRef Id="LlavonImeUninstallShortcut" />
+    </FeatureRef>
+  </Fragment>
+</Wix>

@@ -34,6 +34,9 @@ The package target performs these steps:
 - Packages `bin`, `tables`, `models`, and `licenses` into an x64 per-machine MSI.
 - Registers `llavon-ime.dll` with `regsvr32` during install and unregisters it during uninstall.
 - Adds a per-machine startup entry for the backend service and removes it during uninstall.
+- Adds a Start menu uninstall shortcut that invokes Windows Installer for the
+  installed product, preserving the same elevated TSF unregistration and file
+  removal sequence as uninstalling from Windows Settings or maintenance mode.
 - The frontend also starts the backend on demand if the named pipe is not available.
 
 The MSI is written under:
