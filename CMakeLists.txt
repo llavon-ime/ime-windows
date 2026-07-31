@@ -5,6 +5,45 @@ project(llavon_ime_windows LANGUAGES NONE)
 include(ExternalProject)
 
 set(LLAVON_IME_VERSION "0.1.0" CACHE STRING "Package version")
+set(LLAVON_IME_BUILD_COMMIT "" CACHE STRING "Root repository commit embedded in the package")
+set(LLAVON_IME_BUILD_NUMBER "" CACHE STRING "CI build number embedded in the package")
+if(NOT LLAVON_IME_BUILD_NUMBER)
+    if(DEFINED ENV{GITHUB_RUN_NUMBER} AND "$ENV{GITHUB_RUN_NUMBER}" MATCHES "^[0-9]+$")
+        set(_llavon_ime_build_number "$ENV{GITHUB_RUN_NUMBER}")
+    else()
+        set(_llavon_ime_build_number "0")
+    endif()
+    set(LLAVON_IME_BUILD_NUMBER "${_llavon_ime_build_number}" CACHE STRING
+        "CI build number embedded in the package" FORCE)
+endif()
+if(NOT LLAVON_IME_BUILD_NUMBER MATCHES "^[0-9]+$")
+    message(FATAL_ERROR "LLAVON_IME_BUILD_NUMBER must be a non-negative integer")
+endif()
+if(NOT LLAVON_IME_BUILD_COMMIT)
+    string(LENGTH "$ENV{GITHUB_SHA}" _llavon_ime_github_sha_length)
+    if(DEFINED ENV{GITHUB_SHA} AND "$ENV{GITHUB_SHA}" MATCHES "^[0-9a-fA-F]+$" AND
+       _llavon_ime_github_sha_length GREATER_EQUAL 40 AND
+       _llavon_ime_github_sha_length LESS_EQUAL 64)
+        set(_llavon_ime_build_commit "$ENV{GITHUB_SHA}")
+    else()
+        execute_process(
+            COMMAND git rev-parse HEAD
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            RESULT_VARIABLE _llavon_ime_git_result
+            OUTPUT_VARIABLE _llavon_ime_build_commit
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        string(LENGTH "${_llavon_ime_build_commit}" _llavon_ime_git_sha_length)
+        if(NOT _llavon_ime_git_result EQUAL 0 OR
+           NOT _llavon_ime_build_commit MATCHES "^[0-9a-fA-F]+$" OR
+           _llavon_ime_git_sha_length LESS 40 OR _llavon_ime_git_sha_length GREATER 64)
+            set(_llavon_ime_build_commit "unknown")
+        endif()
+    endif()
+    set(LLAVON_IME_BUILD_COMMIT "${_llavon_ime_build_commit}" CACHE STRING
+        "Root repository commit embedded in the package" FORCE)
+endif()
 
 set(LLAVON_IME_CONFIGURATION "Release" CACHE STRING "Configuration used by child builds")
 set_property(CACHE LLAVON_IME_CONFIGURATION PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
@@ -106,6 +145,7 @@ function(llavon_add_child_project name source_dir install_subdir)
             "-DCMAKE_BUILD_TYPE:STRING=${LLAVON_IME_CONFIGURATION}"
             "-DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>"
             "-DCMAKE_TOOLCHAIN_FILE:FILEPATH=${LLAVON_IME_CMAKE_TOOLCHAIN_FILE}"
+            ${ARGN}
         BUILD_COMMAND
             "${CMAKE_COMMAND}"
                 --build "<BINARY_DIR>"
@@ -125,6 +165,9 @@ llavon_add_child_project(
     llavon-ime-windows-service-build
     ime-windows-service
     ime-windows-service
+    "-DIME_WINDOWS_SERVICE_VERSION:STRING=${LLAVON_IME_VERSION}"
+    "-DIME_WINDOWS_SERVICE_BUILD_COMMIT:STRING=${LLAVON_IME_BUILD_COMMIT}"
+    "-DIME_WINDOWS_SERVICE_BUILD_NUMBER:STRING=${LLAVON_IME_BUILD_NUMBER}"
 )
 llavon_add_child_project(llavon-ime-frontend-build ime-windows-frontend ime-windows-frontend)
 

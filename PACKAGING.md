@@ -59,6 +59,7 @@ The installed layout is:
   bin/
     llavon-ime.dll
     llavon-ime-service.exe
+    llavon-ime-settings-ui.dll
     start-llavon-ime-service.vbs
   models/
     llavon-ime-llama-250m-Q4_K_M.gguf

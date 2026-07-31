@@ -107,6 +107,19 @@ jobs:
           git tag --force latest "${{ github.sha }}"
           git push --force origin refs/tags/latest
 
+          $manifestPath = Join-Path $msi.DirectoryName "latest.json"
+          $manifest = [ordered]@{
+            schema = 1
+            build = [long]"${{ github.run_number }}"
+            commit = "${{ github.sha }}"
+            published_at = (Get-Date).ToUniversalTime().ToString("o")
+          } | ConvertTo-Json -Compress
+          [System.IO.File]::WriteAllText(
+            $manifestPath,
+            $manifest,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
           # GitHub keeps a release's original published_at timestamp when its
           # assets or metadata are edited. Recreate this rolling release so the
           # date shown on the Releases page matches the current MSI build.
@@ -118,7 +131,7 @@ jobs:
             }
           }
 
-          gh release create latest $msi.FullName `
+          gh release create latest $msi.FullName $manifestPath `
             --title "Latest Windows build" `
-            --notes "Automatically updated from commit ${{ github.sha }} on the default branch." `
+            --notes "Automatically updated from build #${{ github.run_number }} at commit ${{ github.sha }} on the default branch." `
             --latest
