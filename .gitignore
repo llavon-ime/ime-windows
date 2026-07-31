@@ -1,5 +1,5 @@
-/build/
-/dist/
+/build*/
+/dist*/
 /diagnostics/
 /ime-windows-settings/
 /CMakeUserPresets.json

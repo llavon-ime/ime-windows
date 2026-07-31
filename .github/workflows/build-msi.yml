@@ -40,7 +40,7 @@ jobs:
           path: |
             .vcpkg-cache
             vcpkg/downloads
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('ime-service/vcpkg.json', 'ime-service/vcpkg-configuration.json', 'ime-windows-frontend/vcpkg.json', 'ime-windows-frontend/vcpkg-configuration.json') }}
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('ime-windows-service/vcpkg.json', 'ime-windows-service/vcpkg-configuration.json', 'ime-windows-service/ime-core/vcpkg.json', 'ime-windows-service/ime-core/vcpkg-configuration.json', 'ime-windows-frontend/vcpkg.json', 'ime-windows-frontend/vcpkg-configuration.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-
 

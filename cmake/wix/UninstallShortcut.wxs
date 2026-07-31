@@ -40,8 +40,13 @@
         <RemoveFile Id="RemoveLlavonImeTokenFiles" Directory="CM_DP_tables.tokens" Name="*" On="uninstall" />
         <RemoveFile Id="RemoveLlavonImeLicenseFiles" Directory="CM_DP_licenses" Name="*" On="uninstall" />
         <RemoveFile
-          Id="RemoveLlavonImeServiceLicenseFiles"
-          Directory="CM_DP_licenses.vcpkg.ime_service"
+          Id="RemoveLlavonImeCoreLicenseFiles"
+          Directory="CM_DP_licenses.vcpkg.ime_core"
+          Name="*"
+          On="uninstall" />
+        <RemoveFile
+          Id="RemoveLlavonImeWindowsServiceLicenseFiles"
+          Directory="CM_DP_licenses.vcpkg.ime_windows_service"
           Name="*"
           On="uninstall" />
         <RemoveFile
@@ -52,8 +57,12 @@
 
         <RemoveFolder Id="RemoveLlavonImeTokensFolder" Directory="CM_DP_tables.tokens" On="uninstall" />
         <RemoveFolder
-          Id="RemoveLlavonImeServiceLicensesFolder"
-          Directory="CM_DP_licenses.vcpkg.ime_service"
+          Id="RemoveLlavonImeCoreLicensesFolder"
+          Directory="CM_DP_licenses.vcpkg.ime_core"
+          On="uninstall" />
+        <RemoveFolder
+          Id="RemoveLlavonImeWindowsServiceLicensesFolder"
+          Directory="CM_DP_licenses.vcpkg.ime_windows_service"
           On="uninstall" />
         <RemoveFolder
           Id="RemoveLlavonImeFrontendLicensesFolder"

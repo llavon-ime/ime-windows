@@ -23,11 +23,14 @@ cmake --build --preset package
 
 The package target performs these steps:
 
-- Builds and installs `ime-service` into `dist/ime-service`.
+- Builds and installs `ime-windows-service` into `dist/ime-windows-service`.
+- The service superbuild independently configures and builds its `ime-core`
+  submodule before linking the Windows runtime.
 - Builds and installs `ime-windows-frontend` into `dist/ime-windows-frontend`.
 - Restores WiX `4.0.4` from NuGet into the build tree.
 - Installs `WixToolset.UI.wixext` into a build-local WiX extension cache.
-- Collects vcpkg package license files from both child projects.
+- Collects vcpkg package license files from the independent `ime-core`,
+  `ime-windows-service`, and `ime-windows-frontend` build trees.
 - Includes the model attribution and CC BY-NC 4.0 terms in the MSI license
   agreement and as a separately installed license file.
 - Downloads `llavon-ime-llama-250m-Q4_K_M.gguf` from the hard-coded Hugging Face URL.
@@ -64,7 +67,8 @@ The installed layout is:
     MODEL-LICENSE.txt
     THIRD-PARTY-vcpkg-LICENSES.txt
     vcpkg/
-      ime-service/
+      ime-core/
+      ime-windows-service/
       ime-windows-frontend/
   tables/
     bopomofo_char.json

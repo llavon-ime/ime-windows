@@ -121,12 +121,16 @@ function(llavon_add_child_project name source_dir install_subdir)
     )
 endfunction()
 
-llavon_add_child_project(llavon-ime-service-build ime-service ime-service)
+llavon_add_child_project(
+    llavon-ime-windows-service-build
+    ime-windows-service
+    ime-windows-service
+)
 llavon_add_child_project(llavon-ime-frontend-build ime-windows-frontend ime-windows-frontend)
 
 add_custom_target(llavon-ime-artifacts
     DEPENDS
-        llavon-ime-service-build
+        llavon-ime-windows-service-build
         llavon-ime-frontend-build
 )
 
@@ -137,7 +141,8 @@ add_custom_target(llavon-ime-vcpkg-licenses
             "-DLLAVON_IME_VCPKG_LICENSE_AGGREGATE=${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
             "-DLLAVON_IME_VCPKG_LICENSE_MARKER=${LLAVON_IME_VCPKG_LICENSE_MARKER}"
             "-DLLAVON_IME_VCPKG_TRIPLET=${LLAVON_IME_VCPKG_TRIPLET}"
-            "-DLLAVON_IME_SERVICE_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-service-build/vcpkg_installed"
+            "-DLLAVON_IME_CORE_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-windows-service-build/ime-core-build/vcpkg_installed"
+            "-DLLAVON_IME_WINDOWS_SERVICE_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-windows-service-build/service-build/vcpkg_installed"
             "-DLLAVON_IME_FRONTEND_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-frontend-build/vcpkg_installed"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CollectVcpkgLicenses.cmake"
     DEPENDS
@@ -206,7 +211,7 @@ add_custom_target(llavon-ime-msi
     USES_TERMINAL
 )
 
-install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-service/bin/"
+install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-service/bin/"
     DESTINATION bin
     COMPONENT Runtime
 )
@@ -216,12 +221,7 @@ install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-frontend/bin/"
     COMPONENT Runtime
 )
 
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/ime-service/table/tokens"
-    DESTINATION tables
-    COMPONENT Runtime
-)
-
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ime-windows-frontend/table/bopomofo_char.json"
+install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-service/tables/"
     DESTINATION tables
     COMPONENT Runtime
 )

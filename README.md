@@ -9,11 +9,12 @@
 ## 專案組成
 
 - `ime-windows-frontend`：Windows TSF 輸入法前端，負責組字、候選字介面與輸入法註冊。
-- `ime-service`：載入 GGUF 模型並提供候選字推論的背景服務。
+- `ime-windows-service`：Windows Named Pipe 背景服務，負責程序生命週期、IPC 與 Windows 執行環境整合。
+- `ime-core`：由 `ime-windows-service` 以 submodule 使用的跨平台 C++ 推論函式庫，負責 GGUF 模型載入、tokenization 與 llama.cpp 推論。
 - `ime-windows-settings`：設定介面的原型，目前尚未接入頂層建置與實際設定功能。
 - `cmake`：模型下載、WiX 安裝檔與第三方授權檔案的建置腳本。
 
-前端與背景服務透過 Windows Named Pipe `\\.\pipe\llavon-ime` 通訊。
+前端與背景服務透過 Windows Named Pipe `\\.\pipe\llavon-ime` 通訊。`ime-windows` 只直接建置 Windows service；`ime-core` 的版本與建置由 service repository 管理。
 
 ## 模型
 

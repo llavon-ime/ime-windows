@@ -10,6 +10,16 @@ if(NOT DEFINED LLAVON_IME_VCPKG_LICENSE_MARKER)
     message(FATAL_ERROR "LLAVON_IME_VCPKG_LICENSE_MARKER is required")
 endif()
 
+foreach(_required_root IN ITEMS
+    LLAVON_IME_CORE_VCPKG_INSTALLED_DIR
+    LLAVON_IME_WINDOWS_SERVICE_VCPKG_INSTALLED_DIR
+    LLAVON_IME_FRONTEND_VCPKG_INSTALLED_DIR
+)
+    if(NOT DEFINED ${_required_root} OR "${${_required_root}}" STREQUAL "")
+        message(FATAL_ERROR "${_required_root} is required")
+    endif()
+endforeach()
+
 if(NOT DEFINED LLAVON_IME_VCPKG_TRIPLET)
     set(LLAVON_IME_VCPKG_TRIPLET "x64-windows")
 endif()
@@ -20,7 +30,7 @@ file(MAKE_DIRECTORY "${LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR}")
 set(_aggregate "# Third-party vcpkg licenses\n\n")
 string(APPEND _aggregate
     "This file is generated during packaging from the vcpkg packages installed "
-    "for the llavon-ime-service and ime-windows-frontend child projects.\n\n"
+    "for the ime-core, ime-windows-service, and ime-windows-frontend child projects.\n\n"
 )
 
 macro(_llavon_collect_vcpkg_licenses project_name installed_root)
@@ -58,8 +68,12 @@ macro(_llavon_collect_vcpkg_licenses project_name installed_root)
 endmacro()
 
 _llavon_collect_vcpkg_licenses(
-    "ime-service"
-    "${LLAVON_IME_SERVICE_VCPKG_INSTALLED_DIR}"
+    "ime-core"
+    "${LLAVON_IME_CORE_VCPKG_INSTALLED_DIR}"
+)
+_llavon_collect_vcpkg_licenses(
+    "ime-windows-service"
+    "${LLAVON_IME_WINDOWS_SERVICE_VCPKG_INSTALLED_DIR}"
 )
 _llavon_collect_vcpkg_licenses(
     "ime-windows-frontend"
