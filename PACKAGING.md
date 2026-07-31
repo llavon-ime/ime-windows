@@ -59,6 +59,7 @@ The installed layout is:
   bin/
     llavon-ime.dll
     llavon-ime-service.exe
+    llavon-ime-candidate-ui.dll
     llavon-ime-settings-ui.dll
     start-llavon-ime-service.vbs
   models/
@@ -99,3 +100,8 @@ executable is resolved from `LLAVON_IME_SERVICE_PATH` first, then from
 
 This keeps development builds and MSI deployments independent of the current
 working directory.
+
+Candidate presentation uses the separate
+`\\.\pipe\llavon-ime-candidate-ui` transport. The service lazily loads
+`llavon-ime-candidate-ui.dll`, which owns the package's single candidate HWND
+and its dedicated STA thread.
