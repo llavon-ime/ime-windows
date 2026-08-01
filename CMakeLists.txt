@@ -48,6 +48,14 @@ endif()
 set(LLAVON_IME_CONFIGURATION "Release" CACHE STRING "Configuration used by child builds")
 set_property(CACHE LLAVON_IME_CONFIGURATION PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 
+set(LLAVON_IME_CPU_VARIANT "" CACHE STRING "CPU ISA label appended to the MSI filename")
+set_property(CACHE LLAVON_IME_CPU_VARIANT PROPERTY STRINGS "" avx2 avx512)
+if(LLAVON_IME_CPU_VARIANT AND
+   NOT LLAVON_IME_CPU_VARIANT STREQUAL "avx2" AND
+   NOT LLAVON_IME_CPU_VARIANT STREQUAL "avx512")
+    message(FATAL_ERROR "LLAVON_IME_CPU_VARIANT must be empty, avx2, or avx512")
+endif()
+
 set(LLAVON_IME_ARTIFACT_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/dist"
     CACHE PATH
@@ -64,6 +72,12 @@ set(LLAVON_IME_CMAKE_TOOLCHAIN_FILE
     "${LLAVON_IME_VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
     CACHE FILEPATH
     "CMake toolchain file passed to child projects"
+)
+
+set(LLAVON_IME_VCPKG_OVERLAY_TRIPLETS
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/triplets"
+    CACHE PATH
+    "Directory containing project-specific vcpkg triplets"
 )
 
 set(LLAVON_IME_MODEL_URL
@@ -145,6 +159,8 @@ function(llavon_add_child_project name source_dir install_subdir)
             "-DCMAKE_BUILD_TYPE:STRING=${LLAVON_IME_CONFIGURATION}"
             "-DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>"
             "-DCMAKE_TOOLCHAIN_FILE:FILEPATH=${LLAVON_IME_CMAKE_TOOLCHAIN_FILE}"
+            "-DVCPKG_TARGET_TRIPLET:STRING=${LLAVON_IME_VCPKG_TRIPLET}"
+            "-DVCPKG_OVERLAY_TRIPLETS:PATH=${LLAVON_IME_VCPKG_OVERLAY_TRIPLETS}"
             ${ARGN}
         BUILD_COMMAND
             "${CMAKE_COMMAND}"
@@ -168,6 +184,7 @@ llavon_add_child_project(
     "-DIME_WINDOWS_SERVICE_VERSION:STRING=${LLAVON_IME_VERSION}"
     "-DIME_WINDOWS_SERVICE_BUILD_COMMIT:STRING=${LLAVON_IME_BUILD_COMMIT}"
     "-DIME_WINDOWS_SERVICE_BUILD_NUMBER:STRING=${LLAVON_IME_BUILD_NUMBER}"
+    "-DIME_WINDOWS_SERVICE_VCPKG_TRIPLET:STRING=${LLAVON_IME_VCPKG_TRIPLET}"
 )
 llavon_add_child_project(llavon-ime-frontend-build ime-windows-frontend ime-windows-frontend)
 
@@ -310,7 +327,13 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "拉風輸入法 Windows 版")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "Llavon IME")
 set(CPACK_PACKAGING_INSTALL_PREFIX "")
 set(CPACK_RESOURCE_FILE_LICENSE "${LLAVON_IME_PACKAGE_LICENSE}")
-set(CPACK_PACKAGE_FILE_NAME "llavon-ime-${LLAVON_IME_VERSION}-windows")
+set(_llavon_ime_package_variant_suffix "")
+if(LLAVON_IME_CPU_VARIANT)
+    set(_llavon_ime_package_variant_suffix "-${LLAVON_IME_CPU_VARIANT}")
+endif()
+set(CPACK_PACKAGE_FILE_NAME
+    "llavon-ime-${LLAVON_IME_VERSION}-windows${_llavon_ime_package_variant_suffix}"
+)
 set(CPACK_WIX_VERSION "4")
 set(CPACK_WIX_EXTENSIONS "WixToolset.UI.wixext")
 set(CPACK_WIX_CULTURES "zh-TW")

@@ -44,11 +44,14 @@ The package target performs these steps:
   diagnostics, then removes the empty installation directories during uninstall.
 - The frontend also starts the backend on demand if the named pipe is not available.
 
-The MSI is written under:
+The default local MSI is written under:
 
 ```text
 build/windows/llavon-ime-0.1.0-windows.msi
 ```
+
+CI builds separate AVX2 and AVX-512 packages using the project overlay
+triplets. Their filenames end in `-avx2.msi` and `-avx512.msi`, respectively.
 
 ## Runtime Paths
 

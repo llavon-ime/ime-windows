@@ -16,8 +16,16 @@ env:
 
 jobs:
   build-msi:
-    name: Build Windows MSI
+    name: Build Windows MSI (${{ matrix.cpu_variant }})
     runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cpu_variant: avx2
+            triplet: x64-windows-avx2
+          - cpu_variant: avx512
+            triplet: x64-windows-avx512
 
     steps:
       - name: Checkout
@@ -40,9 +48,9 @@ jobs:
           path: |
             .vcpkg-cache
             vcpkg/downloads
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('ime-windows-service/vcpkg.json', 'ime-windows-service/vcpkg-configuration.json', 'ime-windows-service/ime-core/vcpkg.json', 'ime-windows-service/ime-core/vcpkg-configuration.json', 'ime-windows-frontend/vcpkg.json', 'ime-windows-frontend/vcpkg-configuration.json') }}
+          key: ${{ runner.os }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('cmake/triplets/*.cmake', 'ime-windows-service/vcpkg.json', 'ime-windows-service/vcpkg-configuration.json', 'ime-windows-service/ime-core/vcpkg.json', 'ime-windows-service/ime-core/vcpkg-configuration.json', 'ime-windows-frontend/vcpkg.json', 'ime-windows-frontend/vcpkg-configuration.json') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-
+            ${{ runner.os }}-vcpkg-${{ matrix.triplet }}-
 
       - name: Cache model download
         uses: actions/cache@v4
@@ -62,17 +70,50 @@ jobs:
 
       - name: Configure
         shell: pwsh
-        run: cmake --preset windows
+        run: >-
+          cmake --preset windows
+          -DLLAVON_IME_VCPKG_TRIPLET=${{ matrix.triplet }}
+          -DLLAVON_IME_CPU_VARIANT=${{ matrix.cpu_variant }}
 
       - name: Build MSI
         shell: pwsh
         run: cmake --build --preset package --parallel
 
+      - name: Verify packaged CPU ISA
+        shell: pwsh
+        run: |
+          $cpuDll = Get-Item dist/ime-windows-service/bin/ggml-cpu.dll
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsRoot = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $vsRoot) {
+            throw "Visual Studio C++ tools were not found"
+          }
+
+          $dumpbin = Get-ChildItem "$vsRoot\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+            Where-Object FullName -Like '*\bin\Hostx64\x64\dumpbin.exe' |
+            Select-Object -First 1
+          if (-not $dumpbin) {
+            throw "dumpbin.exe was not found"
+          }
+
+          $hasZmm = $null -ne (
+            & $dumpbin.FullName /nologo /disasm:nobytes $cpuDll.FullName |
+              Select-String -Pattern '\bzmm[0-9]+\b' |
+              Select-Object -First 1
+          )
+          $expectedZmm = '${{ matrix.cpu_variant }}' -eq 'avx512'
+          if ($hasZmm -ne $expectedZmm) {
+            throw "Unexpected ISA in $($cpuDll.Name): variant=${{ matrix.cpu_variant }} has_zmm=$hasZmm"
+          }
+          Write-Host "Verified variant=${{ matrix.cpu_variant }} has_zmm=$hasZmm"
+
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: llavon-ime-build-logs
+          name: llavon-ime-build-logs-${{ matrix.cpu_variant }}
           path: |
             build/windows/**/*.log
             vcpkg/buildtrees/**/*.log
@@ -81,25 +122,43 @@ jobs:
 
       - name: Show MSI
         shell: pwsh
-        run: Get-ChildItem build/windows -Filter *.msi | Select-Object FullName, Length, LastWriteTime
+        run: Get-Item build/windows/llavon-ime-*-windows-${{ matrix.cpu_variant }}.msi | Select-Object FullName, Length, LastWriteTime
 
       - name: Upload MSI
         uses: actions/upload-artifact@v4
         with:
-          name: llavon-ime-windows-msi
-          path: build/windows/*.msi
+          name: llavon-ime-windows-msi-${{ matrix.cpu_variant }}
+          path: build/windows/llavon-ime-*-windows-${{ matrix.cpu_variant }}.msi
           if-no-files-found: error
           retention-days: 14
 
+  publish-latest:
+    name: Publish latest release
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: build-msi
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download MSI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: llavon-ime-windows-msi-*
+          path: release-assets
+          merge-multiple: true
+
       - name: Publish latest release
-        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $msi = Get-ChildItem build/windows -Filter *.msi | Select-Object -First 1
-          if (-not $msi) {
-            throw "No MSI found under build/windows"
+          $msis = @(Get-ChildItem release-assets -Filter *.msi | Sort-Object Name)
+          if ($msis.Count -ne 2) {
+            throw "Expected two MSI variants, found $($msis.Count)"
           }
 
           git config user.name "github-actions[bot]"
@@ -107,7 +166,7 @@ jobs:
           git tag --force latest "${{ github.sha }}"
           git push --force origin refs/tags/latest
 
-          $manifestPath = Join-Path $msi.DirectoryName "latest.json"
+          $manifestPath = Join-Path $PWD "latest.json"
           $manifest = [ordered]@{
             schema = 1
             build = [long]"${{ github.run_number }}"
@@ -120,9 +179,6 @@ jobs:
             [System.Text.UTF8Encoding]::new($false)
           )
 
-          # GitHub keeps a release's original published_at timestamp when its
-          # assets or metadata are edited. Recreate this rolling release so the
-          # date shown on the Releases page matches the current MSI build.
           gh release view latest *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release delete latest --yes
@@ -131,7 +187,8 @@ jobs:
             }
           }
 
-          gh release create latest $msi.FullName $manifestPath `
+          $releaseAssets = @($msis.FullName) + $manifestPath
+          gh release create latest @releaseAssets `
             --title "Latest Windows build" `
-            --notes "Automatically updated from build #${{ github.run_number }} at commit ${{ github.sha }} on the default branch." `
+            --notes "AVX2 is the recommended package for most PCs. Use AVX-512 only on CPUs that explicitly support AVX-512. Automatically updated from build #${{ github.run_number }} at commit ${{ github.sha }} on the default branch." `
             --latest
