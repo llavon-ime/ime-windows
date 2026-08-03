@@ -48,14 +48,6 @@ endif()
 set(LLAVON_IME_CONFIGURATION "Release" CACHE STRING "Configuration used by child builds")
 set_property(CACHE LLAVON_IME_CONFIGURATION PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 
-set(LLAVON_IME_CPU_VARIANT "" CACHE STRING "CPU ISA label appended to the MSI filename")
-set_property(CACHE LLAVON_IME_CPU_VARIANT PROPERTY STRINGS "" avx2 avx512)
-if(LLAVON_IME_CPU_VARIANT AND
-   NOT LLAVON_IME_CPU_VARIANT STREQUAL "avx2" AND
-   NOT LLAVON_IME_CPU_VARIANT STREQUAL "avx512")
-    message(FATAL_ERROR "LLAVON_IME_CPU_VARIANT must be empty, avx2, or avx512")
-endif()
-
 set(LLAVON_IME_ARTIFACT_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/dist"
     CACHE PATH
@@ -327,13 +319,7 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "拉風輸入法 Windows 版")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "Llavon IME")
 set(CPACK_PACKAGING_INSTALL_PREFIX "")
 set(CPACK_RESOURCE_FILE_LICENSE "${LLAVON_IME_PACKAGE_LICENSE}")
-set(_llavon_ime_package_variant_suffix "")
-if(LLAVON_IME_CPU_VARIANT)
-    set(_llavon_ime_package_variant_suffix "-${LLAVON_IME_CPU_VARIANT}")
-endif()
-set(CPACK_PACKAGE_FILE_NAME
-    "llavon-ime-${LLAVON_IME_VERSION}-windows${_llavon_ime_package_variant_suffix}"
-)
+set(CPACK_PACKAGE_FILE_NAME "llavon-ime-${LLAVON_IME_VERSION}-windows")
 set(CPACK_WIX_VERSION "4")
 set(CPACK_WIX_EXTENSIONS "WixToolset.UI.wixext")
 set(CPACK_WIX_CULTURES "zh-TW")
