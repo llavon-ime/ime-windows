@@ -354,9 +354,12 @@ inline asio::awaitable<void> listener(
 class PredictionPipeServer final {
 public:
     PredictionPipeServer(
-        llavon::ime::core::CoreConfig config, CandidateUiLoader& candidate_ui)
-        : core_(std::make_shared<llavon::ime::core::Core>(std::move(config))),
-          candidate_ui_(candidate_ui) {}
+        std::shared_ptr<llavon::ime::core::Core> core, CandidateUiLoader& candidate_ui)
+        : core_(std::move(core)), candidate_ui_(candidate_ui) {
+        if (!core_) {
+            throw std::invalid_argument("prediction server requires an inference core");
+        }
+    }
 
     const char* name() const {
         return "prediction-pipe";

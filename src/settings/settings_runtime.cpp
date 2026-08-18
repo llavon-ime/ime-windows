@@ -1,5 +1,6 @@
 #include "settings_ui_api.h"
 
+#include "settings_configuration.hpp"
 #include "settings_window.hpp"
 
 #include <commctrl.h>
@@ -25,6 +26,54 @@ constexpr DWORD shutdown_timeout_ms = 10000;
 
 class Runtime final {
 public:
+    int32_t configure(const llavon_settings_inference_device* devices,
+                      std::size_t device_count,
+                      std::int32_t selected_backend,
+                      const wchar_t* selected_device_id,
+                      const llavon_settings_inference_device* active_device,
+                      std::int32_t gpu_offload,
+                      std::int32_t fell_back_to_cpu,
+                      llavon_settings_save_inference_callback save_callback,
+                      void* save_context) {
+        std::lock_guard lock(mutex_);
+        if (thread_) {
+            return ERROR_BUSY;
+        }
+        if ((device_count != 0 && !devices) || !active_device || !save_callback) {
+            return ERROR_INVALID_PARAMETER;
+        }
+
+        SettingsConfiguration configuration;
+        configuration.selected_backend = selected_backend;
+        configuration.selected_device_id = selected_device_id ? selected_device_id : L"";
+        configuration.active_device = InferenceDeviceOption{
+            .backend = active_device->backend,
+            .device_type = active_device->device_type,
+            .device_id = active_device->device_id ? active_device->device_id : L"",
+            .name = active_device->name ? active_device->name : L"",
+            .description = active_device->description ? active_device->description : L"",
+            .memory_total = active_device->memory_total,
+        };
+        configuration.gpu_offload = gpu_offload != 0;
+        configuration.fell_back_to_cpu = fell_back_to_cpu != 0;
+        configuration.save_callback = save_callback;
+        configuration.save_context = save_context;
+        configuration.devices.reserve(device_count);
+        for (std::size_t index = 0; index < device_count; ++index) {
+            const auto& source = devices[index];
+            configuration.devices.push_back(InferenceDeviceOption{
+                .backend = source.backend,
+                .device_type = source.device_type,
+                .device_id = source.device_id ? source.device_id : L"",
+                .name = source.name ? source.name : L"",
+                .description = source.description ? source.description : L"",
+                .memory_total = source.memory_total,
+            });
+        }
+        configuration_ = std::move(configuration);
+        return 0;
+    }
+
     int32_t start() {
         std::lock_guard lock(mutex_);
         if (thread_) {
@@ -37,6 +86,7 @@ public:
         }
 
         start_result_.store(ERROR_GEN_FAILURE, std::memory_order_relaxed);
+        thread_configuration_ = configuration_;
         thread_ = CreateThread(nullptr, 0, thread_entry, this, 0, nullptr);
         if (!thread_) {
             const DWORD error = GetLastError();
@@ -115,7 +165,7 @@ private:
                 throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
             }
 
-            SettingsWindow settings_window;
+            SettingsWindow settings_window(thread_configuration_);
             settings_window_ = &settings_window;
             const HWND command_window = CreateWindowExW(
                 0, command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
@@ -238,6 +288,8 @@ private:
     std::atomic<HWND> command_window_{nullptr};
     std::atomic<int32_t> start_result_{ERROR_GEN_FAILURE};
     SettingsWindow* settings_window_ = nullptr;
+    SettingsConfiguration configuration_;
+    SettingsConfiguration thread_configuration_;
 };
 
 Runtime& runtime() {
@@ -247,6 +299,21 @@ Runtime& runtime() {
 
 }  // namespace
 }  // namespace llavon::settings
+
+extern "C" int32_t llavon_settings_ui_configure(
+    const struct llavon_settings_inference_device* devices,
+    size_t device_count,
+    int32_t selected_backend,
+    const wchar_t* selected_device_id,
+    const struct llavon_settings_inference_device* active_device,
+    int32_t gpu_offload,
+    int32_t fell_back_to_cpu,
+    llavon_settings_save_inference_callback save_callback,
+    void* save_context) {
+    return llavon::settings::runtime().configure(
+        devices, device_count, selected_backend, selected_device_id, active_device,
+        gpu_offload, fell_back_to_cpu, save_callback, save_context);
+}
 
 extern "C" int32_t llavon_settings_ui_start(void) {
     return llavon::settings::runtime().start();

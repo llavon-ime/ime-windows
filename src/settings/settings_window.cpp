@@ -5,8 +5,10 @@
 #include <dwmapi.h>
 
 #include <cstdint>
+#include <iomanip>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,6 +17,7 @@
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.h>
@@ -60,72 +63,6 @@ TextBlock make_section_title(const wchar_t* value) {
     return title;
 }
 
-StackPanel make_combo_setting(const wchar_t* label, const wchar_t* selected,
-                              const wchar_t* alternative = nullptr) {
-    StackPanel setting;
-    setting.Spacing(8);
-    setting.Margin(Thickness{0, 0, 0, 24});
-    setting.Children().Append(make_text(label, body_text_size));
-
-    ComboBox combo;
-    combo.Width(320);
-    combo.MinHeight(control_height);
-    combo.FontSize(body_text_size);
-    combo.HorizontalAlignment(HorizontalAlignment::Left);
-    combo.Items().Append(winrt::box_value(selected));
-    if (alternative) {
-        combo.Items().Append(winrt::box_value(alternative));
-    }
-    combo.SelectedIndex(0);
-    setting.Children().Append(combo);
-    return setting;
-}
-
-StackPanel make_toggle_setting(const wchar_t* label, bool enabled) {
-    StackPanel setting;
-    setting.Spacing(6);
-    setting.Margin(Thickness{0, 0, 0, 24});
-    setting.Children().Append(make_text(label, body_text_size));
-
-    ToggleSwitch toggle;
-    toggle.FontSize(body_text_size);
-    toggle.IsOn(enabled);
-    toggle.OnContent(winrt::box_value(L"開啟"));
-    toggle.OffContent(winrt::box_value(L"關閉"));
-    toggle.HorizontalAlignment(HorizontalAlignment::Left);
-    setting.Children().Append(toggle);
-    return setting;
-}
-
-StackPanel make_model_picker() {
-    StackPanel setting;
-    setting.Spacing(8);
-    setting.Margin(Thickness{0, 0, 0, 24});
-    setting.Children().Append(make_text(L"模型檔案", body_text_size));
-
-    StackPanel row;
-    row.Orientation(Orientation::Horizontal);
-    row.Spacing(10);
-
-    TextBox path;
-    path.Width(440);
-    path.MinHeight(control_height);
-    path.FontSize(body_text_size);
-    path.PlaceholderText(L"尚未選擇模型檔案");
-    path.IsReadOnly(true);
-    row.Children().Append(path);
-
-    Button browse;
-    browse.Content(winrt::box_value(L"瀏覽…"));
-    browse.MinWidth(92);
-    browse.MinHeight(control_height);
-    browse.FontSize(body_text_size);
-    row.Children().Append(browse);
-
-    setting.Children().Append(row);
-    return setting;
-}
-
 SolidColorBrush transparent_brush() {
     return SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
 }
@@ -150,7 +87,39 @@ std::wstring build_identity(std::uint64_t build, std::wstring_view commit) {
     return L"建置 #" + std::to_wstring(build) + L"（" + short_commit(commit) + L"）";
 }
 
+const wchar_t* backend_label(std::int32_t backend) {
+    switch (backend) {
+        case LLAVON_SETTINGS_BACKEND_CUDA:
+            return L"CUDA";
+        case LLAVON_SETTINGS_BACKEND_VULKAN:
+            return L"Vulkan";
+        case LLAVON_SETTINGS_BACKEND_CPU:
+            return L"CPU";
+        default:
+            return L"自動";
+    }
+}
+
+std::wstring device_label(const InferenceDeviceOption& device) {
+    std::wstring label = !device.description.empty() ? device.description : device.name;
+    if (label.empty()) label = device.device_id;
+    label += L"（";
+    label += backend_label(device.backend);
+    if (device.backend != LLAVON_SETTINGS_BACKEND_CPU && device.memory_total != 0) {
+        std::wostringstream memory;
+        memory << L"，" << std::fixed << std::setprecision(1)
+               << static_cast<double>(device.memory_total) / 1024.0 / 1024.0 / 1024.0
+               << L" GiB";
+        label += memory.str();
+    }
+    label += L"）";
+    return label;
+}
+
 }  // namespace
+
+SettingsWindow::SettingsWindow(SettingsConfiguration configuration)
+    : configuration_(std::move(configuration)) {}
 
 SettingsWindow::~SettingsWindow() {
     destroy();
@@ -180,7 +149,7 @@ bool SettingsWindow::create(HINSTANCE instance) {
     }
 
     window_ = CreateWindowExW(0, window_class_name, L"Llavon 輸入法設定", WS_OVERLAPPEDWINDOW,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 860, 760, nullptr, nullptr, instance, this);
+                              CW_USEDEFAULT, CW_USEDEFAULT, 860, 640, nullptr, nullptr, instance, this);
     if (!window_) {
         return false;
     }
@@ -318,15 +287,159 @@ void SettingsWindow::build_page() {
     page.HorizontalAlignment(HorizontalAlignment::Left);
     page.Padding(Thickness{32, 24, 32, 40});
 
-    page.Children().Append(make_section_title(L"輸入設定"));
-    page.Children().Append(make_model_picker());
-    page.Children().Append(make_combo_setting(L"預設輸入模式", L"中文", L"英數字元"));
-    page.Children().Append(make_toggle_setting(L"啟動輸入法時自動載入模型", true));
+    page.Children().Append(make_section_title(L"推論裝置"));
 
-    page.Children().Append(make_section_title(L"輸入協助"));
-    page.Children().Append(make_combo_setting(L"候選字顯示大小", L"普通", L"大型"));
-    page.Children().Append(make_toggle_setting(L"顯示輸入建議", true));
-    page.Children().Append(make_toggle_setting(L"自動套用模型建議", false));
+    StackPanel inference_section;
+    inference_section.Spacing(8);
+    inference_section.Margin(Thickness{0, 0, 0, 24});
+
+    Grid active_row;
+    active_row.Width(540);
+    active_row.HorizontalAlignment(HorizontalAlignment::Left);
+    active_row.Background(transparent_brush());
+
+    ColumnDefinition device_column;
+    device_column.Width(GridLength{1, GridUnitType::Star});
+    active_row.ColumnDefinitions().Append(device_column);
+    ColumnDefinition status_column;
+    status_column.Width(GridLength{1, GridUnitType::Auto});
+    active_row.ColumnDefinitions().Append(status_column);
+
+    const auto& active = configuration_.active_device;
+    const std::wstring active_name =
+        !active.description.empty() ? active.description
+                                    : (!active.name.empty() ? active.name : active.device_id);
+    active_device_status_ = make_text(
+        active_name.c_str(), body_text_size, FontWeights::SemiBold());
+    active_device_status_.TextTrimming(TextTrimming::CharacterEllipsis);
+    active_device_status_.TextWrapping(TextWrapping::NoWrap);
+    Grid::SetColumn(active_device_status_, 0);
+    active_row.Children().Append(active_device_status_);
+
+    std::wstring active_state = L"使用中 · ";
+    active_state += backend_label(active.backend);
+    TextBlock active_backend = make_text(active_state.c_str(), caption_text_size);
+    active_backend.Margin(Thickness{16, 2, 0, 0});
+    Grid::SetColumn(active_backend, 1);
+    active_row.Children().Append(active_backend);
+
+    ToolTip active_tooltip;
+    StackPanel tooltip_content;
+    tooltip_content.Spacing(4);
+    tooltip_content.Children().Append(
+        make_text(active_name.c_str(), body_text_size, FontWeights::SemiBold()));
+    std::wstring backend_detail = L"後端：";
+    backend_detail += backend_label(active.backend);
+    tooltip_content.Children().Append(make_text(backend_detail.c_str(), caption_text_size));
+    if (active.backend != LLAVON_SETTINGS_BACKEND_CPU && active.memory_total != 0) {
+        std::wostringstream memory;
+        memory << L"顯示記憶體：" << std::fixed << std::setprecision(1)
+               << static_cast<double>(active.memory_total) / 1024.0 / 1024.0 / 1024.0
+               << L" GB";
+        tooltip_content.Children().Append(make_text(memory.str().c_str(), caption_text_size));
+    }
+    if (!active.device_id.empty()) {
+        const std::wstring device_id = L"裝置 ID：" + active.device_id;
+        tooltip_content.Children().Append(make_text(device_id.c_str(), caption_text_size));
+    }
+    const wchar_t* offload = configuration_.gpu_offload ? L"GPU offload：啟用"
+                                                        : L"GPU offload：未啟用";
+    tooltip_content.Children().Append(make_text(offload, caption_text_size));
+    if (configuration_.fell_back_to_cpu) {
+        tooltip_content.Children().Append(
+            make_text(L"偏好裝置目前無法使用，已改用 CPU。", caption_text_size));
+    }
+    active_tooltip.Content(tooltip_content);
+    ToolTipService::SetToolTip(active_row, active_tooltip);
+    active_row.PointerEntered([active_tooltip](const auto&, const auto&) {
+        active_tooltip.IsOpen(true);
+    });
+    active_row.PointerExited([active_tooltip](const auto&, const auto&) {
+        active_tooltip.IsOpen(false);
+    });
+    inference_section.Children().Append(active_row);
+    inference_section.Children().Append(make_text(L"下次啟動設定", body_text_size));
+
+    inference_options_.clear();
+    inference_options_.push_back(InferenceDeviceOption{
+        .backend = LLAVON_SETTINGS_BACKEND_AUTO,
+        .name = L"自動選擇",
+    });
+    inference_options_.push_back(InferenceDeviceOption{
+        .backend = LLAVON_SETTINGS_BACKEND_CPU,
+        .device_type = LLAVON_SETTINGS_DEVICE_CPU,
+        .name = L"CPU",
+    });
+    for (const auto& device : configuration_.devices) {
+        if (device.backend == LLAVON_SETTINGS_BACKEND_CUDA ||
+            device.backend == LLAVON_SETTINGS_BACKEND_VULKAN) {
+            inference_options_.push_back(device);
+        }
+    }
+
+    bool selected_device_available =
+        configuration_.selected_backend == LLAVON_SETTINGS_BACKEND_AUTO ||
+        configuration_.selected_backend == LLAVON_SETTINGS_BACKEND_CPU;
+    for (const auto& option : inference_options_) {
+        if (option.backend == configuration_.selected_backend &&
+            option.device_id == configuration_.selected_device_id) {
+            selected_device_available = true;
+            break;
+        }
+    }
+    if (!selected_device_available) {
+        inference_options_.push_back(InferenceDeviceOption{
+            .backend = configuration_.selected_backend,
+            .device_id = configuration_.selected_device_id,
+            .name = std::wstring(L"原設定：") + backend_label(configuration_.selected_backend) +
+                    L" / " + configuration_.selected_device_id + L"（目前不可用）",
+        });
+    }
+
+    inference_device_ = ComboBox();
+    inference_device_.Width(540);
+    inference_device_.MinHeight(control_height);
+    inference_device_.FontSize(body_text_size);
+    inference_device_.HorizontalAlignment(HorizontalAlignment::Left);
+    inference_device_.Items().Append(winrt::box_value(L"自動選擇（建議）"));
+    inference_device_.Items().Append(winrt::box_value(L"CPU"));
+    for (std::size_t index = 2; index < inference_options_.size(); ++index) {
+        const auto& option = inference_options_[index];
+        const bool unavailable = !selected_device_available &&
+                                 option.backend == configuration_.selected_backend &&
+                                 option.device_id == configuration_.selected_device_id;
+        inference_device_.Items().Append(
+            winrt::box_value(unavailable ? option.name : device_label(option)));
+    }
+
+    std::int32_t selected_index = 0;
+    for (std::size_t index = 0; index < inference_options_.size(); ++index) {
+        const auto& option = inference_options_[index];
+        if (option.backend == configuration_.selected_backend &&
+            option.device_id == configuration_.selected_device_id) {
+            selected_index = static_cast<std::int32_t>(index);
+            break;
+        }
+    }
+    inference_device_.SelectedIndex(selected_index);
+    inference_device_.SelectionChanged(
+        [this](const auto&, const auto&) { update_inference_save_state(); });
+    inference_section.Children().Append(inference_device_);
+
+    save_inference_button_ = Button();
+    save_inference_button_.Content(winrt::box_value(L"儲存裝置設定"));
+    save_inference_button_.MinWidth(132);
+    save_inference_button_.MinHeight(control_height);
+    save_inference_button_.FontSize(body_text_size);
+    save_inference_button_.HorizontalAlignment(HorizontalAlignment::Left);
+    save_inference_button_.IsEnabled(false);
+    save_inference_button_.Click([this](const auto&, const auto&) { save_inference_setting(); });
+    inference_section.Children().Append(save_inference_button_);
+
+    note_ = make_text(L"", caption_text_size);
+    note_.Visibility(Visibility::Collapsed);
+    inference_section.Children().Append(note_);
+    page.Children().Append(inference_section);
 
     page.Children().Append(make_section_title(L"軟體更新"));
 
@@ -362,15 +475,57 @@ void SettingsWindow::build_page() {
     update_section.Children().Append(update_status_);
     page.Children().Append(update_section);
 
-    note_ = make_text(
-        L"目前欄位僅用於確認介面排列；實際設定項目與行為會在規格確認後接上。",
-        caption_text_size);
-    note_.Margin(Thickness{0, 8, 0, 0});
-    page.Children().Append(note_);
-
     scroll.Content(page);
     shell_.Children().Append(scroll);
     xaml_source_.Content(shell_);
+}
+
+void SettingsWindow::save_inference_setting() {
+    if (!inference_device_ || !note_ || !configuration_.save_callback) {
+        return;
+    }
+    const std::int32_t selected_index = inference_device_.SelectedIndex();
+    if (selected_index < 0 ||
+        static_cast<std::size_t>(selected_index) >= inference_options_.size()) {
+        note_.Text(L"請先選擇推論裝置。");
+        return;
+    }
+
+    const auto& option = inference_options_[static_cast<std::size_t>(selected_index)];
+    const std::int32_t result = configuration_.save_callback(
+        configuration_.save_context, option.backend, option.device_id.c_str());
+    if (result == ERROR_SUCCESS) {
+        configuration_.selected_backend = option.backend;
+        configuration_.selected_device_id = option.device_id;
+        save_inference_button_.IsEnabled(false);
+        note_.Text(L"已儲存");
+        note_.Visibility(Visibility::Visible);
+    } else {
+        note_.Text(L"無法儲存推論裝置設定，請稍後再試。");
+        note_.Visibility(Visibility::Visible);
+    }
+}
+
+void SettingsWindow::update_inference_save_state() {
+    if (!inference_device_ || !save_inference_button_ || !note_) return;
+    const std::int32_t selected_index = inference_device_.SelectedIndex();
+    if (selected_index < 0 ||
+        static_cast<std::size_t>(selected_index) >= inference_options_.size()) {
+        save_inference_button_.IsEnabled(false);
+        note_.Visibility(Visibility::Collapsed);
+        return;
+    }
+
+    const auto& option = inference_options_[static_cast<std::size_t>(selected_index)];
+    const bool changed = option.backend != configuration_.selected_backend ||
+                         option.device_id != configuration_.selected_device_id;
+    save_inference_button_.IsEnabled(changed);
+    if (changed) {
+        note_.Text(L"重新啟動後套用");
+        note_.Visibility(Visibility::Visible);
+    } else {
+        note_.Visibility(Visibility::Collapsed);
+    }
 }
 
 void SettingsWindow::begin_update_check() {
@@ -561,6 +716,9 @@ void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
 void SettingsWindow::close_xaml() noexcept {
     island_window_ = nullptr;
     island_native_ = nullptr;
+    active_device_status_ = nullptr;
+    inference_device_ = nullptr;
+    save_inference_button_ = nullptr;
     update_button_ = nullptr;
     update_status_ = nullptr;
     update_download_ = nullptr;

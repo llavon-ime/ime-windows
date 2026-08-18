@@ -5,6 +5,8 @@ set(IME_WINDOWS_SERVICE_BUILD_COMMIT "unknown" CACHE STRING
     "Root ime-windows repository commit embedded in the service UI")
 set(IME_WINDOWS_SERVICE_BUILD_NUMBER "0" CACHE STRING
     "CI build number embedded in the service UI")
+set(LLAVON_DEBUG_CLIENT_DIR "" CACHE PATH
+    "Directory containing the installed llavon-debug-client CMake package")
 if(NOT IME_WINDOWS_SERVICE_BUILD_NUMBER MATCHES "^[0-9]+$")
     message(FATAL_ERROR "IME_WINDOWS_SERVICE_BUILD_NUMBER must be a non-negative integer")
 endif()
@@ -27,6 +29,9 @@ if(IME_WINDOWS_SERVICE_SUPERBUILD)
     endif()
     if(NOT CMAKE_TOOLCHAIN_FILE)
         message(FATAL_ERROR "ime-windows-service requires CMAKE_TOOLCHAIN_FILE")
+    endif()
+    if(NOT LLAVON_DEBUG_CLIENT_DIR)
+        message(FATAL_ERROR "LLAVON_DEBUG_CLIENT_DIR is required")
     endif()
 
     set(IME_WINDOWS_SERVICE_CONFIGURATION
@@ -71,6 +76,8 @@ if(IME_WINDOWS_SERVICE_SUPERBUILD)
             "-DVCPKG_MANIFEST_INSTALL:BOOL=ON"
             "-DVCPKG_TARGET_TRIPLET:STRING=${IME_WINDOWS_SERVICE_VCPKG_TRIPLET}"
             "-DVCPKG_OVERLAY_TRIPLETS:PATH=${VCPKG_OVERLAY_TRIPLETS}"
+            "-DVCPKG_MANIFEST_FEATURES:STRING=llama-cuda|llama-vulkan"
+        LIST_SEPARATOR "|"
         BUILD_COMMAND
             "${CMAKE_COMMAND}"
                 --build "<BINARY_DIR>"
@@ -103,6 +110,7 @@ if(IME_WINDOWS_SERVICE_SUPERBUILD)
             "-DVCPKG_TARGET_TRIPLET:STRING=${IME_WINDOWS_SERVICE_VCPKG_TRIPLET}"
             "-DVCPKG_OVERLAY_TRIPLETS:PATH=${VCPKG_OVERLAY_TRIPLETS}"
             "-Dime-core_DIR:PATH=${_ime_core_install_dir}/lib/cmake/ime-core"
+            "-Dllavon-debug-client_DIR:PATH=${LLAVON_DEBUG_CLIENT_DIR}"
             "-DIME_CORE_VCPKG_PREFIX:PATH=${_ime_core_binary_dir}/vcpkg_installed/${IME_WINDOWS_SERVICE_VCPKG_TRIPLET}"
         BUILD_COMMAND
             "${CMAKE_COMMAND}"
@@ -159,6 +167,8 @@ list(PREPEND CMAKE_PREFIX_PATH "${IME_CORE_VCPKG_PREFIX}")
 find_package(asio CONFIG REQUIRED)
 find_package(cppwinrt CONFIG REQUIRED)
 find_package(ime-core CONFIG REQUIRED)
+find_package(llavon-debug-client CONFIG REQUIRED)
+find_package(reflectcpp CONFIG REQUIRED)
 
 include(CTest)
 
@@ -171,6 +181,11 @@ add_executable(llavon-ime-service
     src/service/candidate_pipe_protocol.hpp
     src/service/candidate_ui_loader.cpp
     src/service/candidate_ui_loader.hpp
+    src/service/debug/core_logger_adapter.hpp
+    src/service/inference_settings.cpp
+    src/service/inference_settings.hpp
+    src/service/inference_settings_codec.cpp
+    src/service/inference_settings_codec.hpp
     src/service/prediction_pipe_server.hpp
     src/service/settings_ui_loader.cpp
     src/service/settings_ui_loader.hpp
@@ -188,6 +203,7 @@ add_library(llavon-ime-candidate-ui SHARED
 )
 
 add_library(llavon-ime-settings-ui SHARED
+    src/settings/settings_configuration.hpp
     src/settings/settings_runtime.cpp
     src/settings/settings_ui_api.h
     src/settings/settings_window.cpp
@@ -270,7 +286,9 @@ target_include_directories(llavon-ime-candidate-ui PUBLIC
 )
 target_link_libraries(llavon-ime-service PRIVATE
     ime-core::ime-core
+    llavon::debug-client
     asio::asio
+    reflectcpp::reflectcpp
     advapi32
     ole32
     oleaut32
@@ -312,6 +330,31 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     add_test(NAME candidate-pipe-protocol COMMAND candidate-pipe-protocol-tests)
+
+    add_executable(inference-settings-tests
+        tests/inference_settings_tests.cpp
+        src/service/inference_settings_codec.cpp
+        src/service/inference_settings_codec.hpp
+    )
+    target_compile_features(inference-settings-tests PRIVATE cxx_std_23)
+    target_compile_definitions(inference-settings-tests PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+    )
+    target_compile_options(inference-settings-tests PRIVATE
+        /W4
+        /WX
+        /utf-8
+        /permissive-
+    )
+    target_include_directories(inference-settings-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(inference-settings-tests PRIVATE
+        ime-core::ime-core
+        reflectcpp::reflectcpp
+    )
+    add_test(NAME inference-settings COMMAND inference-settings-tests)
 endif()
 
 install(TARGETS

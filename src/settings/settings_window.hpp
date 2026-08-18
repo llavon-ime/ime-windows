@@ -1,5 +1,6 @@
 #pragma once
 
+#include "settings_configuration.hpp"
 #include "update_checker.hpp"
 
 #include <windows.h>
@@ -11,12 +12,13 @@
 #include <winrt/base.h>
 
 #include <memory>
+#include <vector>
 
 namespace llavon::settings {
 
 class SettingsWindow final {
 public:
-    SettingsWindow() = default;
+    explicit SettingsWindow(SettingsConfiguration configuration);
     SettingsWindow(const SettingsWindow&) = delete;
     SettingsWindow& operator=(const SettingsWindow&) = delete;
     ~SettingsWindow();
@@ -33,6 +35,8 @@ private:
 
     void initialize_xaml_island();
     void build_page();
+    void save_inference_setting();
+    void update_inference_save_state();
     void begin_update_check();
     void apply_update_result(UpdateCheckResult result);
     void deactivate_update_target() noexcept;
@@ -58,12 +62,17 @@ private:
     winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
     winrt::com_ptr<IDesktopWindowXamlSourceNative2> island_native_;
     winrt::Windows::UI::Xaml::Controls::Grid shell_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBlock active_device_status_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::ComboBox inference_device_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::Button save_inference_button_{nullptr};
     winrt::Windows::UI::Xaml::Controls::Button update_button_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBlock update_status_{nullptr};
     winrt::Windows::UI::Xaml::Controls::HyperlinkButton update_download_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBlock note_{nullptr};
     UpdateStatusTone update_status_tone_ = UpdateStatusTone::secondary;
     bool dark_theme_ = false;
+    SettingsConfiguration configuration_;
+    std::vector<InferenceDeviceOption> inference_options_;
 
     struct UpdateNotificationTarget;
     std::shared_ptr<UpdateNotificationTarget> update_target_;

@@ -14,6 +14,7 @@ constexpr wchar_t tray_tooltip[] = L"Llavon 輸入法";
 constexpr UINT tray_callback_message = WM_APP + 20;
 constexpr UINT server_stopped_message = WM_APP + 21;
 constexpr UINT open_settings_command = 1;
+constexpr UINT open_debugger_command = 2;
 constexpr UINT_PTR tray_retry_timer = 1;
 constexpr UINT tray_retry_interval_ms = 2000;
 
@@ -31,9 +32,11 @@ TrayIcon::~TrayIcon() {
     }
 }
 
-bool TrayIcon::create(HINSTANCE instance, OpenSettingsCallback open_settings) {
+bool TrayIcon::create(HINSTANCE instance, OpenSettingsCallback open_settings,
+                      OpenDebuggerCallback open_debugger) {
     instance_ = instance;
     open_settings_ = std::move(open_settings);
+    open_debugger_ = std::move(open_debugger);
 
     WNDCLASSEXW window_class{sizeof(window_class)};
     window_class.lpfnWndProc = window_proc;
@@ -130,6 +133,10 @@ LRESULT TrayIcon::handle_message(UINT message, WPARAM wparam, LPARAM lparam) {
                 open_settings();
                 return 0;
             }
+            if (LOWORD(wparam) == open_debugger_command) {
+                open_debugger();
+                return 0;
+            }
             break;
         case server_stopped_message:
             exit_code_ = static_cast<int>(wparam);
@@ -188,18 +195,27 @@ void TrayIcon::open_settings() const {
     }
 }
 
+void TrayIcon::open_debugger() const {
+    if (open_debugger_) {
+        open_debugger_();
+    }
+}
+
 void TrayIcon::show_context_menu(POINT location) {
     HMENU menu = CreatePopupMenu();
     if (!menu) {
         return;
     }
     AppendMenuW(menu, MF_STRING | MF_DEFAULT, open_settings_command, L"開啟設定");
+    AppendMenuW(menu, MF_STRING, open_debugger_command, L"開啟偵錯器");
     SetForegroundWindow(window_);
     const UINT command = TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, location.x, location.y, 0, window_, nullptr);
     DestroyMenu(menu);
     if (command == open_settings_command) {
         open_settings();
+    } else if (command == open_debugger_command) {
+        open_debugger();
     }
     Shell_NotifyIconW(NIM_SETFOCUS, &icon_data_);
 }
