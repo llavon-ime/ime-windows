@@ -14,6 +14,7 @@ foreach(_required_root IN ITEMS
     LLAVON_IME_CORE_VCPKG_INSTALLED_DIR
     LLAVON_IME_WINDOWS_SERVICE_VCPKG_INSTALLED_DIR
     LLAVON_IME_FRONTEND_VCPKG_INSTALLED_DIR
+    LLAVON_IME_DEBUGGER_VCPKG_INSTALLED_DIR
 )
     if(NOT DEFINED ${_required_root} OR "${${_required_root}}" STREQUAL "")
         message(FATAL_ERROR "${_required_root} is required")
@@ -30,7 +31,8 @@ file(MAKE_DIRECTORY "${LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR}")
 set(_aggregate "# Third-party vcpkg licenses\n\n")
 string(APPEND _aggregate
     "This file is generated during packaging from the vcpkg packages installed "
-    "for the ime-core, ime-windows-service, and ime-windows-frontend child projects.\n\n"
+    "for the ime-core, ime-windows-service, ime-windows-frontend, and "
+    "ime-windows-debugger child projects.\n\n"
 )
 
 macro(_llavon_collect_vcpkg_licenses project_name installed_root)
@@ -78,6 +80,10 @@ _llavon_collect_vcpkg_licenses(
 _llavon_collect_vcpkg_licenses(
     "ime-windows-frontend"
     "${LLAVON_IME_FRONTEND_VCPKG_INSTALLED_DIR}"
+)
+_llavon_collect_vcpkg_licenses(
+    "ime-windows-debugger"
+    "${LLAVON_IME_DEBUGGER_VCPKG_INSTALLED_DIR}"
 )
 
 file(WRITE "${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}" "${_aggregate}")

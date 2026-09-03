@@ -170,6 +170,11 @@ function(llavon_add_child_project name source_dir install_subdir)
 endfunction()
 
 llavon_add_child_project(
+    llavon-ime-debugger-build
+    ime-windows-debugger
+    ime-windows-debugger
+)
+llavon_add_child_project(
     llavon-ime-windows-service-build
     ime-windows-service
     ime-windows-service
@@ -177,13 +182,22 @@ llavon_add_child_project(
     "-DIME_WINDOWS_SERVICE_BUILD_COMMIT:STRING=${LLAVON_IME_BUILD_COMMIT}"
     "-DIME_WINDOWS_SERVICE_BUILD_NUMBER:STRING=${LLAVON_IME_BUILD_NUMBER}"
     "-DIME_WINDOWS_SERVICE_VCPKG_TRIPLET:STRING=${LLAVON_IME_VCPKG_TRIPLET}"
+    "-DLLAVON_DEBUG_CLIENT_DIR:PATH=${LLAVON_IME_ARTIFACT_DIR}/ime-windows-debugger/lib/cmake/llavon-debug-client"
 )
-llavon_add_child_project(llavon-ime-frontend-build ime-windows-frontend ime-windows-frontend)
+add_dependencies(llavon-ime-windows-service-build llavon-ime-debugger-build)
+llavon_add_child_project(
+    llavon-ime-frontend-build
+    ime-windows-frontend
+    ime-windows-frontend
+    "-Dllavon-debug-client_DIR:PATH=${LLAVON_IME_ARTIFACT_DIR}/ime-windows-debugger/lib/cmake/llavon-debug-client"
+)
+add_dependencies(llavon-ime-frontend-build llavon-ime-debugger-build)
 
 add_custom_target(llavon-ime-artifacts
     DEPENDS
         llavon-ime-windows-service-build
         llavon-ime-frontend-build
+        llavon-ime-debugger-build
 )
 
 add_custom_target(llavon-ime-vcpkg-licenses
@@ -196,6 +210,7 @@ add_custom_target(llavon-ime-vcpkg-licenses
             "-DLLAVON_IME_CORE_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-windows-service-build/ime-core-build/vcpkg_installed"
             "-DLLAVON_IME_WINDOWS_SERVICE_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-windows-service-build/service-build/vcpkg_installed"
             "-DLLAVON_IME_FRONTEND_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-frontend-build/vcpkg_installed"
+            "-DLLAVON_IME_DEBUGGER_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-debugger-build/vcpkg_installed"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CollectVcpkgLicenses.cmake"
     DEPENDS
         llavon-ime-artifacts
@@ -269,6 +284,11 @@ install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-service/bin/"
 )
 
 install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-frontend/bin/"
+    DESTINATION bin
+    COMPONENT Runtime
+)
+
+install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-debugger/bin/"
     DESTINATION bin
     COMPONENT Runtime
 )

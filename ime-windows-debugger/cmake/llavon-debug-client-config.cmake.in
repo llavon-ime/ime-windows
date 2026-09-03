@@ -1,0 +1,5 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/llavon-debug-client-targets.cmake")
+
+check_required_components(llavon-debug-client)

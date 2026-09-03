@@ -63,6 +63,7 @@ The installed layout is:
   bin/
     llavon-ime.dll
     llavon-ime-service.exe
+    llavon-ime-debugger.exe
     llavon-ime-candidate-ui.dll
     llavon-ime-settings-ui.dll
     start-llavon-ime-service.vbs
@@ -76,6 +77,7 @@ The installed layout is:
       ime-core/
       ime-windows-service/
       ime-windows-frontend/
+      ime-windows-debugger/
   tables/
     bopomofo_char.json
     tokens/
