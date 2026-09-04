@@ -231,14 +231,22 @@ public:
             return *existing->second.session;
         }
 
-        if (sessions_.size() == capacity) {
+        std::unique_ptr<llavon::ime::core::Session> session;
+        if (!idle_.empty()) {
+            session = std::move(idle_.back());
+            idle_.pop_back();
+        } else if (sessions_.size() < capacity) {
+            session = core_->create_session();
+        } else {
             const ClientId evicted_client_id = recency_.back();
             recency_.pop_back();
-            sessions_.erase(evicted_client_id);
-            std::clog << "[SRV] evicted LRU inference context client=" << evicted_client_id << '\n';
+            auto evicted = sessions_.find(evicted_client_id);
+            session = std::move(evicted->second.session);
+            sessions_.erase(evicted);
+            std::clog << "[SRV] reassigned LRU inference context from client="
+                      << evicted_client_id << " to client=" << client_id << '\n';
         }
 
-        auto session = core_->create_session();
         recency_.push_front(client_id);
         const auto [inserted, ok] = sessions_.emplace(
             client_id, Entry{std::move(session), recency_.begin()});
@@ -255,7 +263,9 @@ public:
             return;
         }
         recency_.erase(existing->second.recency);
+        auto session = std::move(existing->second.session);
         sessions_.erase(existing);
+        idle_.push_back(std::move(session));
     }
 
 private:
@@ -268,6 +278,7 @@ private:
     std::shared_ptr<llavon::ime::core::Core> core_;
     std::list<ClientId> recency_;
     std::unordered_map<ClientId, Entry> sessions_;
+    std::vector<std::unique_ptr<llavon::ime::core::Session>> idle_;
 };
 
 class ClientSession final {
