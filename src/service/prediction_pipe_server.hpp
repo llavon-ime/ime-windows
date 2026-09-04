@@ -10,9 +10,12 @@
 #include <atomic>
 #include <cstdint>
 #include <iostream>
+#include <list>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "candidate_pipe_server.hpp"
@@ -214,10 +217,82 @@ inline asio::awaitable<void> write_input_mode(asio::windows::stream_handle& pipe
     co_await write_val(pipe, raw_mode);
 }
 
+class SessionLru final {
+public:
+    using ClientId = std::uint64_t;
+    static constexpr std::size_t capacity = 5;
+
+    explicit SessionLru(std::shared_ptr<llavon::ime::core::Core> core) : core_(std::move(core)) {}
+
+    llavon::ime::core::Session& acquire(ClientId client_id) {
+        const auto existing = sessions_.find(client_id);
+        if (existing != sessions_.end()) {
+            recency_.splice(recency_.begin(), recency_, existing->second.recency);
+            return *existing->second.session;
+        }
+
+        if (sessions_.size() == capacity) {
+            const ClientId evicted_client_id = recency_.back();
+            recency_.pop_back();
+            sessions_.erase(evicted_client_id);
+            std::clog << "[SRV] evicted LRU inference context client=" << evicted_client_id << '\n';
+        }
+
+        auto session = core_->create_session();
+        recency_.push_front(client_id);
+        const auto [inserted, ok] = sessions_.emplace(
+            client_id, Entry{std::move(session), recency_.begin()});
+        if (!ok) {
+            recency_.pop_front();
+            throw std::logic_error("failed to insert inference context into LRU");
+        }
+        return *inserted->second.session;
+    }
+
+    void erase(ClientId client_id) noexcept {
+        const auto existing = sessions_.find(client_id);
+        if (existing == sessions_.end()) {
+            return;
+        }
+        recency_.erase(existing->second.recency);
+        sessions_.erase(existing);
+    }
+
+private:
+    struct Entry {
+        std::unique_ptr<llavon::ime::core::Session> session;
+        std::list<ClientId>::iterator recency;
+    };
+
+    // SessionLru is confined to the prediction server's single io_context thread.
+    std::shared_ptr<llavon::ime::core::Core> core_;
+    std::list<ClientId> recency_;
+    std::unordered_map<ClientId, Entry> sessions_;
+};
+
+class ClientSession final {
+public:
+    ClientSession(std::shared_ptr<SessionLru> sessions, SessionLru::ClientId client_id)
+        : sessions_(std::move(sessions)), client_id_(client_id) {}
+
+    ~ClientSession() {
+        sessions_->erase(client_id_);
+    }
+
+    llavon::ime::core::Session& acquire() {
+        return sessions_->acquire(client_id_);
+    }
+
+private:
+    std::shared_ptr<SessionLru> sessions_;
+    SessionLru::ClientId client_id_;
+};
+
 inline asio::awaitable<void> handle_client(
     asio::windows::stream_handle pipe,
-    std::shared_ptr<llavon::ime::core::Core> core) {
-    std::unique_ptr<llavon::ime::core::Session> engine;
+    std::shared_ptr<SessionLru> sessions,
+    SessionLru::ClientId client_id) {
+    ClientSession client_session(std::move(sessions), client_id);
 
     while (true) {
         uint8_t raw_command = 0;
@@ -236,19 +311,10 @@ inline asio::awaitable<void> handle_client(
             continue;
         }
 
-        if (!engine) {
-            try {
-                engine = core->create_session();
-            } catch (const std::exception& e) {
-                std::cerr << "[ERR] engine init: " << e.what() << std::endl;
-                co_return;
-            }
-        }
-
         if (command == PipeCommand::Ready) {
             uint8_t ok = 0;
             try {
-                engine->ready();
+                client_session.acquire().ready();
                 ok = 1;
             } catch (const std::exception& e) {
                 std::cerr << "[ERR] ready: " << e.what() << std::endl;
@@ -277,7 +343,7 @@ inline asio::awaitable<void> handle_client(
         std::vector<llavon::ime::core::Prediction> results;
         bool ok = false;
         try {
-            results = engine->predict(context, padding);
+            results = client_session.acquire().predict(context, padding);
             ok = true;
         } catch (const std::exception& e) {
             std::cerr << "[ERR] predict: " << e.what() << std::endl;
@@ -293,8 +359,9 @@ inline asio::awaitable<void> handle_client(
 
 inline asio::awaitable<void> listener(
     asio::io_context& io_ctx,
-    std::shared_ptr<llavon::ime::core::Core> core) {
+    std::shared_ptr<SessionLru> sessions) {
     auto executor = co_await asio::this_coro::executor;
+    SessionLru::ClientId next_client_id = 1;
 
     while (true) {
         // SearchHost and other modern Windows text controls run in an
@@ -345,7 +412,8 @@ inline asio::awaitable<void> listener(
         std::clog << "[SRV] client connected\n";
 
         asio::windows::stream_handle stream(executor, hPipe);
-        co_spawn(executor, handle_client(std::move(stream), core), asio::detached);
+        const SessionLru::ClientId client_id = next_client_id++;
+        co_spawn(executor, handle_client(std::move(stream), sessions, client_id), asio::detached);
     }
 }
 
@@ -376,7 +444,8 @@ public:
 
         asio::io_context io_ctx;
         CandidatePipeServer candidate_pipe(candidate_ui_);
-        co_spawn(io_ctx, prediction_pipe::listener(io_ctx, core_), asio::detached);
+        auto sessions = std::make_shared<prediction_pipe::SessionLru>(core_);
+        co_spawn(io_ctx, prediction_pipe::listener(io_ctx, std::move(sessions)), asio::detached);
         co_spawn(io_ctx, candidate_pipe.listen(), asio::detached);
         io_ctx.run();
 
