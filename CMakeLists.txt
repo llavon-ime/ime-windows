@@ -7,6 +7,7 @@ set(IME_WINDOWS_SERVICE_BUILD_NUMBER "0" CACHE STRING
     "CI build number embedded in the service UI")
 set(LLAVON_DEBUG_CLIENT_DIR "" CACHE PATH
     "Directory containing the installed llavon-debug-client CMake package")
+option(IME_WINDOWS_SERVICE_ENABLE_CUDA "Build ime-core with the CUDA backend" OFF)
 if(NOT IME_WINDOWS_SERVICE_BUILD_NUMBER MATCHES "^[0-9]+$")
     message(FATAL_ERROR "IME_WINDOWS_SERVICE_BUILD_NUMBER must be a non-negative integer")
 endif()
@@ -64,6 +65,11 @@ if(IME_WINDOWS_SERVICE_SUPERBUILD)
     set(_ime_core_binary_dir "${CMAKE_CURRENT_BINARY_DIR}/ime-core-build")
     set(_ime_core_install_dir "${CMAKE_CURRENT_BINARY_DIR}/ime-core-install")
     set(_ime_service_binary_dir "${CMAKE_CURRENT_BINARY_DIR}/service-build")
+    set(_ime_core_manifest_features "llama-vulkan")
+    if(IME_WINDOWS_SERVICE_ENABLE_CUDA)
+        list(PREPEND _ime_core_manifest_features "llama-cuda")
+    endif()
+    list(JOIN _ime_core_manifest_features "|" _ime_core_manifest_features_arg)
 
     ExternalProject_Add(ime-core-build
         SOURCE_DIR "${IME_WINDOWS_SERVICE_CORE_SOURCE_DIR}"
@@ -76,7 +82,7 @@ if(IME_WINDOWS_SERVICE_SUPERBUILD)
             "-DVCPKG_MANIFEST_INSTALL:BOOL=ON"
             "-DVCPKG_TARGET_TRIPLET:STRING=${IME_WINDOWS_SERVICE_VCPKG_TRIPLET}"
             "-DVCPKG_OVERLAY_TRIPLETS:PATH=${VCPKG_OVERLAY_TRIPLETS}"
-            "-DVCPKG_MANIFEST_FEATURES:STRING=llama-cuda|llama-vulkan"
+            "-DVCPKG_MANIFEST_FEATURES:STRING=${_ime_core_manifest_features_arg}"
         LIST_SEPARATOR "|"
         BUILD_COMMAND
             "${CMAKE_COMMAND}"
