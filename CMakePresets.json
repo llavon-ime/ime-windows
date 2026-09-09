@@ -13,7 +13,8 @@
       "cacheVariables": {
         "LLAVON_IME_CONFIGURATION": "Release",
         "LLAVON_IME_ARTIFACT_DIR": "${sourceDir}/dist",
-        "LLAVON_IME_VCPKG_ROOT": "${sourceDir}/vcpkg"
+        "LLAVON_IME_VCPKG_ROOT": "${sourceDir}/vcpkg",
+        "LLAVON_IME_ENABLE_CUDA": false
       }
     }
   ],

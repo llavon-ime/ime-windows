@@ -21,6 +21,17 @@ cmake --preset windows
 cmake --build --preset package
 ```
 
+CUDA support is disabled by default so the standard build does not require a
+CUDA Toolkit. To build `ime-core` with the CUDA backend, configure with CUDA
+enabled before building:
+
+```powershell
+cmake --preset windows -DLLAVON_IME_ENABLE_CUDA=ON
+cmake --build --preset package
+```
+
+The CUDA-enabled build requires a CUDA Toolkit with `nvcc` available to vcpkg.
+
 The package target performs these steps:
 
 - Builds and installs `ime-windows-service` into `dist/ime-windows-service`.

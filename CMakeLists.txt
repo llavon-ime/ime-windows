@@ -48,6 +48,8 @@ endif()
 set(LLAVON_IME_CONFIGURATION "Release" CACHE STRING "Configuration used by child builds")
 set_property(CACHE LLAVON_IME_CONFIGURATION PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 
+option(LLAVON_IME_ENABLE_CUDA "Build ime-core with the CUDA backend" OFF)
+
 set(LLAVON_IME_ARTIFACT_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/dist"
     CACHE PATH
@@ -182,6 +184,7 @@ llavon_add_child_project(
     "-DIME_WINDOWS_SERVICE_BUILD_COMMIT:STRING=${LLAVON_IME_BUILD_COMMIT}"
     "-DIME_WINDOWS_SERVICE_BUILD_NUMBER:STRING=${LLAVON_IME_BUILD_NUMBER}"
     "-DIME_WINDOWS_SERVICE_VCPKG_TRIPLET:STRING=${LLAVON_IME_VCPKG_TRIPLET}"
+    "-DIME_WINDOWS_SERVICE_ENABLE_CUDA:BOOL=${LLAVON_IME_ENABLE_CUDA}"
     "-DLLAVON_DEBUG_CLIENT_DIR:PATH=${LLAVON_IME_ARTIFACT_DIR}/ime-windows-debugger/lib/cmake/llavon-debug-client"
 )
 add_dependencies(llavon-ime-windows-service-build llavon-ime-debugger-build)
