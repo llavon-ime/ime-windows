@@ -1,0 +1,5 @@
+#pragma once
+
+#define IDI_TEXT_SERVICE 1
+#define IDI_INPUT_MODE_CHINESE 201
+#define IDI_INPUT_MODE_ENGLISH 202
