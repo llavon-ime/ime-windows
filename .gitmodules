@@ -1,9 +1,6 @@
-[submodule "ime-windows-service"]
-	path = ime-windows-service
-	url = https://github.com/llavon-ime/ime-windows-service.git
-[submodule "ime-windows-frontend"]
-	path = ime-windows-frontend
-	url = https://github.com/llavon-ime/ime-windows-frontend.git
 [submodule "vcpkg"]
 	path = vcpkg
 	url = https://github.com/microsoft/vcpkg.git
+[submodule "ime-core"]
+	path = ime-core
+	url = https://github.com/llavon-ime/ime-core.git
