@@ -1,0 +1,15 @@
+{
+  "name": "ime-windows-service",
+  "version-string": "0.1.0",
+  "dependencies": [
+    {
+      "name": "asio",
+      "platform": "windows"
+    },
+    {
+      "name": "cppwinrt",
+      "platform": "windows"
+    },
+    "reflectcpp"
+  ]
+}
