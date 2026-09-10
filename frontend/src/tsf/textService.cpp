@@ -574,6 +574,9 @@ InputMode TextService::read_backend_input_mode() {
 
 InputMode TextService::refresh_input_mode_indicator() {
     const InputMode mode = get_engine()->current_input_mode();
+    if (mode == InputMode::English) {
+        backtick_used_as_modifier_ = false;
+    }
     if (input_mode_lang_bar_item_) {
         input_mode_lang_bar_item_->set_mode(mode);
     }
@@ -725,16 +728,16 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
         shift_used_as_modifier_ = true;
     }
 
-    if (backtick_shortcut_key(wParam)) {
+    const bool english_mode = read_backend_input_mode() == InputMode::English;
+    if (!english_mode && backtick_shortcut_key(wParam)) {
         *pfEaten = TRUE;
         return S_OK;
     }
 
-    const bool english_mode = read_backend_input_mode() == InputMode::English;
     const bool active_composition = composition_belongs_to(pContext) && !compositionBuffer.empty();
     const bool is_bopomofo_key = Bopomofo::lookup(static_cast<int>(wParam)) != std::nullopt;
     if (english_mode && !active_composition) {
-        *pfEaten = (punctuation_shortcut(wParam) || multifuntional_shortcut(wParam) || english_printable_key(wParam))
+        *pfEaten = (punctuation_shortcut(wParam) || english_printable_key(wParam))
                        ? TRUE
                        : FALSE;
         return S_OK;
@@ -745,7 +748,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
         return S_OK;
     }
 
-    if (multifuntional_shortcut(wParam)) {
+    if (!english_mode && multifuntional_shortcut(wParam)) {
         *pfEaten = TRUE;
         return S_OK;
     }
@@ -854,19 +857,19 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         shift_toggle_pending_ = false;
         shift_used_as_modifier_ = true;
     }
-    if (backtick_shortcut_key(wParam) && !backtick_used_as_modifier_) {
+    e2e_trace.mode_started = std::chrono::steady_clock::now();
+    const bool english_mode = read_backend_input_mode() == InputMode::English;
+    e2e_trace.mode_finished = std::chrono::steady_clock::now();
+    if (!english_mode && backtick_shortcut_key(wParam) && !backtick_used_as_modifier_) {
         backtick_used_as_modifier_ = true;
         *pfEaten = TRUE;
         return S_OK;
     }
 
-    e2e_trace.mode_started = std::chrono::steady_clock::now();
-    const bool english_mode = read_backend_input_mode() == InputMode::English;
-    e2e_trace.mode_finished = std::chrono::steady_clock::now();
     e2e_trace.ready_started = e2e_trace.mode_finished;
     e2e_trace.ready_finished = e2e_trace.mode_finished;
     auto punctuation = punctuation_shortcut(wParam);
-    if (!punctuation) punctuation = multifuntional_shortcut(wParam);
+    if (!punctuation && !english_mode) punctuation = multifuntional_shortcut(wParam);
     if (punctuation) {
         compositionBuffer.add_chosen_candidate((*punctuation)[0]);
         set_composition_text(pContext, compositionBuffer.to_string());
