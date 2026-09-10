@@ -40,7 +40,7 @@ jobs:
           path: |
             .vcpkg-cache
             vcpkg/downloads
-          key: ${{ runner.os }}-vcpkg-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'ime-windows-debugger/vcpkg.json', 'ime-windows-service/vcpkg.json', 'ime-windows-service/vcpkg-configuration.json', 'ime-windows-service/ime-core/vcpkg.json', 'ime-windows-service/ime-core/vcpkg-configuration.json', 'ime-windows-frontend/vcpkg.json', 'ime-windows-frontend/vcpkg-configuration.json') }}
+          key: ${{ runner.os }}-vcpkg-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-x64-windows-cpu-dispatch-
 
@@ -62,7 +62,7 @@ jobs:
 
       - name: Configure
         shell: pwsh
-        run: cmake --preset windows -DLLAVON_IME_VCPKG_TRIPLET=x64-windows-cpu-dispatch
+        run: cmake --preset windows -DVCPKG_TARGET_TRIPLET=x64-windows-cpu-dispatch
 
       - name: Build MSI
         shell: pwsh
@@ -71,7 +71,7 @@ jobs:
       - name: Verify packaged CPU backends
         shell: pwsh
         run: |
-          $cpuDlls = @(Get-ChildItem dist/ime-windows-service/bin -Filter 'ggml-cpu*.dll')
+          $cpuDlls = @(Get-ChildItem build/windows/vcpkg_installed/x64-windows-cpu-dispatch/bin -Filter 'ggml-cpu*.dll')
           if ($cpuDlls.Count -lt 2) {
             throw "Expected multiple dynamic CPU backends, found $($cpuDlls.Count)"
           }

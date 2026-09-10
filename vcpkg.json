@@ -1,0 +1,51 @@
+{
+  "name": "llavon-ime-windows",
+  "version-string": "0.1.0",
+  "dependencies": [
+    {
+      "name": "asio",
+      "platform": "windows"
+    },
+    {
+      "name": "cppwinrt",
+      "platform": "windows"
+    },
+    {
+      "name": "jsoncons",
+      "platform": "windows"
+    },
+    "llama-cpp",
+    "reflectcpp",
+    {
+      "name": "utfcpp",
+      "platform": "windows"
+    }
+  ],
+  "default-features": [
+    "llama-vulkan"
+  ],
+  "features": {
+    "llama-cuda": {
+      "description": "Build llama.cpp with CUDA support for GPU offload.",
+      "dependencies": [
+        {
+          "name": "ggml",
+          "features": [
+            "cuda"
+          ]
+        }
+      ]
+    },
+    "llama-vulkan": {
+      "description": "Build llama.cpp with Vulkan support for GPU offload.",
+      "dependencies": [
+        {
+          "name": "ggml",
+          "features": [
+            "vulkan"
+          ]
+        }
+      ]
+    }
+  }
+}

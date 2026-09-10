@@ -9,7 +9,7 @@ The UI emphasizes frontend end-to-end latency (`frontend_e2e_ms`) from
 prediction-triggered read/write edit session, while retaining core inference
 latency (`predict_ms`) as a secondary metric.
 
-The installed `llavon::debug-client` static library provides an asynchronous
+The internal `llavon::debug-client` static library provides an asynchronous
 `llavon::debug::Logger`. Its two `log` overloads accept an existing UTF-8 string
 or a lazy message factory. Formatting and pipe writes run on the logger worker;
 disconnected or rejected factories are never evaluated.

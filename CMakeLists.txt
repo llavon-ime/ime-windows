@@ -1,10 +1,31 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(llavon_ime_windows LANGUAGES NONE)
-
-include(ExternalProject)
-
 set(LLAVON_IME_VERSION "0.1.0" CACHE STRING "Package version")
+option(LLAVON_IME_ENABLE_CUDA "Build ime-core with the CUDA backend" OFF)
+
+# vcpkg's toolchain is loaded by project(). Select optional manifest features
+# before that happens so one configure owns the complete dependency graph.
+if(LLAVON_IME_ENABLE_CUDA)
+    list(APPEND VCPKG_MANIFEST_FEATURES "llama-cuda")
+    list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
+endif()
+
+project(llavon_ime_windows
+    VERSION "${LLAVON_IME_VERSION}"
+    LANGUAGES CXX RC
+)
+
+if(NOT WIN32)
+    message(FATAL_ERROR "Llavon IME for Windows is Windows-only")
+endif()
+
+include(CTest)
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+foreach(_configuration IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_configuration} "${CMAKE_CURRENT_BINARY_DIR}/bin")
+endforeach()
+
 set(LLAVON_IME_BUILD_COMMIT "" CACHE STRING "Root repository commit embedded in the package")
 set(LLAVON_IME_BUILD_NUMBER "" CACHE STRING "CI build number embedded in the package")
 if(NOT LLAVON_IME_BUILD_NUMBER)
@@ -19,6 +40,7 @@ endif()
 if(NOT LLAVON_IME_BUILD_NUMBER MATCHES "^[0-9]+$")
     message(FATAL_ERROR "LLAVON_IME_BUILD_NUMBER must be a non-negative integer")
 endif()
+
 if(NOT LLAVON_IME_BUILD_COMMIT)
     string(LENGTH "$ENV{GITHUB_SHA}" _llavon_ime_github_sha_length)
     if(DEFINED ENV{GITHUB_SHA} AND "$ENV{GITHUB_SHA}" MATCHES "^[0-9a-fA-F]+$" AND
@@ -45,40 +67,21 @@ if(NOT LLAVON_IME_BUILD_COMMIT)
         "Root repository commit embedded in the package" FORCE)
 endif()
 
-set(LLAVON_IME_CONFIGURATION "Release" CACHE STRING "Configuration used by child builds")
-set_property(CACHE LLAVON_IME_CONFIGURATION PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
-
-option(LLAVON_IME_ENABLE_CUDA "Build ime-core with the CUDA backend" OFF)
-
-set(LLAVON_IME_ARTIFACT_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/dist"
-    CACHE PATH
-    "Directory where child project install outputs are collected"
-)
-
-set(LLAVON_IME_VCPKG_ROOT
-    "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg"
-    CACHE PATH
-    "vcpkg root used to configure child projects"
-)
-
-set(LLAVON_IME_CMAKE_TOOLCHAIN_FILE
-    "${LLAVON_IME_VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-    CACHE FILEPATH
-    "CMake toolchain file passed to child projects"
-)
-
-set(LLAVON_IME_VCPKG_OVERLAY_TRIPLETS
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/triplets"
-    CACHE PATH
-    "Directory containing project-specific vcpkg triplets"
-)
+set(IME_WINDOWS_SERVICE_BUILD_COMMIT "${LLAVON_IME_BUILD_COMMIT}")
+set(IME_WINDOWS_SERVICE_BUILD_NUMBER "${LLAVON_IME_BUILD_NUMBER}")
 
 set(LLAVON_IME_MODEL_URL
     "https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF/resolve/main/llavon-ime-llama-250m-Q4_K_M.gguf?download=true"
     CACHE STRING
     "Model URL packaged with the installer"
 )
+set(LLAVON_IME_MODEL_FILENAME "llavon-ime-llama-250m-Q4_K_M.gguf")
+set(LLAVON_IME_DOWNLOAD_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/downloads"
+    CACHE PATH
+    "Directory used to cache downloaded package inputs"
+)
+set(LLAVON_IME_MODEL_PATH "${LLAVON_IME_DOWNLOAD_DIR}/${LLAVON_IME_MODEL_FILENAME}")
 
 set(LLAVON_IME_WIX_VERSION "4.0.4" CACHE STRING "WiX .NET tool version used by CPack")
 set(LLAVON_IME_WIX_UI_EXTENSION_VERSION "4.0.4" CACHE STRING "WiX UI extension version used by CPack")
@@ -92,33 +95,14 @@ set(LLAVON_IME_WIX_EXTENSIONS_DIR
     CACHE PATH
     "Directory where package-only WiX extensions are installed"
 )
+set(LLAVON_IME_WIX_EXE "${LLAVON_IME_WIX_TOOLS_DIR}/wix.cmd")
+set(LLAVON_IME_WIX_MARKER
+    "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.UI.wixext-${LLAVON_IME_WIX_UI_EXTENSION_VERSION}.stamp"
+)
 
-set(LLAVON_IME_MODEL_FILENAME "llavon-ime-llama-250m-Q4_K_M.gguf")
 set(LLAVON_IME_SERVICE_STARTUP_LAUNCHER
     "${CMAKE_CURRENT_BINARY_DIR}/start-llavon-ime-service.vbs"
 )
-set(LLAVON_IME_DOWNLOAD_DIR
-    "${CMAKE_CURRENT_BINARY_DIR}/downloads"
-    CACHE PATH
-    "Directory used to cache downloaded package inputs"
-)
-set(LLAVON_IME_MODEL_PATH "${LLAVON_IME_DOWNLOAD_DIR}/${LLAVON_IME_MODEL_FILENAME}")
-set(LLAVON_IME_WIX_EXE "${LLAVON_IME_WIX_TOOLS_DIR}/wix.cmd")
-set(LLAVON_IME_WIX_MARKER "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.UI.wixext-${LLAVON_IME_WIX_UI_EXTENSION_VERSION}.stamp")
-set(LLAVON_IME_VCPKG_TRIPLET "x64-windows" CACHE STRING "vcpkg triplet used by child projects")
-set(LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/licenses/vcpkg")
-set(LLAVON_IME_VCPKG_LICENSE_AGGREGATE "${CMAKE_CURRENT_BINARY_DIR}/licenses/THIRD-PARTY-vcpkg-LICENSES.txt")
-set(LLAVON_IME_VCPKG_LICENSE_MARKER "${CMAKE_CURRENT_BINARY_DIR}/licenses/vcpkg-licenses.stamp")
-set(LLAVON_IME_PACKAGE_LICENSE "${CMAKE_CURRENT_BINARY_DIR}/PACKAGE-LICENSE.txt")
-
-if(NOT EXISTS "${LLAVON_IME_CMAKE_TOOLCHAIN_FILE}")
-    message(FATAL_ERROR
-        "vcpkg toolchain file was not found: ${LLAVON_IME_CMAKE_TOOLCHAIN_FILE}\n"
-        "Initialize the vcpkg submodule or pass "
-        "-DLLAVON_IME_CMAKE_TOOLCHAIN_FILE=<path-to-vcpkg.cmake>."
-    )
-endif()
-
 file(GENERATE
     OUTPUT "${LLAVON_IME_SERVICE_STARTUP_LAUNCHER}"
     CONTENT "Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\nSet shell = CreateObject(\"WScript.Shell\")\r\nbinDir = fso.GetParentFolderName(WScript.ScriptFullName)\r\nexePath = fso.BuildPath(binDir, \"llavon-ime-service.exe\")\r\nshell.Run Chr(34) & exePath & Chr(34), 0, False\r\n"
@@ -129,7 +113,7 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt"
     COPYONLY
 )
-
+set(LLAVON_IME_PACKAGE_LICENSE "${CMAKE_CURRENT_BINARY_DIR}/PACKAGE-LICENSE.txt")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" LLAVON_IME_SOFTWARE_LICENSE_TEXT)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/MODEL-LICENSE.txt" LLAVON_IME_MODEL_LICENSE_TEXT)
 file(WRITE "${LLAVON_IME_PACKAGE_LICENSE}"
@@ -141,88 +125,53 @@ file(WRITE "${LLAVON_IME_PACKAGE_LICENSE}"
     "${LLAVON_IME_MODEL_LICENSE_TEXT}"
 )
 
-function(llavon_add_child_project name source_dir install_subdir)
-    set(binary_dir "${CMAKE_CURRENT_BINARY_DIR}/${name}")
-    set(install_dir "${LLAVON_IME_ARTIFACT_DIR}/${install_subdir}")
+# ime-core remains its own repository, but it is a normal static-library target
+# in this build. EXCLUDE_FROM_ALL suppresses its standalone install/export rules;
+# the service dependency still builds the library.
+if(NOT VCPKG_TARGET_TRIPLET OR NOT VCPKG_INSTALLED_DIR)
+    message(FATAL_ERROR "Configure with the repository's vcpkg toolchain")
+endif()
 
-    ExternalProject_Add(${name}
-        SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${source_dir}"
-        BINARY_DIR "${binary_dir}"
-        INSTALL_DIR "${install_dir}"
-        CMAKE_ARGS
-            "-DCMAKE_BUILD_TYPE:STRING=${LLAVON_IME_CONFIGURATION}"
-            "-DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>"
-            "-DCMAKE_TOOLCHAIN_FILE:FILEPATH=${LLAVON_IME_CMAKE_TOOLCHAIN_FILE}"
-            "-DVCPKG_TARGET_TRIPLET:STRING=${LLAVON_IME_VCPKG_TRIPLET}"
-            "-DVCPKG_OVERLAY_TRIPLETS:PATH=${LLAVON_IME_VCPKG_OVERLAY_TRIPLETS}"
-            ${ARGN}
-        BUILD_COMMAND
-            "${CMAKE_COMMAND}"
-                --build "<BINARY_DIR>"
-                --config "${LLAVON_IME_CONFIGURATION}"
-        INSTALL_COMMAND
-            "${CMAKE_COMMAND}"
-                --install "<BINARY_DIR>"
-                --config "${LLAVON_IME_CONFIGURATION}"
-        BUILD_ALWAYS TRUE
-        USES_TERMINAL_CONFIGURE TRUE
-        USES_TERMINAL_BUILD TRUE
-        USES_TERMINAL_INSTALL TRUE
-    )
-endfunction()
-
-llavon_add_child_project(
-    llavon-ime-debugger-build
-    ime-windows-debugger
-    ime-windows-debugger
-)
-llavon_add_child_project(
-    llavon-ime-windows-service-build
-    ime-windows-service
-    ime-windows-service
-    "-DIME_WINDOWS_SERVICE_VERSION:STRING=${LLAVON_IME_VERSION}"
-    "-DIME_WINDOWS_SERVICE_BUILD_COMMIT:STRING=${LLAVON_IME_BUILD_COMMIT}"
-    "-DIME_WINDOWS_SERVICE_BUILD_NUMBER:STRING=${LLAVON_IME_BUILD_NUMBER}"
-    "-DIME_WINDOWS_SERVICE_VCPKG_TRIPLET:STRING=${LLAVON_IME_VCPKG_TRIPLET}"
-    "-DIME_WINDOWS_SERVICE_ENABLE_CUDA:BOOL=${LLAVON_IME_ENABLE_CUDA}"
-    "-DLLAVON_DEBUG_CLIENT_DIR:PATH=${LLAVON_IME_ARTIFACT_DIR}/ime-windows-debugger/lib/cmake/llavon-debug-client"
-)
-add_dependencies(llavon-ime-windows-service-build llavon-ime-debugger-build)
-llavon_add_child_project(
-    llavon-ime-frontend-build
-    ime-windows-frontend
-    ime-windows-frontend
-    "-Dllavon-debug-client_DIR:PATH=${LLAVON_IME_ARTIFACT_DIR}/ime-windows-debugger/lib/cmake/llavon-debug-client"
-)
-add_dependencies(llavon-ime-frontend-build llavon-ime-debugger-build)
+add_subdirectory(ime-core EXCLUDE_FROM_ALL)
+add_subdirectory(debugger)
+add_subdirectory(service)
+add_subdirectory(frontend)
 
 add_custom_target(llavon-ime-artifacts
     DEPENDS
-        llavon-ime-windows-service-build
-        llavon-ime-frontend-build
-        llavon-ime-debugger-build
+        llavon-ime
+        llavon-ime-service
+        llavon-ime-settings-ui
+        llavon-ime-candidate-ui
+        llavon-ime-debugger
 )
 
-add_custom_target(llavon-ime-vcpkg-licenses
+set(LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/licenses/vcpkg")
+set(LLAVON_IME_VCPKG_LICENSE_AGGREGATE
+    "${CMAKE_CURRENT_BINARY_DIR}/licenses/THIRD-PARTY-vcpkg-LICENSES.txt")
+set(LLAVON_IME_VCPKG_LICENSE_MARKER "${CMAKE_CURRENT_BINARY_DIR}/licenses/vcpkg-licenses.stamp")
+add_custom_command(
+    OUTPUT
+        "${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
+        "${LLAVON_IME_VCPKG_LICENSE_MARKER}"
     COMMAND
         "${CMAKE_COMMAND}"
             "-DLLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR=${LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR}"
             "-DLLAVON_IME_VCPKG_LICENSE_AGGREGATE=${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
             "-DLLAVON_IME_VCPKG_LICENSE_MARKER=${LLAVON_IME_VCPKG_LICENSE_MARKER}"
-            "-DLLAVON_IME_VCPKG_TRIPLET=${LLAVON_IME_VCPKG_TRIPLET}"
-            "-DLLAVON_IME_CORE_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-windows-service-build/ime-core-build/vcpkg_installed"
-            "-DLLAVON_IME_WINDOWS_SERVICE_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-windows-service-build/service-build/vcpkg_installed"
-            "-DLLAVON_IME_FRONTEND_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-frontend-build/vcpkg_installed"
-            "-DLLAVON_IME_DEBUGGER_VCPKG_INSTALLED_DIR=${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-debugger-build/vcpkg_installed"
+            "-DVCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
+            "-DVCPKG_INSTALLED_DIR=${VCPKG_INSTALLED_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CollectVcpkgLicenses.cmake"
     DEPENDS
-        llavon-ime-artifacts
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CollectVcpkgLicenses.cmake"
-    BYPRODUCTS
-        "${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
-        "${LLAVON_IME_VCPKG_LICENSE_MARKER}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json"
     COMMENT "Collecting vcpkg package licenses"
     VERBATIM
+)
+add_custom_target(llavon-ime-vcpkg-licenses
+    DEPENDS
+        "${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
+        "${LLAVON_IME_VCPKG_LICENSE_MARKER}"
 )
 
 add_custom_command(
@@ -235,7 +184,6 @@ add_custom_command(
     COMMENT "Downloading ${LLAVON_IME_MODEL_FILENAME}"
     VERBATIM
 )
-
 add_custom_target(llavon-ime-model DEPENDS "${LLAVON_IME_MODEL_PATH}")
 
 add_custom_command(
@@ -254,7 +202,6 @@ add_custom_command(
     COMMENT "Restoring WiX ${LLAVON_IME_WIX_VERSION} from NuGet"
     VERBATIM
 )
-
 add_custom_target(llavon-ime-wix
     DEPENDS
         "${LLAVON_IME_WIX_EXE}"
@@ -274,75 +221,64 @@ add_custom_target(llavon-ime-msi
         "${CMAKE_COMMAND}" -E env
             "WIX_EXTENSIONS=${LLAVON_IME_WIX_EXTENSIONS_DIR}"
             "${CMAKE_CPACK_COMMAND}"
-            -C "${LLAVON_IME_CONFIGURATION}"
+            -C Release
             --config "${CMAKE_CURRENT_BINARY_DIR}/CPackConfig.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     DEPENDS llavon-ime-package-inputs
     USES_TERMINAL
 )
 
-install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-service/bin/"
+# The custom triplet builds llama.cpp and ggml as DLLs, including CPU backend
+# modules loaded dynamically at runtime. Install the complete runtime DLL set.
+install(DIRECTORY
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/"
     DESTINATION bin
     COMPONENT Runtime
+    FILES_MATCHING PATTERN "*.dll"
 )
-
-install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-frontend/bin/"
-    DESTINATION bin
-    COMPONENT Runtime
-)
-
-install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-debugger/bin/"
-    DESTINATION bin
-    COMPONENT Runtime
-)
-
-install(DIRECTORY "${LLAVON_IME_ARTIFACT_DIR}/ime-windows-service/tables/"
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/ime-core/table/"
     DESTINATION tables
     COMPONENT Runtime
 )
-
 install(FILES "${LLAVON_IME_MODEL_PATH}"
     DESTINATION models
     COMPONENT Runtime
 )
-
 install(PROGRAMS "${LLAVON_IME_SERVICE_STARTUP_LAUNCHER}"
     DESTINATION bin
     COMPONENT Runtime
 )
-
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt"
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/MODEL-LICENSE.txt"
     DESTINATION licenses
     COMPONENT Runtime
 )
-
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/MODEL-LICENSE.txt"
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ime-core/LICENSE"
     DESTINATION licenses
+    RENAME ime-core-LICENSE.txt
     COMPONENT Runtime
 )
-
 install(FILES "${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
     DESTINATION licenses
     COMPONENT Runtime
 )
-
 install(DIRECTORY "${LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR}/"
     DESTINATION licenses/vcpkg
     COMPONENT Runtime
 )
 
 set(CPACK_GENERATOR "WIX")
+set(CPACK_COMPONENTS_ALL Runtime)
+set(CPACK_COMPONENT_RUNTIME_REQUIRED TRUE)
 set(CPACK_PACKAGE_NAME "拉風輸入法")
 set(CPACK_PACKAGE_VENDOR "Llavon IME")
-set(CPACK_PACKAGE_VERSION "${LLAVON_IME_VERSION}")
-set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR "1")
-set(CPACK_PACKAGE_VERSION_PATCH "0")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "拉風輸入法 Windows 版")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "Llavon IME")
 set(CPACK_PACKAGING_INSTALL_PREFIX "")
 set(CPACK_RESOURCE_FILE_LICENSE "${LLAVON_IME_PACKAGE_LICENSE}")
-set(CPACK_PACKAGE_FILE_NAME "llavon-ime-${LLAVON_IME_VERSION}-windows")
+set(CPACK_PACKAGE_FILE_NAME "llavon-ime-${PROJECT_VERSION}-windows")
 set(CPACK_WIX_VERSION "4")
 set(CPACK_WIX_EXTENSIONS "WixToolset.UI.wixext")
 set(CPACK_WIX_CULTURES "zh-TW")

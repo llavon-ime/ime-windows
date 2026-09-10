@@ -1,9 +1,3 @@
-cmake_minimum_required(VERSION 3.24)
-
-project(ime_windows_frontend
-    VERSION 0.1.0
-    LANGUAGES CXX RC)
-
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h" "src/*.hpp")
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB_RECURSE RESOURCES CONFIGURE_DEPENDS "src/*.rc")
@@ -35,7 +29,6 @@ target_compile_options(llavon-ime PRIVATE
 
 find_package(cppwinrt CONFIG REQUIRED)
 find_package(jsoncons CONFIG REQUIRED)
-find_package(llavon-debug-client CONFIG REQUIRED)
 find_package(utf8cpp CONFIG REQUIRED)
 
 target_link_libraries(llavon-ime PRIVATE
@@ -59,6 +52,5 @@ set_target_properties(llavon-ime PROPERTIES
 
 install(TARGETS llavon-ime
     RUNTIME DESTINATION bin
-    LIBRARY DESTINATION bin
-    ARCHIVE DESTINATION lib
+    COMPONENT Runtime
 )

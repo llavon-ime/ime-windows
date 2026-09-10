@@ -11,9 +11,10 @@
       "displayName": "Windows",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "LLAVON_IME_CONFIGURATION": "Release",
-        "LLAVON_IME_ARTIFACT_DIR": "${sourceDir}/dist",
-        "LLAVON_IME_VCPKG_ROOT": "${sourceDir}/vcpkg",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/dist",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/triplets",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
         "LLAVON_IME_ENABLE_CUDA": false
       }
     }
@@ -34,6 +35,16 @@
       "targets": [
         "llavon-ime-msi"
       ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows",
+      "configurePreset": "windows",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

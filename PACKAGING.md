@@ -1,8 +1,9 @@
 # Packaging
 
-The top-level CMake project builds the backend and frontend as separate child
-projects, downloads the packaged model, then creates a Windows MSI with CPack
-and WiX.
+The top-level CMake project configures every Windows executable and DLL in one
+build graph, downloads the packaged model, then creates a Windows MSI with
+CPack and WiX. The cross-platform `ime-core` repository remains a submodule,
+but participates in this build as a normal static-library target.
 
 ## Prerequisites
 
@@ -34,14 +35,12 @@ The CUDA-enabled build requires a CUDA Toolkit with `nvcc` available to vcpkg.
 
 The package target performs these steps:
 
-- Builds and installs `ime-windows-service` into `dist/ime-windows-service`.
-- The service superbuild independently configures and builds its `ime-core`
-  submodule before linking the Windows runtime.
-- Builds and installs `ime-windows-frontend` into `dist/ime-windows-frontend`.
+- Builds the frontend DLL, backend executable, UI DLLs, and debugger executable
+  from one CMake configuration.
+- Links the service directly to the `ime-core` static-library target.
 - Restores WiX `4.0.4` from NuGet into the build tree.
 - Installs `WixToolset.UI.wixext` into a build-local WiX extension cache.
-- Collects vcpkg package license files from the independent `ime-core`,
-  `ime-windows-service`, and `ime-windows-frontend` build trees.
+- Collects vcpkg package license files from the unified manifest installation.
 - Includes the model attribution and CC BY-NC 4.0 terms in the MSI license
   agreement and as a separately installed license file.
 - Downloads `llavon-ime-llama-250m-Q4_K_M.gguf` from the hard-coded Hugging Face URL.
@@ -83,12 +82,10 @@ The installed layout is:
   licenses/
     LICENSE.txt
     MODEL-LICENSE.txt
+    ime-core-LICENSE.txt
     THIRD-PARTY-vcpkg-LICENSES.txt
     vcpkg/
-      ime-core/
-      ime-windows-service/
-      ime-windows-frontend/
-      ime-windows-debugger/
+      <package>.txt
   tables/
     bopomofo_char.json
     tokens/

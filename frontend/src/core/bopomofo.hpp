@@ -226,7 +226,7 @@ private:
         }
 
         const std::filesystem::path project_root = this_file.parent_path().parent_path().parent_path().parent_path();
-        candidates.push_back(project_root / "table" / "bopomofo_char.json");
+        candidates.push_back(project_root / "ime-core" / "table" / "bopomofo_char.json");
         candidates.push_back(project_root / "tables" / "bopomofo_char.json");
 
         if (const auto mapping_file = first_existing_file(candidates)) {

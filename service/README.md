@@ -65,17 +65,14 @@ The service keeps the existing executable and IPC compatibility names:
 
 ## Build
 
-Initialize the nested `ime-core` submodule, then pass a vcpkg toolchain:
+Configure and build the complete Windows project from the repository root:
 
 ```powershell
 git submodule update --init --recursive
-cmake --preset windows -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --preset windows
 cmake --build --preset windows
-cmake --install build/windows --config Release
 ```
 
-The top-level CMake project configures `ime-core` and the Windows service separately.
-Each project uses its own `vcpkg.json` and its own `vcpkg_installed` tree.
-The Windows superbuild enables the CUDA and Vulkan ggml backends. Building the
-complete distribution therefore requires a CUDA Toolkit installation; Vulkan
-build dependencies are resolved by vcpkg.
+The top-level project adds `ime-core` and this component to one CMake build
+graph backed by one vcpkg manifest. Vulkan support is enabled by default. CUDA
+support is optional and requires configuring with `LLAVON_IME_ENABLE_CUDA=ON`.
