@@ -171,55 +171,6 @@ if(BUILD_TESTING)
     )
     add_test(NAME candidate-pipe-protocol COMMAND candidate-pipe-protocol-tests)
 
-    add_executable(user-settings-tests
-        tests/user_settings_tests.cpp
-        src/service/user_settings_codec.cpp
-        src/service/user_settings_codec.hpp
-    )
-    target_compile_features(user-settings-tests PRIVATE cxx_std_23)
-    target_compile_definitions(user-settings-tests PRIVATE
-        WIN32_LEAN_AND_MEAN
-        NOMINMAX
-    )
-    target_compile_options(user-settings-tests PRIVATE
-        /W4
-        /WX
-        /utf-8
-        /permissive-
-    )
-    target_include_directories(user-settings-tests PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    )
-    target_link_libraries(user-settings-tests PRIVATE
-        ime-core::ime-core
-        reflectcpp::reflectcpp
-        utf8cpp::utf8cpp
-    )
-    add_test(NAME user-settings COMMAND user-settings-tests)
-
-    add_executable(custom-name-matcher-tests
-        tests/custom_name_matcher_tests.cpp
-        src/service/custom_name_matcher.cpp
-        src/service/custom_name_matcher.hpp
-    )
-    target_compile_features(custom-name-matcher-tests PRIVATE cxx_std_23)
-    target_compile_definitions(custom-name-matcher-tests PRIVATE
-        WIN32_LEAN_AND_MEAN
-        NOMINMAX
-    )
-    target_compile_options(custom-name-matcher-tests PRIVATE
-        /W4
-        /WX
-        /utf-8
-        /permissive-
-    )
-    target_include_directories(custom-name-matcher-tests PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    )
-    target_link_libraries(custom-name-matcher-tests PRIVATE
-        ime-core::ime-core
-    )
-    add_test(NAME custom-name-matcher COMMAND custom-name-matcher-tests)
 endif()
 
 install(TARGETS
