@@ -3,6 +3,7 @@
 #include <ime-core/core.hpp>
 #include <windows.h>
 
+#include "user_settings.hpp"
 #include "../settings/settings_ui_api.h"
 
 #include <cstdint>
@@ -21,28 +22,39 @@ public:
 
     using SaveInferenceSettings = std::function<bool(
         const llavon::ime::core::InferenceDeviceSelection&)>;
+    using SaveCustomNames =
+        std::function<bool(const std::vector<CustomNameSetting>&)>;
 
     void configure(
         const std::vector<llavon::ime::core::InferenceDeviceInfo>& devices,
         llavon::ime::core::InferenceDeviceSelection selected,
         const llavon::ime::core::InferenceRuntimeInfo& active,
-        SaveInferenceSettings save_settings);
+        SaveInferenceSettings save_settings,
+        std::vector<CustomNameSetting> custom_names,
+        SaveCustomNames save_custom_names);
     bool show();
 
 private:
     struct DeviceStorage {
         std::int32_t backend = 0;
         std::int32_t device_type = 0;
-        std::wstring device_id;
-        std::wstring name;
-        std::wstring description;
+        std::u16string device_id;
+        std::u16string name;
+        std::u16string description;
         std::uint64_t memory_total = 0;
+    };
+
+    struct CustomNameStorage {
+        std::u16string name;
+        std::vector<std::u16string> readings;
     };
 
     using ConfigureFunction = std::int32_t (*)(
         const llavon_settings_inference_device*, std::size_t, std::int32_t,
-        const wchar_t*, const llavon_settings_inference_device*, std::int32_t,
-        std::int32_t, llavon_settings_save_inference_callback, void*);
+        const char16_t*, const llavon_settings_inference_device*, std::int32_t,
+        std::int32_t, llavon_settings_save_inference_callback, void*,
+        const llavon_settings_custom_name*, std::size_t,
+        llavon_settings_save_custom_names_callback, void*);
     using StartFunction = std::int32_t (*)();
     using ShowFunction = void (*)();
     using StopFunction = std::int32_t (*)();
@@ -50,7 +62,10 @@ private:
     bool load();
     bool configure_module();
     static std::int32_t save_trampoline(
-        void* context, std::int32_t backend, const wchar_t* device_id) noexcept;
+        void* context, std::int32_t backend, const char16_t* device_id) noexcept;
+    static std::int32_t save_custom_names_trampoline(
+        void* context, const llavon_settings_custom_name* custom_names,
+        std::size_t custom_name_count) noexcept;
     void report_error(const wchar_t* detail) const noexcept;
 
     HMODULE module_ = nullptr;
@@ -64,6 +79,8 @@ private:
     bool fell_back_to_cpu_ = false;
     llavon::ime::core::InferenceDeviceSelection selected_;
     SaveInferenceSettings save_settings_;
+    std::vector<CustomNameStorage> custom_names_;
+    SaveCustomNames save_custom_names_;
     bool started_ = false;
 };
 

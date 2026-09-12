@@ -2,6 +2,8 @@
 
 #include "../settings/settings_ui_api.h"
 
+#include <utf8/cpp20.h>
+
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -34,27 +36,8 @@ Function resolve(HMODULE module, const char* name) {
     return reinterpret_cast<Function>(GetProcAddress(module, name));
 }
 
-std::wstring utf8_to_wide(std::string_view value) {
-    if (value.empty()) return {};
-    const int required = MultiByteToWideChar(
-        CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
-    if (required <= 0) return {};
-    std::wstring result(static_cast<std::size_t>(required), L'\0');
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                        static_cast<int>(value.size()), result.data(), required);
-    return result;
-}
-
-std::string wide_to_utf8(std::wstring_view value) {
-    if (value.empty()) return {};
-    const int required = WideCharToMultiByte(
-        CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
-        nullptr, 0, nullptr, nullptr);
-    if (required <= 0) return {};
-    std::string result(static_cast<std::size_t>(required), '\0');
-    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
-                        static_cast<int>(value.size()), result.data(), required, nullptr, nullptr);
-    return result;
+std::u16string utf8_to_utf16(std::string_view value) {
+    return utf8::utf8to16(value);
 }
 
 std::int32_t backend_value(llavon::ime::core::InferenceBackend backend) {
@@ -107,7 +90,9 @@ void SettingsUiLoader::configure(
     const std::vector<llavon::ime::core::InferenceDeviceInfo>& devices,
     llavon::ime::core::InferenceDeviceSelection selected,
     const llavon::ime::core::InferenceRuntimeInfo& active,
-    SaveInferenceSettings save_settings) {
+    SaveInferenceSettings save_settings,
+    std::vector<CustomNameSetting> custom_names,
+    SaveCustomNames save_custom_names) {
     devices_.clear();
     devices_.reserve(devices.size());
     for (const auto& device : devices) {
@@ -118,24 +103,33 @@ void SettingsUiLoader::configure(
         devices_.push_back(DeviceStorage{
             .backend = backend_value(device.backend),
             .device_type = device_type_value(device.type),
-            .device_id = utf8_to_wide(device.device_id),
-            .name = utf8_to_wide(device.name),
-            .description = utf8_to_wide(device.description),
+            .device_id = utf8_to_utf16(device.device_id),
+            .name = utf8_to_utf16(device.name),
+            .description = utf8_to_utf16(device.description),
             .memory_total = device.memory_total,
         });
     }
     active_device_ = DeviceStorage{
         .backend = backend_value(active.device.backend),
         .device_type = device_type_value(active.device.type),
-        .device_id = utf8_to_wide(active.device.device_id),
-        .name = utf8_to_wide(active.device.name),
-        .description = utf8_to_wide(active.device.description),
+        .device_id = utf8_to_utf16(active.device.device_id),
+        .name = utf8_to_utf16(active.device.name),
+        .description = utf8_to_utf16(active.device.description),
         .memory_total = active.device.memory_total,
     };
     gpu_offload_ = active.gpu_offload;
     fell_back_to_cpu_ = active.fell_back_to_cpu;
     selected_ = std::move(selected);
     save_settings_ = std::move(save_settings);
+    custom_names_.clear();
+    custom_names_.reserve(custom_names.size());
+    for (const auto& custom_name : custom_names) {
+        CustomNameStorage storage;
+        storage.name = utf8::utf8to16(utf8::utf32to8(custom_name.name));
+        storage.readings = custom_name.readings;
+        custom_names_.push_back(std::move(storage));
+    }
+    save_custom_names_ = std::move(save_custom_names);
 }
 
 SettingsUiLoader::~SettingsUiLoader() {
@@ -223,15 +217,66 @@ bool SettingsUiLoader::configure_module() {
         .description = active_device_.description.c_str(),
         .memory_total = active_device_.memory_total,
     };
-    const std::wstring selected_device_id = utf8_to_wide(selected_.device_id);
+    const std::u16string selected_device_id = utf8_to_utf16(selected_.device_id);
+
+    std::vector<std::vector<const char16_t*>> custom_name_readings;
+    custom_name_readings.reserve(custom_names_.size());
+    std::vector<llavon_settings_custom_name> custom_names;
+    custom_names.reserve(custom_names_.size());
+    for (const auto& custom_name : custom_names_) {
+        auto& readings = custom_name_readings.emplace_back();
+        readings.reserve(custom_name.readings.size());
+        for (const auto& reading : custom_name.readings) {
+            readings.push_back(reading.c_str());
+        }
+        custom_names.push_back(llavon_settings_custom_name{
+            .name = custom_name.name.c_str(),
+            .readings = readings.data(),
+            .reading_count = readings.size(),
+        });
+    }
     return configure_(
                devices.data(), devices.size(), backend_value(selected_.backend),
                selected_device_id.c_str(), &active_device, gpu_offload_ ? 1 : 0,
-               fell_back_to_cpu_ ? 1 : 0, save_trampoline, this) == 0;
+               fell_back_to_cpu_ ? 1 : 0, save_trampoline, this,
+               custom_names.data(), custom_names.size(),
+               save_custom_names_trampoline, this) == 0;
+}
+
+std::int32_t SettingsUiLoader::save_custom_names_trampoline(
+    void* context, const llavon_settings_custom_name* custom_names,
+    std::size_t custom_name_count) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->save_custom_names_ ||
+        (custom_name_count != 0 && !custom_names)) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    try {
+        std::vector<CustomNameSetting> settings;
+        settings.reserve(custom_name_count);
+        for (std::size_t index = 0; index < custom_name_count; ++index) {
+            const auto& source = custom_names[index];
+            if (!source.name || (source.reading_count != 0 && !source.readings)) {
+                return ERROR_INVALID_PARAMETER;
+            }
+            CustomNameSetting setting;
+            setting.name = utf8::utf8to32(
+                utf8::utf16to8(std::u16string_view(source.name)));
+            setting.readings.reserve(source.reading_count);
+            for (std::size_t reading = 0; reading < source.reading_count; ++reading) {
+                if (!source.readings[reading]) return ERROR_INVALID_PARAMETER;
+                setting.readings.emplace_back(source.readings[reading]);
+            }
+            settings.push_back(std::move(setting));
+        }
+        return self->save_custom_names_(settings) ? ERROR_SUCCESS : ERROR_WRITE_FAULT;
+    } catch (...) {
+        return ERROR_WRITE_FAULT;
+    }
 }
 
 std::int32_t SettingsUiLoader::save_trampoline(
-    void* context, std::int32_t backend, const wchar_t* device_id) noexcept {
+    void* context, std::int32_t backend, const char16_t* device_id) noexcept {
     auto* self = static_cast<SettingsUiLoader*>(context);
     if (!self || !self->save_settings_) {
         return ERROR_INVALID_FUNCTION;
@@ -239,7 +284,8 @@ std::int32_t SettingsUiLoader::save_trampoline(
     try {
         llavon::ime::core::InferenceDeviceSelection selection;
         selection.backend = core_backend(backend);
-        selection.device_id = wide_to_utf8(device_id ? device_id : L"");
+        selection.device_id = utf8::utf16to8(device_id ? std::u16string_view(device_id)
+                                                        : std::u16string_view{});
         if (selection.backend == llavon::ime::core::InferenceBackend::automatic ||
             selection.backend == llavon::ime::core::InferenceBackend::cpu) {
             selection.device_id.clear();

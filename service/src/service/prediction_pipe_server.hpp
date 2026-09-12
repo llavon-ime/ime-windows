@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "candidate_pipe_server.hpp"
+#include "custom_name_matcher.hpp"
 
 namespace llavon::service {
 
@@ -302,6 +303,7 @@ private:
 inline asio::awaitable<void> handle_client(
     asio::windows::stream_handle pipe,
     std::shared_ptr<SessionLru> sessions,
+    std::shared_ptr<CustomNameMatcher> custom_names,
     SessionLru::ClientId client_id) {
     ClientSession client_session(std::move(sessions), client_id);
 
@@ -350,11 +352,20 @@ inline asio::awaitable<void> handle_client(
 
         auto padding = co_await read_padding(pipe);
         if (padding.empty() && ctx_len == 0) break;
+        const auto custom_name_replacements = custom_names->apply(padding);
 
         std::vector<llavon::ime::core::Prediction> results;
         bool ok = false;
         try {
             results = client_session.acquire().predict(context, padding);
+            for (std::size_t index = 0;
+                 index < results.size() && index < custom_name_replacements.size(); ++index) {
+                if (custom_name_replacements[index]) {
+                    results[index].candidates = {
+                        {*custom_name_replacements[index], 1.0F},
+                    };
+                }
+            }
             ok = true;
         } catch (const std::exception& e) {
             std::cerr << "[ERR] predict: " << e.what() << std::endl;
@@ -370,7 +381,8 @@ inline asio::awaitable<void> handle_client(
 
 inline asio::awaitable<void> listener(
     asio::io_context& io_ctx,
-    std::shared_ptr<SessionLru> sessions) {
+    std::shared_ptr<SessionLru> sessions,
+    std::shared_ptr<CustomNameMatcher> custom_names) {
     auto executor = co_await asio::this_coro::executor;
     SessionLru::ClientId next_client_id = 1;
 
@@ -424,7 +436,9 @@ inline asio::awaitable<void> listener(
 
         asio::windows::stream_handle stream(executor, hPipe);
         const SessionLru::ClientId client_id = next_client_id++;
-        co_spawn(executor, handle_client(std::move(stream), sessions, client_id), asio::detached);
+        co_spawn(executor,
+                 handle_client(std::move(stream), sessions, custom_names, client_id),
+                 asio::detached);
     }
 }
 
@@ -433,10 +447,13 @@ inline asio::awaitable<void> listener(
 class PredictionPipeServer final {
 public:
     PredictionPipeServer(
-        std::shared_ptr<llavon::ime::core::Core> core, CandidateUiLoader& candidate_ui)
-        : core_(std::move(core)), candidate_ui_(candidate_ui) {
-        if (!core_) {
-            throw std::invalid_argument("prediction server requires an inference core");
+        std::shared_ptr<llavon::ime::core::Core> core,
+        CandidateUiLoader& candidate_ui,
+        std::shared_ptr<CustomNameMatcher> custom_names)
+        : core_(std::move(core)), candidate_ui_(candidate_ui),
+          custom_names_(std::move(custom_names)) {
+        if (!core_ || !custom_names_) {
+            throw std::invalid_argument("prediction server dependencies are required");
         }
     }
 
@@ -456,7 +473,9 @@ public:
         asio::io_context io_ctx;
         CandidatePipeServer candidate_pipe(candidate_ui_);
         auto sessions = std::make_shared<prediction_pipe::SessionLru>(core_);
-        co_spawn(io_ctx, prediction_pipe::listener(io_ctx, std::move(sessions)), asio::detached);
+        co_spawn(io_ctx,
+                 prediction_pipe::listener(io_ctx, std::move(sessions), custom_names_),
+                 asio::detached);
         co_spawn(io_ctx, candidate_pipe.listen(), asio::detached);
         io_ctx.run();
 
@@ -466,6 +485,7 @@ public:
 private:
     std::shared_ptr<llavon::ime::core::Core> core_;
     CandidateUiLoader& candidate_ui_;
+    std::shared_ptr<CustomNameMatcher> custom_names_;
 };
 
 }  // namespace llavon::service

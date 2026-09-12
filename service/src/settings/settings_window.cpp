@@ -3,19 +3,32 @@
 #include "../resource.h"
 
 #include <dwmapi.h>
+#include <rfl/json.hpp>
+#include <utf8/cpp20.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
+#include <cwctype>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
+#include <iterator>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.ViewManagement.h>
+#include <winrt/Windows.UI.Xaml.Automation.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
@@ -23,6 +36,8 @@
 #include <winrt/Windows.UI.h>
 
 namespace llavon::settings {
+
+extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 struct SettingsWindow::UpdateNotificationTarget {
     std::mutex mutex;
@@ -42,6 +57,7 @@ constexpr double section_title_size = 20;
 constexpr double body_text_size = 14;
 constexpr double caption_text_size = 12;
 constexpr double control_height = 32;
+constexpr double settings_content_width = 600;
 
 SolidColorBrush solid_brush(std::uint8_t red, std::uint8_t green, std::uint8_t blue) {
     return SolidColorBrush(winrt::Windows::UI::Color{255, red, green, blue});
@@ -87,34 +103,194 @@ std::wstring build_identity(std::uint64_t build, std::wstring_view commit) {
     return L"建置 #" + std::to_wstring(build) + L"（" + short_commit(commit) + L"）";
 }
 
-const wchar_t* backend_label(std::int32_t backend) {
+const char16_t* backend_label(std::int32_t backend) {
     switch (backend) {
         case LLAVON_SETTINGS_BACKEND_CUDA:
-            return L"CUDA";
+            return u"CUDA";
         case LLAVON_SETTINGS_BACKEND_VULKAN:
-            return L"Vulkan";
+            return u"Vulkan";
         case LLAVON_SETTINGS_BACKEND_CPU:
-            return L"CPU";
+            return u"CPU";
         default:
-            return L"自動";
+            return u"自動";
     }
 }
 
-std::wstring device_label(const InferenceDeviceOption& device) {
-    std::wstring label = !device.description.empty() ? device.description : device.name;
+std::u16string device_label(const InferenceDeviceOption& device) {
+    std::u16string label = !device.description.empty() ? device.description : device.name;
     if (label.empty()) label = device.device_id;
-    label += L"（";
+    label += u"（";
     label += backend_label(device.backend);
     if (device.backend != LLAVON_SETTINGS_BACKEND_CPU && device.memory_total != 0) {
-        std::wostringstream memory;
-        memory << L"，" << std::fixed << std::setprecision(1)
+        label += u"，";
+        std::ostringstream memory;
+        memory << std::fixed << std::setprecision(1)
                << static_cast<double>(device.memory_total) / 1024.0 / 1024.0 / 1024.0
-               << L" GiB";
-        label += memory.str();
+               << " GiB";
+        label += utf8::utf8to16(memory.str());
     }
-    label += L"）";
+    label += u"）";
     return label;
 }
+
+std::u16string trim(std::u16string value) {
+    const auto is_space = [](char16_t character) {
+        return std::iswspace(static_cast<wchar_t>(character)) != 0;
+    };
+    const auto first = std::find_if_not(value.begin(), value.end(), is_space);
+    const auto last = std::find_if_not(value.rbegin(), value.rend(), is_space).base();
+    if (first >= last) return {};
+    return std::u16string(first, last);
+}
+
+std::u16string to_utf16(const winrt::hstring& value) {
+    return std::u16string(value.begin(), value.end());
+}
+
+winrt::hstring to_hstring(std::u16string_view value) {
+    if (value.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::length_error("text is too long for Windows Runtime");
+    }
+    if (value.empty()) return {};
+
+    std::vector<wchar_t> buffer(value.size());
+    std::ranges::transform(value, buffer.begin(), [](char16_t code_unit) {
+        return static_cast<wchar_t>(code_unit);
+    });
+    return winrt::hstring(buffer.data(), static_cast<std::uint32_t>(buffer.size()));
+}
+
+struct DisplayCharacter {
+    char32_t value = 0;
+    std::u16string text;
+};
+
+std::optional<std::vector<DisplayCharacter>> split_characters(
+    const std::u16string& text) {
+    std::vector<DisplayCharacter> result;
+    try {
+        for (auto position = text.cbegin(); position != text.cend();) {
+            const auto start = position;
+            const char32_t value = utf8::next16(position, text.cend());
+            result.push_back(DisplayCharacter{
+                .value = value,
+                .text = std::u16string(start, position),
+            });
+        }
+    } catch (const utf8::exception&) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+std::filesystem::path module_directory() {
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD copied = GetModuleFileNameW(
+            reinterpret_cast<HMODULE>(&__ImageBase), buffer.data(),
+            static_cast<DWORD>(buffer.size()));
+        if (copied == 0) return {};
+        if (copied < buffer.size() - 1) {
+            buffer.resize(copied);
+            return std::filesystem::path(buffer).parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+}
+
+std::filesystem::path resolve_bopomofo_table_path() {
+    std::vector<std::filesystem::path> candidates;
+
+    const DWORD environment_size = GetEnvironmentVariableW(L"LLAVON_IME_TABLES_DIR", nullptr, 0);
+    if (environment_size != 0) {
+        std::wstring tables_directory(environment_size, L'\0');
+        const DWORD copied = GetEnvironmentVariableW(
+            L"LLAVON_IME_TABLES_DIR", tables_directory.data(), environment_size);
+        if (copied != 0) {
+            tables_directory.resize(copied);
+            candidates.emplace_back(
+                std::filesystem::path(tables_directory) / L"bopomofo_char.json");
+        }
+    }
+
+    const auto directory = module_directory();
+    if (!directory.empty()) {
+        candidates.emplace_back(directory.parent_path() / L"tables" / L"bopomofo_char.json");
+        candidates.emplace_back(directory.parent_path().parent_path().parent_path() /
+                                L"ime-core" / L"table" / L"bopomofo_char.json");
+    }
+    candidates.emplace_back(
+        std::filesystem::current_path() / L"ime-core" / L"table" / L"bopomofo_char.json");
+
+    std::error_code error;
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::is_regular_file(candidate, error)) {
+            return candidate;
+        }
+        error.clear();
+    }
+    return {};
+}
+
+class BopomofoTable final {
+public:
+    static const BopomofoTable& instance() {
+        static const BopomofoTable table;
+        return table;
+    }
+
+    const std::vector<std::u16string>& lookup(char32_t character) const {
+        static const std::vector<std::u16string> empty;
+        const auto found = readings_.find(character);
+        return found == readings_.end() ? empty : found->second;
+    }
+
+private:
+    BopomofoTable() noexcept {
+        try {
+            const auto path = resolve_bopomofo_table_path();
+            if (path.empty()) return;
+
+            std::ifstream input(path, std::ios::binary);
+            if (!input) return;
+            const std::string body{
+                std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+            auto parsed = rfl::json::read<
+                std::unordered_map<std::string, std::vector<std::string>>>(body);
+            auto mapping = std::move(parsed).value();
+            std::unordered_map<char32_t, std::vector<std::pair<std::size_t, std::u16string>>>
+                candidates;
+            for (const auto& [reading_utf8, characters] : mapping) {
+                const std::u16string reading = utf8::utf8to16(reading_utf8);
+                if (reading.empty()) continue;
+                for (std::size_t rank = 0; rank < characters.size(); ++rank) {
+                    const auto code_points = utf8::utf8to32(characters[rank]);
+                    if (code_points.size() == 1) {
+                        candidates[code_points.front()].emplace_back(rank, reading);
+                    }
+                }
+            }
+
+            for (auto& [character, choices] : candidates) {
+                std::ranges::sort(choices, [](const auto& left, const auto& right) {
+                    return left.first != right.first ? left.first < right.first
+                                                     : left.second < right.second;
+                });
+                auto& readings = readings_[character];
+                for (auto& [rank, reading] : choices) {
+                    static_cast<void>(rank);
+                    if (std::ranges::find(readings, reading) == readings.end()) {
+                        readings.push_back(std::move(reading));
+                    }
+                }
+            }
+        } catch (...) {
+            readings_.clear();
+        }
+    }
+
+    std::unordered_map<char32_t, std::vector<std::u16string>> readings_;
+};
 
 }  // namespace
 
@@ -149,7 +325,7 @@ bool SettingsWindow::create(HINSTANCE instance) {
     }
 
     window_ = CreateWindowExW(0, window_class_name, L"Llavon 輸入法設定", WS_OVERLAPPEDWINDOW,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 860, 640, nullptr, nullptr, instance, this);
+                              CW_USEDEFAULT, CW_USEDEFAULT, 860, 760, nullptr, nullptr, instance, this);
     if (!window_) {
         return false;
     }
@@ -306,19 +482,21 @@ void SettingsWindow::build_page() {
     active_row.ColumnDefinitions().Append(status_column);
 
     const auto& active = configuration_.active_device;
-    const std::wstring active_name =
+    const std::u16string active_name =
         !active.description.empty() ? active.description
                                     : (!active.name.empty() ? active.name : active.device_id);
+    const auto active_name_text = to_hstring(active_name);
     active_device_status_ = make_text(
-        active_name.c_str(), body_text_size, FontWeights::SemiBold());
+        active_name_text.c_str(), body_text_size, FontWeights::SemiBold());
     active_device_status_.TextTrimming(TextTrimming::CharacterEllipsis);
     active_device_status_.TextWrapping(TextWrapping::NoWrap);
     Grid::SetColumn(active_device_status_, 0);
     active_row.Children().Append(active_device_status_);
 
-    std::wstring active_state = L"使用中 · ";
+    std::u16string active_state = u"使用中 · ";
     active_state += backend_label(active.backend);
-    TextBlock active_backend = make_text(active_state.c_str(), caption_text_size);
+    const auto active_state_text = to_hstring(active_state);
+    TextBlock active_backend = make_text(active_state_text.c_str(), caption_text_size);
     active_backend.Margin(Thickness{16, 2, 0, 0});
     Grid::SetColumn(active_backend, 1);
     active_row.Children().Append(active_backend);
@@ -327,10 +505,11 @@ void SettingsWindow::build_page() {
     StackPanel tooltip_content;
     tooltip_content.Spacing(4);
     tooltip_content.Children().Append(
-        make_text(active_name.c_str(), body_text_size, FontWeights::SemiBold()));
-    std::wstring backend_detail = L"後端：";
+        make_text(active_name_text.c_str(), body_text_size, FontWeights::SemiBold()));
+    std::u16string backend_detail = u"後端：";
     backend_detail += backend_label(active.backend);
-    tooltip_content.Children().Append(make_text(backend_detail.c_str(), caption_text_size));
+    const auto backend_detail_text = to_hstring(backend_detail);
+    tooltip_content.Children().Append(make_text(backend_detail_text.c_str(), caption_text_size));
     if (active.backend != LLAVON_SETTINGS_BACKEND_CPU && active.memory_total != 0) {
         std::wostringstream memory;
         memory << L"顯示記憶體：" << std::fixed << std::setprecision(1)
@@ -339,8 +518,9 @@ void SettingsWindow::build_page() {
         tooltip_content.Children().Append(make_text(memory.str().c_str(), caption_text_size));
     }
     if (!active.device_id.empty()) {
-        const std::wstring device_id = L"裝置 ID：" + active.device_id;
-        tooltip_content.Children().Append(make_text(device_id.c_str(), caption_text_size));
+        const std::u16string device_id = u"裝置 ID：" + active.device_id;
+        const auto device_id_text = to_hstring(device_id);
+        tooltip_content.Children().Append(make_text(device_id_text.c_str(), caption_text_size));
     }
     const wchar_t* offload = configuration_.gpu_offload ? L"GPU offload：啟用"
                                                         : L"GPU offload：未啟用";
@@ -363,12 +543,12 @@ void SettingsWindow::build_page() {
     inference_options_.clear();
     inference_options_.push_back(InferenceDeviceOption{
         .backend = LLAVON_SETTINGS_BACKEND_AUTO,
-        .name = L"自動選擇",
+        .name = u"自動選擇",
     });
     inference_options_.push_back(InferenceDeviceOption{
         .backend = LLAVON_SETTINGS_BACKEND_CPU,
         .device_type = LLAVON_SETTINGS_DEVICE_CPU,
-        .name = L"CPU",
+        .name = u"CPU",
     });
     for (const auto& device : configuration_.devices) {
         if (device.backend == LLAVON_SETTINGS_BACKEND_CUDA ||
@@ -391,8 +571,8 @@ void SettingsWindow::build_page() {
         inference_options_.push_back(InferenceDeviceOption{
             .backend = configuration_.selected_backend,
             .device_id = configuration_.selected_device_id,
-            .name = std::wstring(L"原設定：") + backend_label(configuration_.selected_backend) +
-                    L" / " + configuration_.selected_device_id + L"（目前不可用）",
+            .name = std::u16string(u"原設定：") + backend_label(configuration_.selected_backend) +
+                    u" / " + configuration_.selected_device_id + u"（目前不可用）",
         });
     }
 
@@ -408,8 +588,8 @@ void SettingsWindow::build_page() {
         const bool unavailable = !selected_device_available &&
                                  option.backend == configuration_.selected_backend &&
                                  option.device_id == configuration_.selected_device_id;
-        inference_device_.Items().Append(
-            winrt::box_value(unavailable ? option.name : device_label(option)));
+        inference_device_.Items().Append(winrt::box_value(
+            to_hstring(unavailable ? option.name : device_label(option))));
     }
 
     std::int32_t selected_index = 0;
@@ -440,6 +620,89 @@ void SettingsWindow::build_page() {
     note_.Visibility(Visibility::Collapsed);
     inference_section.Children().Append(note_);
     page.Children().Append(inference_section);
+
+    page.Children().Append(make_section_title(L"自訂名字"));
+
+    StackPanel custom_names_section;
+    custom_names_section.Spacing(10);
+    custom_names_section.Margin(Thickness{0, 0, 0, 24});
+
+    Grid custom_names_header;
+    custom_names_header.Width(settings_content_width);
+    custom_names_header.HorizontalAlignment(HorizontalAlignment::Left);
+
+    ColumnDefinition name_header_column;
+    name_header_column.Width(GridLength{180, GridUnitType::Pixel});
+    custom_names_header.ColumnDefinitions().Append(name_header_column);
+    ColumnDefinition name_header_gap;
+    name_header_gap.Width(GridLength{12, GridUnitType::Pixel});
+    custom_names_header.ColumnDefinitions().Append(name_header_gap);
+    ColumnDefinition pronunciation_header_column;
+    pronunciation_header_column.Width(GridLength{1, GridUnitType::Star});
+    custom_names_header.ColumnDefinitions().Append(pronunciation_header_column);
+    ColumnDefinition pronunciation_header_gap;
+    pronunciation_header_gap.Width(GridLength{12, GridUnitType::Pixel});
+    custom_names_header.ColumnDefinitions().Append(pronunciation_header_gap);
+    ColumnDefinition action_header_column;
+    action_header_column.Width(GridLength{84, GridUnitType::Pixel});
+    custom_names_header.ColumnDefinitions().Append(action_header_column);
+
+    TextBlock name_header = make_text(L"名字", caption_text_size, FontWeights::SemiBold());
+    Grid::SetColumn(name_header, 0);
+    custom_names_header.Children().Append(name_header);
+    TextBlock pronunciation_header =
+        make_text(L"注音", caption_text_size, FontWeights::SemiBold());
+    Grid::SetColumn(pronunciation_header, 2);
+    custom_names_header.Children().Append(pronunciation_header);
+    custom_names_section.Children().Append(custom_names_header);
+
+    custom_names_panel_ = StackPanel();
+    custom_names_panel_.Spacing(8);
+    custom_names_panel_.HorizontalAlignment(HorizontalAlignment::Left);
+    custom_names_section.Children().Append(custom_names_panel_);
+
+    StackPanel custom_names_actions;
+    custom_names_actions.Orientation(Orientation::Horizontal);
+    custom_names_actions.Spacing(12);
+
+    add_custom_name_button_ = Button();
+    add_custom_name_button_.Content(winrt::box_value(L"＋ 新增名字"));
+    add_custom_name_button_.MinWidth(120);
+    add_custom_name_button_.MinHeight(control_height);
+    add_custom_name_button_.FontSize(body_text_size);
+    add_custom_name_button_.Click([this](const auto&, const auto&) { add_custom_name_row(); });
+    custom_names_actions.Children().Append(add_custom_name_button_);
+
+    save_custom_names_button_ = Button();
+    save_custom_names_button_.Content(winrt::box_value(L"儲存自訂名字"));
+    save_custom_names_button_.MinWidth(132);
+    save_custom_names_button_.MinHeight(control_height);
+    save_custom_names_button_.FontSize(body_text_size);
+    save_custom_names_button_.IsEnabled(false);
+    save_custom_names_button_.Click([this](const auto&, const auto&) { save_custom_names(); });
+    custom_names_actions.Children().Append(save_custom_names_button_);
+    custom_names_section.Children().Append(custom_names_actions);
+
+    custom_names_note_ = make_text(L"", caption_text_size);
+    custom_names_note_.Visibility(Visibility::Collapsed);
+    custom_names_section.Children().Append(custom_names_note_);
+    page.Children().Append(custom_names_section);
+
+    saved_custom_names_.clear();
+    saved_custom_names_.reserve(configuration_.custom_names.size());
+    for (const auto& custom_name : configuration_.custom_names) {
+        saved_custom_names_.push_back(CustomNameEntry{
+            .name = custom_name.name,
+            .readings = custom_name.readings,
+        });
+    }
+    if (configuration_.custom_names.empty()) {
+        add_custom_name_row();
+    } else {
+        for (const auto& custom_name : configuration_.custom_names) {
+            add_custom_name_row(custom_name.name, custom_name.readings);
+        }
+    }
 
     page.Children().Append(make_section_title(L"軟體更新"));
 
@@ -478,6 +741,265 @@ void SettingsWindow::build_page() {
     scroll.Content(page);
     shell_.Children().Append(scroll);
     xaml_source_.Content(shell_);
+}
+
+void SettingsWindow::add_custom_name_row(
+    std::u16string name, std::vector<std::u16string> readings) {
+    if (!custom_names_panel_) {
+        return;
+    }
+
+    CustomNameRow row;
+    row.container = Grid();
+    row.container.Width(settings_content_width);
+    row.container.MinHeight(64);
+    row.container.HorizontalAlignment(HorizontalAlignment::Left);
+
+    ColumnDefinition name_column;
+    name_column.Width(GridLength{180, GridUnitType::Pixel});
+    row.container.ColumnDefinitions().Append(name_column);
+    ColumnDefinition name_gap;
+    name_gap.Width(GridLength{12, GridUnitType::Pixel});
+    row.container.ColumnDefinitions().Append(name_gap);
+    ColumnDefinition pronunciation_column;
+    pronunciation_column.Width(GridLength{1, GridUnitType::Star});
+    row.container.ColumnDefinitions().Append(pronunciation_column);
+    ColumnDefinition pronunciation_gap;
+    pronunciation_gap.Width(GridLength{12, GridUnitType::Pixel});
+    row.container.ColumnDefinitions().Append(pronunciation_gap);
+    ColumnDefinition action_column;
+    action_column.Width(GridLength{84, GridUnitType::Pixel});
+    row.container.ColumnDefinitions().Append(action_column);
+
+    row.name = TextBox();
+    row.name.PlaceholderText(L"例如：王小明");
+    row.name.Text(to_hstring(name));
+    row.name.MinHeight(control_height);
+    row.name.FontSize(body_text_size);
+    row.name.VerticalAlignment(VerticalAlignment::Bottom);
+    Automation::AutomationProperties::SetName(row.name, L"自訂名字");
+    Grid::SetColumn(row.name, 0);
+    row.container.Children().Append(row.name);
+
+    row.pronunciations = StackPanel();
+    row.pronunciations.Orientation(Orientation::Horizontal);
+    row.pronunciations.Spacing(8);
+
+    ScrollViewer pronunciation_scroll;
+    pronunciation_scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Auto);
+    pronunciation_scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
+    pronunciation_scroll.Content(row.pronunciations);
+    Automation::AutomationProperties::SetName(pronunciation_scroll, L"名字對應注音");
+    Grid::SetColumn(pronunciation_scroll, 2);
+    row.container.Children().Append(pronunciation_scroll);
+
+    row.remove_button = Button();
+    row.remove_button.Content(winrt::box_value(L"移除"));
+    row.remove_button.MinWidth(84);
+    row.remove_button.MinHeight(control_height);
+    row.remove_button.FontSize(body_text_size);
+    row.remove_button.VerticalAlignment(VerticalAlignment::Bottom);
+    Automation::AutomationProperties::SetName(row.remove_button, L"移除這個自訂名字");
+    Grid::SetColumn(row.remove_button, 4);
+    row.container.Children().Append(row.remove_button);
+
+    const Button remove_button = row.remove_button;
+    const TextBox name_box = row.name;
+    row.name.TextChanged([this, name_box](const auto&, const auto&) {
+        refresh_custom_name_pronunciations(name_box);
+    });
+    row.remove_button.Click([this, remove_button](const auto&, const auto&) {
+        remove_custom_name_row(remove_button);
+    });
+
+    custom_name_rows_.push_back(row);
+    custom_names_panel_.Children().Append(row.container);
+    refresh_custom_name_pronunciations(name_box);
+    auto& added_row = custom_name_rows_.back();
+    for (std::size_t index = 0;
+         index < readings.size() && index < added_row.reading_choices.size(); ++index) {
+        auto& choice = added_row.reading_choices[index];
+        for (std::uint32_t item = 0; item < choice.Items().Size(); ++item) {
+            const auto value = winrt::unbox_value<winrt::hstring>(choice.Items().GetAt(item));
+            if (to_utf16(value) == readings[index]) {
+                choice.SelectedIndex(static_cast<std::int32_t>(item));
+                break;
+            }
+        }
+    }
+    update_custom_names_save_state();
+    if (name.empty()) {
+        name_box.Focus(FocusState::Programmatic);
+    }
+}
+
+void SettingsWindow::remove_custom_name_row(const Button& remove_button) {
+    if (!custom_names_panel_) {
+        return;
+    }
+    for (std::size_t index = 0; index < custom_name_rows_.size(); ++index) {
+        if (custom_name_rows_[index].remove_button == remove_button) {
+            custom_names_panel_.Children().RemoveAt(static_cast<std::uint32_t>(index));
+            custom_name_rows_.erase(custom_name_rows_.begin() +
+                                    static_cast<std::ptrdiff_t>(index));
+            break;
+        }
+    }
+    update_custom_names_save_state();
+}
+
+void SettingsWindow::refresh_custom_name_pronunciations(const TextBox& name_box) {
+    auto row = std::find_if(custom_name_rows_.begin(), custom_name_rows_.end(),
+                            [&name_box](const CustomNameRow& candidate) {
+                                return candidate.name == name_box;
+                            });
+    if (row == custom_name_rows_.end() || !row->pronunciations) {
+        return;
+    }
+
+    row->pronunciations.Children().Clear();
+    row->reading_choices.clear();
+    row->missing_pronunciation = false;
+
+    const std::u16string name = trim(to_utf16(name_box.Text()));
+    if (name.empty()) {
+        update_custom_names_save_state();
+        return;
+    }
+
+    const auto characters = split_characters(name);
+    if (!characters) {
+        row->missing_pronunciation = true;
+        auto warning = make_text(L"名字含有無效字元。", caption_text_size);
+        warning.VerticalAlignment(VerticalAlignment::Bottom);
+        warning.Margin(Thickness{0, 0, 0, 8});
+        row->pronunciations.Children().Append(warning);
+        update_custom_names_save_state();
+        return;
+    }
+
+    for (const auto& [character, character_text] : *characters) {
+
+        const auto& readings = lookup_bopomofo(character);
+        if (readings.empty()) {
+            row->missing_pronunciation = true;
+            const std::u16string missing = u"「" + character_text + u"」查無注音";
+            const auto missing_text = to_hstring(missing);
+            auto warning = make_text(missing_text.c_str(), caption_text_size);
+            warning.VerticalAlignment(VerticalAlignment::Bottom);
+            warning.Margin(Thickness{0, 0, 0, 8});
+            row->pronunciations.Children().Append(warning);
+            continue;
+        }
+
+        ComboBox choice;
+        choice.Header(winrt::box_value(to_hstring(character_text)));
+        choice.MinWidth(92);
+        choice.MaxWidth(132);
+        choice.MinHeight(control_height);
+        choice.FontSize(body_text_size);
+        for (const auto& reading : readings) {
+            choice.Items().Append(winrt::box_value(to_hstring(reading)));
+        }
+        choice.SelectedIndex(0);
+        const std::u16string accessible_name = character_text + u"的注音";
+        Automation::AutomationProperties::SetName(choice, to_hstring(accessible_name));
+        choice.SelectionChanged(
+            [this](const auto&, const auto&) { update_custom_names_save_state(); });
+        row->reading_choices.push_back(choice);
+        row->pronunciations.Children().Append(choice);
+    }
+
+    update_custom_names_save_state();
+}
+
+const std::vector<std::u16string>& SettingsWindow::lookup_bopomofo(
+    char32_t character) const {
+    return BopomofoTable::instance().lookup(character);
+}
+
+bool SettingsWindow::collect_custom_names(std::vector<CustomNameEntry>& entries) const {
+    entries.clear();
+    entries.reserve(custom_name_rows_.size());
+    for (const auto& row : custom_name_rows_) {
+        std::u16string name = trim(to_utf16(row.name.Text()));
+        if (name.empty()) continue;
+        if (row.missing_pronunciation || row.reading_choices.empty()) return false;
+
+        std::vector<std::u16string> readings;
+        readings.reserve(row.reading_choices.size());
+        for (const auto& choice : row.reading_choices) {
+            const auto selected = choice.SelectedItem();
+            if (!selected) return false;
+            readings.push_back(to_utf16(winrt::unbox_value<winrt::hstring>(selected)));
+        }
+        entries.push_back(CustomNameEntry{
+            .name = std::move(name),
+            .readings = std::move(readings),
+        });
+    }
+    return true;
+}
+
+void SettingsWindow::save_custom_names() {
+    if (!save_custom_names_button_ || !custom_names_note_ ||
+        !configuration_.save_custom_names_callback) {
+        return;
+    }
+
+    std::vector<CustomNameEntry> entries;
+    if (!collect_custom_names(entries)) {
+        custom_names_note_.Text(L"部分字元沒有可用的注音。");
+        custom_names_note_.Visibility(Visibility::Visible);
+        return;
+    }
+
+    std::vector<std::vector<const char16_t*>> reading_pointers;
+    reading_pointers.reserve(entries.size());
+    std::vector<llavon_settings_custom_name> custom_names;
+    custom_names.reserve(entries.size());
+    for (const auto& entry : entries) {
+        auto& pointers = reading_pointers.emplace_back();
+        pointers.reserve(entry.readings.size());
+        for (const auto& reading : entry.readings) {
+            pointers.push_back(reading.c_str());
+        }
+        custom_names.push_back(llavon_settings_custom_name{
+            .name = entry.name.c_str(),
+            .readings = pointers.data(),
+            .reading_count = pointers.size(),
+        });
+    }
+    const std::int32_t result = configuration_.save_custom_names_callback(
+        configuration_.save_custom_names_context, custom_names.data(), custom_names.size());
+    if (result == ERROR_SUCCESS) {
+        saved_custom_names_ = std::move(entries);
+        save_custom_names_button_.IsEnabled(false);
+        custom_names_note_.Text(L"已儲存");
+    } else {
+        custom_names_note_.Text(L"無法儲存自訂名字，請稍後再試。");
+    }
+    custom_names_note_.Visibility(Visibility::Visible);
+}
+
+void SettingsWindow::update_custom_names_save_state() {
+    if (!save_custom_names_button_ || !custom_names_note_) {
+        return;
+    }
+
+    std::vector<CustomNameEntry> entries;
+    const bool complete = collect_custom_names(entries);
+    const bool changed = entries != saved_custom_names_;
+    save_custom_names_button_.IsEnabled(complete && changed);
+    if (!complete) {
+        custom_names_note_.Text(L"部分字元沒有可用的注音。");
+        custom_names_note_.Visibility(Visibility::Visible);
+    } else if (changed) {
+        custom_names_note_.Text(L"尚未儲存");
+        custom_names_note_.Visibility(Visibility::Visible);
+    } else {
+        custom_names_note_.Visibility(Visibility::Collapsed);
+    }
 }
 
 void SettingsWindow::save_inference_setting() {
@@ -675,6 +1197,10 @@ void SettingsWindow::apply_theme_colors() {
     if (note_) {
         note_.Foreground(dark_theme_ ? solid_brush(190, 190, 190) : solid_brush(96, 96, 96));
     }
+    if (custom_names_note_) {
+        custom_names_note_.Foreground(
+            dark_theme_ ? solid_brush(190, 190, 190) : solid_brush(96, 96, 96));
+    }
     if (update_download_) {
         update_download_.Foreground(
             dark_theme_ ? solid_brush(255, 153, 164) : solid_brush(210, 36, 36));
@@ -723,6 +1249,11 @@ void SettingsWindow::close_xaml() noexcept {
     update_status_ = nullptr;
     update_download_ = nullptr;
     note_ = nullptr;
+    custom_name_rows_.clear();
+    custom_names_panel_ = nullptr;
+    add_custom_name_button_ = nullptr;
+    save_custom_names_button_ = nullptr;
+    custom_names_note_ = nullptr;
     shell_ = nullptr;
     try {
         if (xaml_source_) {

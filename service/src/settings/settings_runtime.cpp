@@ -29,44 +29,66 @@ public:
     int32_t configure(const llavon_settings_inference_device* devices,
                       std::size_t device_count,
                       std::int32_t selected_backend,
-                      const wchar_t* selected_device_id,
+                      const char16_t* selected_device_id,
                       const llavon_settings_inference_device* active_device,
                       std::int32_t gpu_offload,
                       std::int32_t fell_back_to_cpu,
                       llavon_settings_save_inference_callback save_callback,
-                      void* save_context) {
+                      void* save_context,
+                      const llavon_settings_custom_name* custom_names,
+                      std::size_t custom_name_count,
+                      llavon_settings_save_custom_names_callback save_custom_names_callback,
+                      void* save_custom_names_context) {
         std::lock_guard lock(mutex_);
         if (thread_) {
             return ERROR_BUSY;
         }
-        if ((device_count != 0 && !devices) || !active_device || !save_callback) {
+        if ((device_count != 0 && !devices) || !active_device || !save_callback ||
+            (custom_name_count != 0 && !custom_names) || !save_custom_names_callback) {
             return ERROR_INVALID_PARAMETER;
         }
 
         SettingsConfiguration configuration;
         configuration.selected_backend = selected_backend;
-        configuration.selected_device_id = selected_device_id ? selected_device_id : L"";
+        configuration.selected_device_id = selected_device_id ? selected_device_id : u"";
         configuration.active_device = InferenceDeviceOption{
             .backend = active_device->backend,
             .device_type = active_device->device_type,
-            .device_id = active_device->device_id ? active_device->device_id : L"",
-            .name = active_device->name ? active_device->name : L"",
-            .description = active_device->description ? active_device->description : L"",
+            .device_id = active_device->device_id ? active_device->device_id : u"",
+            .name = active_device->name ? active_device->name : u"",
+            .description = active_device->description ? active_device->description : u"",
             .memory_total = active_device->memory_total,
         };
         configuration.gpu_offload = gpu_offload != 0;
         configuration.fell_back_to_cpu = fell_back_to_cpu != 0;
         configuration.save_callback = save_callback;
         configuration.save_context = save_context;
+        configuration.save_custom_names_callback = save_custom_names_callback;
+        configuration.save_custom_names_context = save_custom_names_context;
+        configuration.custom_names.reserve(custom_name_count);
+        for (std::size_t index = 0; index < custom_name_count; ++index) {
+            const auto& source = custom_names[index];
+            if (!source.name || (source.reading_count != 0 && !source.readings)) {
+                return ERROR_INVALID_PARAMETER;
+            }
+            CustomNameOption option;
+            option.name = source.name;
+            option.readings.reserve(source.reading_count);
+            for (std::size_t reading = 0; reading < source.reading_count; ++reading) {
+                if (!source.readings[reading]) return ERROR_INVALID_PARAMETER;
+                option.readings.emplace_back(source.readings[reading]);
+            }
+            configuration.custom_names.push_back(std::move(option));
+        }
         configuration.devices.reserve(device_count);
         for (std::size_t index = 0; index < device_count; ++index) {
             const auto& source = devices[index];
             configuration.devices.push_back(InferenceDeviceOption{
                 .backend = source.backend,
                 .device_type = source.device_type,
-                .device_id = source.device_id ? source.device_id : L"",
-                .name = source.name ? source.name : L"",
-                .description = source.description ? source.description : L"",
+                .device_id = source.device_id ? source.device_id : u"",
+                .name = source.name ? source.name : u"",
+                .description = source.description ? source.description : u"",
                 .memory_total = source.memory_total,
             });
         }
@@ -304,15 +326,21 @@ extern "C" int32_t llavon_settings_ui_configure(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
-    const wchar_t* selected_device_id,
+    const char16_t* selected_device_id,
     const struct llavon_settings_inference_device* active_device,
     int32_t gpu_offload,
     int32_t fell_back_to_cpu,
     llavon_settings_save_inference_callback save_callback,
-    void* save_context) {
+    void* save_context,
+    const struct llavon_settings_custom_name* custom_names,
+    size_t custom_name_count,
+    llavon_settings_save_custom_names_callback save_custom_names_callback,
+    void* save_custom_names_context) {
     return llavon::settings::runtime().configure(
         devices, device_count, selected_backend, selected_device_id, active_device,
-        gpu_offload, fell_back_to_cpu, save_callback, save_context);
+        gpu_offload, fell_back_to_cpu, save_callback, save_context,
+        custom_names, custom_name_count, save_custom_names_callback,
+        save_custom_names_context);
 }
 
 extern "C" int32_t llavon_settings_ui_start(void) {

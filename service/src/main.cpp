@@ -3,8 +3,9 @@
 
 #include "service/prediction_pipe_server.hpp"
 #include "service/candidate_ui_loader.hpp"
+#include "service/custom_name_matcher.hpp"
 #include "service/debug/core_logger_adapter.hpp"
-#include "service/inference_settings.hpp"
+#include "service/user_settings.hpp"
 #include "service/settings_ui_loader.hpp"
 #include "service/tray_icon.hpp"
 
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -113,9 +115,11 @@ llavon::ime::core::CoreConfig parse_core_config(int argc, char* argv[]) {
 
 int run_server(
     std::shared_ptr<llavon::ime::core::Core> core,
-    llavon::service::CandidateUiLoader& candidate_ui) noexcept {
+    llavon::service::CandidateUiLoader& candidate_ui,
+    std::shared_ptr<llavon::service::CustomNameMatcher> custom_names) noexcept {
     try {
-        llavon::service::PredictionPipeServer server(std::move(core), candidate_ui);
+        llavon::service::PredictionPipeServer server(
+            std::move(core), candidate_ui, std::move(custom_names));
         std::clog << "[SRV] prediction transport: " << server.name() << '\n';
         return server.run();
     } catch (const std::exception& error) {
@@ -136,8 +140,8 @@ int main(int argc, char* argv[]) {
 
         auto config = parse_core_config(argc, argv);
         config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
-        const auto inference_settings = llavon::service::load_inference_settings();
-        config.inference_device = inference_settings;
+        const auto user_settings = llavon::service::load_settings();
+        config.inference_device = user_settings.inference;
 
         std::vector<llavon::ime::core::InferenceDeviceInfo> inference_devices;
         try {
@@ -149,22 +153,38 @@ int main(int argc, char* argv[]) {
         const auto active_inference = core->inference_runtime_info();
 
         llavon::service::CandidateUiLoader candidate_ui;
+        auto custom_names =
+            std::make_shared<llavon::service::CustomNameMatcher>(user_settings.custom_names);
+        auto custom_names_update_mutex = std::make_shared<std::mutex>();
         llavon::service::SettingsUiLoader settings_ui;
         settings_ui.configure(
-            inference_devices, inference_settings, active_inference,
+            inference_devices, user_settings.inference, active_inference,
             [](const llavon::ime::core::InferenceDeviceSelection& selection) {
                 return llavon::service::save_inference_settings(selection);
+            },
+            user_settings.custom_names,
+            [custom_names, custom_names_update_mutex](
+                const std::vector<llavon::service::CustomNameSetting>& settings) {
+                // Keep persistent and in-memory revisions in the same order even if
+                // more than one caller saves concurrently.
+                std::lock_guard update_lock(*custom_names_update_mutex);
+                if (!llavon::service::save_custom_names(settings)) return false;
+                custom_names->replace(settings);
+                return true;
             });
         llavon::service::TrayIcon tray;
         if (!tray.create(GetModuleHandleW(nullptr), [&settings_ui] { settings_ui.show(); },
                          [] { launch_debugger(); })) {
             std::cerr << "[WARN] tray initialization failed: " << GetLastError() << '\n';
-            return run_server(std::move(core), candidate_ui);
+            return run_server(std::move(core), candidate_ui, std::move(custom_names));
         }
 
         int server_result = 1;
-        std::thread server_thread([&tray, &candidate_ui, &server_result, core = std::move(core)]() mutable {
-            server_result = run_server(std::move(core), candidate_ui);
+        std::thread server_thread([&tray, &candidate_ui, &server_result,
+                                   core = std::move(core),
+                                   custom_names = std::move(custom_names)]() mutable {
+            server_result = run_server(
+                std::move(core), candidate_ui, std::move(custom_names));
             tray.notify_server_stopped(server_result);
         });
 

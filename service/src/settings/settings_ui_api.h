@@ -14,7 +14,10 @@
 #endif
 
 #ifdef __cplusplus
+using llavon_char16_t = char16_t;
 extern "C" {
+#else
+typedef uint16_t llavon_char16_t;
 #endif
 
 enum llavon_settings_inference_backend {
@@ -33,14 +36,23 @@ enum llavon_settings_inference_device_type {
 struct llavon_settings_inference_device {
     int32_t backend;
     int32_t device_type;
-    const wchar_t* device_id;
-    const wchar_t* name;
-    const wchar_t* description;
+    const llavon_char16_t* device_id;
+    const llavon_char16_t* name;
+    const llavon_char16_t* description;
     uint64_t memory_total;
 };
 
+struct llavon_settings_custom_name {
+    const llavon_char16_t* name;
+    const llavon_char16_t* const* readings;
+    size_t reading_count;
+};
+
 typedef int32_t (*llavon_settings_save_inference_callback)(
-    void* context, int32_t backend, const wchar_t* device_id);
+    void* context, int32_t backend, const llavon_char16_t* device_id);
+typedef int32_t (*llavon_settings_save_custom_names_callback)(
+    void* context, const struct llavon_settings_custom_name* custom_names,
+    size_t custom_name_count);
 
 // Supplies a snapshot of devices and the setting used for the current service
 // process. Strings and the device array are copied before this call returns.
@@ -49,12 +61,16 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
-    const wchar_t* selected_device_id,
+    const llavon_char16_t* selected_device_id,
     const struct llavon_settings_inference_device* active_device,
     int32_t gpu_offload,
     int32_t fell_back_to_cpu,
     llavon_settings_save_inference_callback save_callback,
-    void* save_context);
+    void* save_context,
+    const struct llavon_settings_custom_name* custom_names,
+    size_t custom_name_count,
+    llavon_settings_save_custom_names_callback save_custom_names_callback,
+    void* save_custom_names_context);
 
 // Starts the settings UI's dedicated STA thread. Calling this function more
 // than once is safe. Returns zero on success.
