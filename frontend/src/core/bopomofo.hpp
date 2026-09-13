@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -345,6 +346,17 @@ public:
     }
     void set_choose_index(int idx) {
         choose_index = idx;
+        chosen = true;
+        predicted = true;
+    }
+    void choose_candidate(char32_t ch) {
+        const auto candidate = std::find(candidates.begin(), candidates.end(), ch);
+        if (candidate == candidates.end()) {
+            candidates.insert(candidates.begin(), ch);
+            choose_index = 0;
+        } else {
+            choose_index = static_cast<int>(candidate - candidates.begin());
+        }
         chosen = true;
         predicted = true;
     }

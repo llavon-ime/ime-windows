@@ -263,7 +263,11 @@ public:
             if (cand_cnt > 0 && !read_exact(cands.data(), cand_cnt * sizeof(char32_t))) { disconnect(); return; }
 
             if (!padding[i].chosen) {
-                padding[i].set_candaiates(std::move(cands));
+                if (cands.size() == 1) {
+                    padding[i].choose_candidate(cands.front());
+                } else {
+                    padding[i].set_candaiates(std::move(cands));
+                }
             }
             padding[i].predicted = true;
         }
