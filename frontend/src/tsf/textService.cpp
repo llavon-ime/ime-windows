@@ -1010,7 +1010,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         return S_OK;
     }
 
-    if (wParam != VK_SPACE) {
+    if (!Bopomofo::tone.contains(cur_char.value())) {
         e2e_trace.ready_started = std::chrono::steady_clock::now();
         get_engine()->ready();
         e2e_trace.ready_finished = std::chrono::steady_clock::now();
