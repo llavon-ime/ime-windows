@@ -728,7 +728,10 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
         shift_used_as_modifier_ = true;
     }
 
-    const bool english_mode = read_backend_input_mode() == InputMode::English;
+    // Holding Shift in Chinese mode is temporary English input. Treat it as
+    // the regular English mode so both cases follow the same key path.
+    const bool english_mode =
+        read_backend_input_mode() == InputMode::English || key_down(VK_SHIFT);
     if (!english_mode && backtick_shortcut_key(wParam)) {
         *pfEaten = TRUE;
         return S_OK;
@@ -858,7 +861,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         shift_used_as_modifier_ = true;
     }
     e2e_trace.mode_started = std::chrono::steady_clock::now();
-    const bool english_mode = read_backend_input_mode() == InputMode::English;
+    // Keep this in sync with OnTestKeyDown: temporary Shift-English input must
+    // take exactly the same handling path as the regular English mode.
+    const bool english_mode =
+        read_backend_input_mode() == InputMode::English || key_down(VK_SHIFT);
     e2e_trace.mode_finished = std::chrono::steady_clock::now();
     if (!english_mode && backtick_shortcut_key(wParam) && !backtick_used_as_modifier_) {
         backtick_used_as_modifier_ = true;
