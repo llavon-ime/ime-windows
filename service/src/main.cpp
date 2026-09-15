@@ -114,12 +114,8 @@ llavon::ime::core::CoreConfig parse_core_config(int argc, char* argv[]) {
 }
 
 int run_server(
-    std::shared_ptr<llavon::ime::core::Core> core,
-    llavon::service::CandidateUiLoader& candidate_ui,
-    std::shared_ptr<llavon::service::CustomNameMatcher> custom_names) noexcept {
+    llavon::service::PredictionPipeServer& server) noexcept {
     try {
-        llavon::service::PredictionPipeServer server(
-            std::move(core), candidate_ui, std::move(custom_names));
         std::clog << "[SRV] prediction transport: " << server.name() << '\n';
         return server.run();
     } catch (const std::exception& error) {
@@ -149,18 +145,29 @@ int main(int argc, char* argv[]) {
         } catch (const std::exception& error) {
             std::clog << "[WARN] unable to enumerate inference devices: " << error.what() << '\n';
         }
-        auto core = std::make_shared<llavon::ime::core::Core>(std::move(config));
+        auto core = std::make_shared<llavon::ime::core::Core>(config);
         const auto active_inference = core->inference_runtime_info();
 
         llavon::service::CandidateUiLoader candidate_ui;
         auto custom_names =
             std::make_shared<llavon::service::CustomNameMatcher>(user_settings.custom_names);
+        llavon::service::PredictionPipeServer server(
+            std::move(core), candidate_ui, custom_names);
         auto custom_names_update_mutex = std::make_shared<std::mutex>();
         llavon::service::SettingsUiLoader settings_ui;
         settings_ui.configure(
             inference_devices, user_settings.inference, active_inference,
-            [](const llavon::ime::core::InferenceDeviceSelection& selection) {
-                return llavon::service::save_inference_settings(selection);
+            [&server, config](const llavon::ime::core::InferenceDeviceSelection& selection) {
+                try {
+                    auto reload_config = config;
+                    reload_config.inference_device = selection;
+                    (void)server.replace_core(std::move(reload_config));
+                    return llavon::service::save_inference_settings(selection);
+                } catch (const std::exception& error) {
+                    std::cerr << "[ERR] unable to reload inference core: "
+                              << error.what() << '\n';
+                    return false;
+                }
             },
             user_settings.custom_names,
             [custom_names, custom_names_update_mutex](
@@ -176,15 +183,12 @@ int main(int argc, char* argv[]) {
         if (!tray.create(GetModuleHandleW(nullptr), [&settings_ui] { settings_ui.show(); },
                          [] { launch_debugger(); })) {
             std::cerr << "[WARN] tray initialization failed: " << GetLastError() << '\n';
-            return run_server(std::move(core), candidate_ui, std::move(custom_names));
+            return run_server(server);
         }
 
         int server_result = 1;
-        std::thread server_thread([&tray, &candidate_ui, &server_result,
-                                   core = std::move(core),
-                                   custom_names = std::move(custom_names)]() mutable {
-            server_result = run_server(
-                std::move(core), candidate_ui, std::move(custom_names));
+        std::thread server_thread([&tray, &server, &server_result] {
+            server_result = run_server(server);
             tray.notify_server_stopped(server_result);
         });
 

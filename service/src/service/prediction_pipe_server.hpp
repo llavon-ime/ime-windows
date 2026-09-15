@@ -9,6 +9,7 @@
 #include <ime-core/core.hpp>
 #include <atomic>
 #include <cstdint>
+#include <future>
 #include <iostream>
 #include <list>
 #include <memory>
@@ -223,9 +224,27 @@ public:
     using ClientId = std::uint64_t;
     static constexpr std::size_t capacity = 5;
 
-    explicit SessionLru(std::shared_ptr<llavon::ime::core::Core> core) : core_(std::move(core)) {}
+    explicit SessionLru(std::shared_ptr<llavon::ime::core::Core> core) : core_(std::move(core)) {
+        if (!core_) {
+            throw std::invalid_argument("inference core is required");
+        }
+    }
+
+    llavon::ime::core::InferenceRuntimeInfo replace_core(
+        llavon::ime::core::CoreConfig config) {
+        sessions_.clear();
+        idle_.clear();
+        recency_.clear();
+        core_.reset();
+
+        core_ = std::make_shared<llavon::ime::core::Core>(std::move(config));
+        return core_->inference_runtime_info();
+    }
 
     llavon::ime::core::Session& acquire(ClientId client_id) {
+        if (!core_) {
+            throw std::runtime_error("inference core is not loaded");
+        }
         const auto existing = sessions_.find(client_id);
         if (existing != sessions_.end()) {
             recency_.splice(recency_.begin(), recency_, existing->second.recency);
@@ -450,15 +469,36 @@ public:
         std::shared_ptr<llavon::ime::core::Core> core,
         CandidateUiLoader& candidate_ui,
         std::shared_ptr<CustomNameMatcher> custom_names)
-        : core_(std::move(core)), candidate_ui_(candidate_ui),
+        : sessions_(std::make_shared<prediction_pipe::SessionLru>(std::move(core))),
+          candidate_ui_(candidate_ui),
           custom_names_(std::move(custom_names)) {
-        if (!core_ || !custom_names_) {
+        if (!custom_names_) {
             throw std::invalid_argument("prediction server dependencies are required");
         }
     }
 
     const char* name() const {
         return "prediction-pipe";
+    }
+
+    llavon::ime::core::InferenceRuntimeInfo replace_core(
+        llavon::ime::core::CoreConfig config) {
+        if (!accepting_reloads_.load(std::memory_order_acquire)) {
+            throw std::runtime_error("prediction server is not accepting model reloads");
+        }
+
+        auto completion =
+            std::make_shared<std::promise<llavon::ime::core::InferenceRuntimeInfo>>();
+        auto result = completion->get_future();
+        asio::post(io_ctx_,
+                   [sessions = sessions_, config = std::move(config), completion]() mutable {
+                       try {
+                           completion->set_value(sessions->replace_core(std::move(config)));
+                       } catch (...) {
+                           completion->set_exception(std::current_exception());
+                       }
+                   });
+        return result.get();
     }
 
     int run() {
@@ -470,22 +510,23 @@ public:
 
         std::clog << "[SRV] model loaded\n";
 
-        asio::io_context io_ctx;
         CandidatePipeServer candidate_pipe(candidate_ui_);
-        auto sessions = std::make_shared<prediction_pipe::SessionLru>(core_);
-        co_spawn(io_ctx,
-                 prediction_pipe::listener(io_ctx, std::move(sessions), custom_names_),
+        co_spawn(io_ctx_,
+                 prediction_pipe::listener(io_ctx_, sessions_, custom_names_),
                  asio::detached);
-        co_spawn(io_ctx, candidate_pipe.listen(), asio::detached);
-        io_ctx.run();
+        co_spawn(io_ctx_, candidate_pipe.listen(), asio::detached);
+        io_ctx_.run();
+        accepting_reloads_.store(false, std::memory_order_release);
 
         return 0;
     }
 
 private:
-    std::shared_ptr<llavon::ime::core::Core> core_;
+    asio::io_context io_ctx_;
+    std::shared_ptr<prediction_pipe::SessionLru> sessions_;
     CandidateUiLoader& candidate_ui_;
     std::shared_ptr<CustomNameMatcher> custom_names_;
+    std::atomic<bool> accepting_reloads_{true};
 };
 
 }  // namespace llavon::service

@@ -1020,10 +1020,10 @@ void SettingsWindow::save_inference_setting() {
         configuration_.selected_backend = option.backend;
         configuration_.selected_device_id = option.device_id;
         save_inference_button_.IsEnabled(false);
-        note_.Text(L"已儲存");
+        note_.Text(L"已套用並儲存");
         note_.Visibility(Visibility::Visible);
     } else {
-        note_.Text(L"無法儲存推論裝置設定，請稍後再試。");
+        note_.Text(L"無法套用或儲存推論裝置設定，請稍後再試。");
         note_.Visibility(Visibility::Visible);
     }
 }
@@ -1043,7 +1043,7 @@ void SettingsWindow::update_inference_save_state() {
                          option.device_id != configuration_.selected_device_id;
     save_inference_button_.IsEnabled(changed);
     if (changed) {
-        note_.Text(L"重新啟動後套用");
+        note_.Text(L"儲存後立即套用");
         note_.Visibility(Visibility::Visible);
     } else {
         note_.Visibility(Visibility::Collapsed);
