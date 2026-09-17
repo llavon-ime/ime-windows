@@ -178,6 +178,10 @@ int main(int argc, char* argv[]) {
                 if (!llavon::service::save_custom_names(settings)) return false;
                 custom_names->replace(settings);
                 return true;
+            },
+            user_settings.shift_space_width_toggle_enabled,
+            [](bool enabled) {
+                return llavon::service::save_shift_space_width_toggle_setting(enabled);
             });
         llavon::service::TrayIcon tray;
         if (!tray.create(GetModuleHandleW(nullptr), [&settings_ui] { settings_ui.show(); },

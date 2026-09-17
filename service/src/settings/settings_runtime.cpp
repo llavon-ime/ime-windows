@@ -38,13 +38,17 @@ public:
                       const llavon_settings_custom_name* custom_names,
                       std::size_t custom_name_count,
                       llavon_settings_save_custom_names_callback save_custom_names_callback,
-                      void* save_custom_names_context) {
+                      void* save_custom_names_context,
+                      std::int32_t shift_space_width_toggle_enabled,
+                      llavon_settings_save_width_toggle_callback save_width_toggle_callback,
+                      void* save_width_toggle_context) {
         std::lock_guard lock(mutex_);
         if (thread_) {
             return ERROR_BUSY;
         }
         if ((device_count != 0 && !devices) || !active_device || !save_callback ||
-            (custom_name_count != 0 && !custom_names) || !save_custom_names_callback) {
+            (custom_name_count != 0 && !custom_names) || !save_custom_names_callback ||
+            !save_width_toggle_callback) {
             return ERROR_INVALID_PARAMETER;
         }
 
@@ -65,6 +69,10 @@ public:
         configuration.save_context = save_context;
         configuration.save_custom_names_callback = save_custom_names_callback;
         configuration.save_custom_names_context = save_custom_names_context;
+        configuration.shift_space_width_toggle_enabled =
+            shift_space_width_toggle_enabled != 0;
+        configuration.save_width_toggle_callback = save_width_toggle_callback;
+        configuration.save_width_toggle_context = save_width_toggle_context;
         configuration.custom_names.reserve(custom_name_count);
         for (std::size_t index = 0; index < custom_name_count; ++index) {
             const auto& source = custom_names[index];
@@ -335,12 +343,16 @@ extern "C" int32_t llavon_settings_ui_configure(
     const struct llavon_settings_custom_name* custom_names,
     size_t custom_name_count,
     llavon_settings_save_custom_names_callback save_custom_names_callback,
-    void* save_custom_names_context) {
+    void* save_custom_names_context,
+    int32_t shift_space_width_toggle_enabled,
+    llavon_settings_save_width_toggle_callback save_width_toggle_callback,
+    void* save_width_toggle_context) {
     return llavon::settings::runtime().configure(
         devices, device_count, selected_backend, selected_device_id, active_device,
         gpu_offload, fell_back_to_cpu, save_callback, save_context,
         custom_names, custom_name_count, save_custom_names_callback,
-        save_custom_names_context);
+        save_custom_names_context, shift_space_width_toggle_enabled,
+        save_width_toggle_callback, save_width_toggle_context);
 }
 
 extern "C" int32_t llavon_settings_ui_start(void) {

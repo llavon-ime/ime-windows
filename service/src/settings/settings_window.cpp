@@ -621,6 +621,51 @@ void SettingsWindow::build_page() {
     inference_section.Children().Append(note_);
     page.Children().Append(inference_section);
 
+    page.Children().Append(make_section_title(L"輸入設定"));
+
+    StackPanel input_section;
+    input_section.Spacing(8);
+    input_section.Margin(Thickness{0, 0, 0, 24});
+
+    ToggleSwitch full_width_toggle;
+    full_width_toggle.Header(
+        winrt::box_value(L"使用 Shift + 空格鍵切換字元寬度"));
+    full_width_toggle.OnContent(winrt::box_value(L"開啟"));
+    full_width_toggle.OffContent(winrt::box_value(L"關閉"));
+    auto saved_full_width =
+        std::make_shared<bool>(configuration_.shift_space_width_toggle_enabled);
+    auto updating_full_width = std::make_shared<bool>(false);
+    full_width_toggle.IsOn(*saved_full_width);
+
+    TextBlock full_width_note = make_text(L"", caption_text_size);
+    full_width_note.Visibility(Visibility::Collapsed);
+    full_width_toggle.Toggled(
+        [this, full_width_note, saved_full_width, updating_full_width](
+            const auto& sender, const auto&) {
+            if (*updating_full_width) return;
+            const auto toggle = sender.template as<ToggleSwitch>();
+            const bool enabled = toggle.IsOn();
+            if (enabled == *saved_full_width) return;
+
+            const std::int32_t result = configuration_.save_width_toggle_callback
+                ? configuration_.save_width_toggle_callback(
+                      configuration_.save_width_toggle_context, enabled ? 1 : 0)
+                : ERROR_INVALID_FUNCTION;
+            if (result == ERROR_SUCCESS) {
+                *saved_full_width = enabled;
+                full_width_note.Text(L"已儲存；切回輸入中的應用程式後套用。");
+            } else {
+                *updating_full_width = true;
+                toggle.IsOn(*saved_full_width);
+                *updating_full_width = false;
+                full_width_note.Text(L"無法儲存全形設定，請稍後再試。");
+            }
+            full_width_note.Visibility(Visibility::Visible);
+        });
+    input_section.Children().Append(full_width_toggle);
+    input_section.Children().Append(full_width_note);
+    page.Children().Append(input_section);
+
     page.Children().Append(make_section_title(L"自訂名字"));
 
     StackPanel custom_names_section;

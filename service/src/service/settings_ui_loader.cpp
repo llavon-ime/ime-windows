@@ -92,7 +92,9 @@ void SettingsUiLoader::configure(
     const llavon::ime::core::InferenceRuntimeInfo& active,
     SaveInferenceSettings save_settings,
     std::vector<CustomNameSetting> custom_names,
-    SaveCustomNames save_custom_names) {
+    SaveCustomNames save_custom_names,
+    bool shift_space_width_toggle_enabled,
+    SaveWidthToggleSetting save_width_toggle) {
     devices_.clear();
     devices_.reserve(devices.size());
     for (const auto& device : devices) {
@@ -130,6 +132,8 @@ void SettingsUiLoader::configure(
         custom_names_.push_back(std::move(storage));
     }
     save_custom_names_ = std::move(save_custom_names);
+    shift_space_width_toggle_enabled_ = shift_space_width_toggle_enabled;
+    save_width_toggle_ = std::move(save_width_toggle);
 }
 
 SettingsUiLoader::~SettingsUiLoader() {
@@ -240,7 +244,23 @@ bool SettingsUiLoader::configure_module() {
                selected_device_id.c_str(), &active_device, gpu_offload_ ? 1 : 0,
                fell_back_to_cpu_ ? 1 : 0, save_trampoline, this,
                custom_names.data(), custom_names.size(),
-               save_custom_names_trampoline, this) == 0;
+               save_custom_names_trampoline, this,
+               shift_space_width_toggle_enabled_ ? 1 : 0,
+               save_width_toggle_trampoline, this) == 0;
+}
+
+std::int32_t SettingsUiLoader::save_width_toggle_trampoline(
+    void* context, std::int32_t enabled) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->save_width_toggle_) return ERROR_INVALID_FUNCTION;
+    try {
+        const bool value = enabled != 0;
+        if (!self->save_width_toggle_(value)) return ERROR_WRITE_FAULT;
+        self->shift_space_width_toggle_enabled_ = value;
+        return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_WRITE_FAULT;
+    }
 }
 
 std::int32_t SettingsUiLoader::save_custom_names_trampoline(

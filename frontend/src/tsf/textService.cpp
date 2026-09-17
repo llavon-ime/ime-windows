@@ -5,8 +5,12 @@
 #include <chrono>
 #include <cstdint>
 #include <cwctype>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <optional>
+
+#include <jsoncons/json.hpp>
 
 #include "candidateUiController.hpp"
 #include "core/bopomofo.hpp"
@@ -19,6 +23,49 @@
 using namespace std::literals;
 
 namespace {
+
+bool load_width_toggle_setting() noexcept {
+    try {
+        const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+        if (required == 0) return false;
+
+        std::wstring local_app_data(required, L'\0');
+        const DWORD copied = GetEnvironmentVariableW(
+            L"LOCALAPPDATA", local_app_data.data(), required);
+        if (copied == 0 || copied >= required) return false;
+        local_app_data.resize(copied);
+
+        const auto path = std::filesystem::path(local_app_data) /
+                          L"Llavon IME" / L"settings.json";
+        std::ifstream input(path, std::ios::binary);
+        if (!input) return false;
+
+        const jsoncons::json document = jsoncons::json::parse(input);
+        if (!document.is_object() ||
+            !document.contains("shift_space_width_toggle_enabled")) {
+            return false;
+        }
+        const auto& setting = document.at("shift_space_width_toggle_enabled");
+        return setting.is_bool() && setting.as<bool>();
+    } catch (...) {
+        return false;
+    }
+}
+
+std::u16string to_full_width_ascii(std::u16string_view text) {
+    std::u16string result;
+    result.reserve(text.size());
+    for (char16_t character : text) {
+        if (character == u' ') {
+            result.push_back(u'\u3000');
+        } else if (character >= u'!' && character <= u'~') {
+            result.push_back(static_cast<char16_t>(character + 0xfee0));
+        } else {
+            result.push_back(character);
+        }
+    }
+    return result;
+}
 
 inline constexpr winrt::guid kCompositionDisplayAttributeGuid = {
     0x82769d2d, 0x9e5d, 0x4ace, {0x97, 0x53, 0x91, 0x3c, 0x0c, 0x7c, 0x4e, 0x38}};
@@ -209,6 +256,16 @@ bool modifier_key(WPARAM wParam) {
 
 bool backtick_shortcut_key(WPARAM wParam) {
     return wParam == VK_OEM_3 && !key_down(VK_SHIFT) && !key_down(VK_CONTROL) && !key_down(VK_MENU);
+}
+
+bool full_width_toggle_key(WPARAM wParam) {
+    return wParam == VK_SPACE && key_down(VK_SHIFT) && !key_down(VK_CONTROL) &&
+           !key_down(VK_MENU);
+}
+
+bool unmodified_space_key(WPARAM wParam) {
+    return wParam == VK_SPACE && !key_down(VK_SHIFT) && !key_down(VK_CONTROL) &&
+           !key_down(VK_MENU);
 }
 
 bool modified_passthrough_key(WPARAM wParam) {
@@ -489,6 +546,7 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
 
     threadMgr.copy_from(pThreadMgr);
     _tfClientId = tfClientId;
+    refresh_width_toggle_setting();
     candidate_ui_->attach(pThreadMgr, tfClientId);
 
     input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>([this]() {
@@ -608,8 +666,20 @@ void TextService::sync_input_mode_compartments(InputMode mode) {
     };
 
     set_compartment(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, mode == InputMode::Chinese ? TRUE : FALSE);
-    set_compartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION,
-                    mode == InputMode::Chinese ? TF_CONVERSIONMODE_NATIVE : 0);
+    LONG conversion_mode = mode == InputMode::Chinese ? TF_CONVERSIONMODE_NATIVE : 0;
+    if (full_width_mode_) conversion_mode |= TF_CONVERSIONMODE_FULLSHAPE;
+    set_compartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION, conversion_mode);
+}
+
+void TextService::refresh_width_toggle_setting() {
+    const bool enabled = load_width_toggle_setting();
+    if (!enabled && shift_space_width_toggle_enabled_ && full_width_mode_) {
+        full_width_mode_ = false;
+        if (threadMgr && _tfClientId != TF_CLIENTID_NULL) {
+            sync_input_mode_compartments(get_engine()->current_input_mode());
+        }
+    }
+    shift_space_width_toggle_enabled_ = enabled;
 }
 
 bool TextService::context_accepts_input(ITfContext* context) const {
@@ -665,6 +735,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* /*pDocMgr*/) try {
  * Receives document focus changes but does not react to them yet.
  */
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocumentMgr* /*pDocMgrPrevFocus*/) try {
+    refresh_width_toggle_setting();
     refresh_input_mode_indicator();
     return S_OK;
 } catch (...) {
@@ -696,6 +767,7 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* /*pContext*/) try { return S_
  */
 STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
     if (fForeground) {
+        refresh_width_toggle_setting();
         refresh_input_mode_indicator();
     }
     return S_OK;
@@ -719,6 +791,13 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
     }
 
     if (shift_key(wParam)) {
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
+    if (shift_space_width_toggle_enabled_ && full_width_toggle_key(wParam)) {
+        shift_toggle_pending_ = false;
+        shift_used_as_modifier_ = true;
         *pfEaten = TRUE;
         return S_OK;
     }
@@ -757,6 +836,13 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
     }
 
     if (shifted_printable_symbol_text(wParam, lParam)) {
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
+    if (full_width_mode_ && !active_composition && !english_mode &&
+        (unmodified_space_key(wParam) ||
+         (!is_bopomofo_key && printable_key_text(wParam, lParam)))) {
         *pfEaten = TRUE;
         return S_OK;
     }
@@ -856,6 +942,16 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         return S_OK;
     }
 
+    if (shift_space_width_toggle_enabled_ && full_width_toggle_key(wParam)) {
+        shift_toggle_pending_ = false;
+        shift_used_as_modifier_ = true;
+        const bool repeated_keydown = (lParam & (1LL << 30)) != 0;
+        if (!repeated_keydown) full_width_mode_ = !full_width_mode_;
+        sync_input_mode_compartments(get_engine()->current_input_mode());
+        *pfEaten = TRUE;
+        return S_OK;
+    }
+
     if (key_down(VK_SHIFT)) {
         shift_toggle_pending_ = false;
         shift_used_as_modifier_ = true;
@@ -885,7 +981,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
 
     if (english_mode && compositionBuffer.empty()) {
         if (const auto text = printable_key_text(wParam, lParam)) {
-            insert_text(pContext, *text);
+            insert_text(pContext, full_width_mode_ ? to_full_width_ascii(*text) : *text);
             *pfEaten = TRUE;
             return S_OK;
         }
@@ -899,6 +995,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         symbol = printable_key_text(wParam, lParam);
     }
     if (symbol) {
+        if (full_width_mode_) symbol = to_full_width_ascii(*symbol);
         if (compositionBuffer.empty()) {
             insert_text(pContext, *symbol);
             *pfEaten = TRUE;
@@ -916,12 +1013,28 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     if (english_mode) {
         if (const auto text = printable_key_text(wParam, lParam)) {
             candidate_ui_->hide();
-            for (const char16_t ch : *text) {
+            const auto output = full_width_mode_ ? to_full_width_ascii(*text) : *text;
+            for (const char16_t ch : output) {
                 compositionBuffer.add_chosen_candidate(ch);
             }
             set_composition_text(pContext, compositionBuffer.to_string());
             *pfEaten = TRUE;
             return S_OK;
+        }
+    }
+
+    if (full_width_mode_ && compositionBuffer.empty() && !english_mode) {
+        if (unmodified_space_key(wParam)) {
+            insert_text(pContext, u"\u3000");
+            *pfEaten = TRUE;
+            return S_OK;
+        }
+        if (Bopomofo::lookup(static_cast<int>(wParam)) == std::nullopt) {
+            if (const auto text = printable_key_text(wParam, lParam)) {
+                insert_text(pContext, to_full_width_ascii(*text));
+                *pfEaten = TRUE;
+                return S_OK;
+            }
         }
     }
 

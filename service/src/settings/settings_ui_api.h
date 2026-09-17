@@ -53,6 +53,8 @@ typedef int32_t (*llavon_settings_save_inference_callback)(
 typedef int32_t (*llavon_settings_save_custom_names_callback)(
     void* context, const struct llavon_settings_custom_name* custom_names,
     size_t custom_name_count);
+typedef int32_t (*llavon_settings_save_width_toggle_callback)(
+    void* context, int32_t enabled);
 
 // Supplies a snapshot of devices and the setting used for the current service
 // process. Strings and the device array are copied before this call returns.
@@ -70,7 +72,10 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure(
     const struct llavon_settings_custom_name* custom_names,
     size_t custom_name_count,
     llavon_settings_save_custom_names_callback save_custom_names_callback,
-    void* save_custom_names_context);
+    void* save_custom_names_context,
+    int32_t shift_space_width_toggle_enabled,
+    llavon_settings_save_width_toggle_callback save_width_toggle_callback,
+    void* save_width_toggle_context);
 
 // Starts the settings UI's dedicated STA thread. Calling this function more
 // than once is safe. Returns zero on success.

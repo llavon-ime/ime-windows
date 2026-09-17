@@ -120,6 +120,7 @@ private:
     InputMode read_backend_input_mode();
     InputMode refresh_input_mode_indicator();
     void sync_input_mode_compartments(InputMode mode);
+    void refresh_width_toggle_setting();
     bool context_accepts_input(ITfContext* context) const;
     bool composition_belongs_to(ITfContext* context) const;
     bool has_composition_state() const;
@@ -138,6 +139,8 @@ private:
     CompositionBuffer compositionBuffer;
     bool shift_toggle_pending_ = false;
     bool shift_used_as_modifier_ = false;
+    bool full_width_mode_ = false;
+    bool shift_space_width_toggle_enabled_ = false;
     std::optional<std::chrono::steady_clock::time_point> key_down_started_at_;
     WPARAM key_down_started_key_ = 0;
     winrt::com_ptr<ITfContext> text_edit_sink_context_;

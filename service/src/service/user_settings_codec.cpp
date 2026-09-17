@@ -32,6 +32,7 @@ struct SettingsDocument {
     std::uint32_t schema = current_schema;
     InferenceSettingsDocument inference;
     std::vector<CustomNameDocument> custom_names;
+    bool shift_space_width_toggle_enabled = false;
 };
 
 const char* backend_name(InferenceBackend backend) {
@@ -101,6 +102,8 @@ std::optional<UserSettings> decode(std::string_view json) {
     return UserSettings{
         .inference = std::move(selection),
         .custom_names = std::move(custom_names),
+        .shift_space_width_toggle_enabled =
+            document.shift_space_width_toggle_enabled,
     };
 }
 
@@ -134,6 +137,8 @@ std::string encode(const UserSettings& settings) {
             .device_id = device_is_relevant ? selection.device_id : std::string{},
         },
         .custom_names = std::move(custom_names),
+        .shift_space_width_toggle_enabled =
+            settings.shift_space_width_toggle_enabled,
     };
     return rfl::json::write(document, YYJSON_WRITE_PRETTY);
 }

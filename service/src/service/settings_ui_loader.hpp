@@ -24,6 +24,7 @@ public:
         const llavon::ime::core::InferenceDeviceSelection&)>;
     using SaveCustomNames =
         std::function<bool(const std::vector<CustomNameSetting>&)>;
+    using SaveWidthToggleSetting = std::function<bool(bool)>;
 
     void configure(
         const std::vector<llavon::ime::core::InferenceDeviceInfo>& devices,
@@ -31,7 +32,9 @@ public:
         const llavon::ime::core::InferenceRuntimeInfo& active,
         SaveInferenceSettings save_settings,
         std::vector<CustomNameSetting> custom_names,
-        SaveCustomNames save_custom_names);
+        SaveCustomNames save_custom_names,
+        bool shift_space_width_toggle_enabled,
+        SaveWidthToggleSetting save_width_toggle);
     bool show();
 
 private:
@@ -54,7 +57,8 @@ private:
         const char16_t*, const llavon_settings_inference_device*, std::int32_t,
         std::int32_t, llavon_settings_save_inference_callback, void*,
         const llavon_settings_custom_name*, std::size_t,
-        llavon_settings_save_custom_names_callback, void*);
+        llavon_settings_save_custom_names_callback, void*, std::int32_t,
+        llavon_settings_save_width_toggle_callback, void*);
     using StartFunction = std::int32_t (*)();
     using ShowFunction = void (*)();
     using StopFunction = std::int32_t (*)();
@@ -66,6 +70,8 @@ private:
     static std::int32_t save_custom_names_trampoline(
         void* context, const llavon_settings_custom_name* custom_names,
         std::size_t custom_name_count) noexcept;
+    static std::int32_t save_width_toggle_trampoline(
+        void* context, std::int32_t enabled) noexcept;
     void report_error(const wchar_t* detail) const noexcept;
 
     HMODULE module_ = nullptr;
@@ -81,6 +87,8 @@ private:
     SaveInferenceSettings save_settings_;
     std::vector<CustomNameStorage> custom_names_;
     SaveCustomNames save_custom_names_;
+    bool shift_space_width_toggle_enabled_ = false;
+    SaveWidthToggleSetting save_width_toggle_;
     bool started_ = false;
 };
 

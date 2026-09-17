@@ -133,4 +133,20 @@ bool save_custom_names(const std::vector<CustomNameSetting>& custom_names) noexc
     }
 }
 
+bool save_shift_space_width_toggle_setting(bool enabled) noexcept {
+    try {
+        std::lock_guard lock(settings_mutex);
+        auto settings = load_settings_unlocked();
+        settings.shift_space_width_toggle_enabled = enabled;
+        return save_settings_unlocked(settings);
+    } catch (const std::exception& error) {
+        std::clog << "[SRV] unable to save Shift+Space width setting: "
+                  << error.what() << '\n';
+        return false;
+    } catch (...) {
+        std::clog << "[SRV] unable to save Shift+Space width setting\n";
+        return false;
+    }
+}
+
 }  // namespace llavon::service

@@ -34,6 +34,9 @@ struct SettingsConfiguration {
     std::vector<CustomNameOption> custom_names;
     llavon_settings_save_custom_names_callback save_custom_names_callback = nullptr;
     void* save_custom_names_context = nullptr;
+    bool shift_space_width_toggle_enabled = false;
+    llavon_settings_save_width_toggle_callback save_width_toggle_callback = nullptr;
+    void* save_width_toggle_context = nullptr;
 };
 
 }  // namespace llavon::settings
