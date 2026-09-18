@@ -719,7 +719,7 @@ private:
             number_text.Margin(Thickness{0.0, 0.0, 6.0, 0.0});
             row.Children().Append(number_text);
 
-            auto value_text = build_text(value, (layout_columns <= 1) ? 17.0 : 16.0, palette.primary_text);
+            auto value_text = build_text(value, 14.0, palette.primary_text);
             value_text.Width(candidate_text_width(layout_columns, show_number));
             value_text.FontWeight(FontWeights::Normal());
             value_text.Margin(Thickness{0.0, 0.0, 6.0, 0.0});
