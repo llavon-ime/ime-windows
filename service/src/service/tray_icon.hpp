@@ -37,6 +37,7 @@ private:
     HWND window_ = nullptr;
     std::atomic<HWND> notification_window_{nullptr};
     UINT taskbar_created_message_ = 0;
+    UINT open_settings_message_ = 0;
     NOTIFYICONDATAW icon_data_{};
     OpenSettingsCallback open_settings_;
     OpenDebuggerCallback open_debugger_;

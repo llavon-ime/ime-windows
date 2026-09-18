@@ -52,6 +52,29 @@ bool load_width_toggle_setting() noexcept {
     }
 }
 
+void request_settings_window() noexcept {
+    // This class and message name form the small cross-process contract with
+    // the service tray window. No pointers or process-local message IDs cross
+    // the process boundary.
+    constexpr wchar_t service_window_class[] = L"LlavonImeServiceTrayWindow";
+    constexpr wchar_t open_settings_message_name[] = L"LlavonIme.OpenSettings";
+
+    const HWND service_window = FindWindowW(service_window_class, nullptr);
+    const UINT message = RegisterWindowMessageW(open_settings_message_name);
+    if (!service_window || message == 0) {
+        return;
+    }
+
+    DWORD service_process_id = 0;
+    GetWindowThreadProcessId(service_window, &service_process_id);
+    if (service_process_id != 0) {
+        // Best effort: let the settings window come to the foreground when
+        // this command originated from the user's language-bar interaction.
+        AllowSetForegroundWindow(service_process_id);
+    }
+    PostMessageW(service_window, message, 0, 0);
+}
+
 std::u16string to_full_width_ascii(std::u16string_view text) {
     std::u16string result;
     result.reserve(text.size());
@@ -549,10 +572,12 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
     refresh_width_toggle_setting();
     candidate_ui_->attach(pThreadMgr, tfClientId);
 
-    input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>([this]() {
-        get_engine()->toggle_input_mode();
-        refresh_input_mode_indicator();
-    });
+    input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>(
+        [this]() {
+            get_engine()->toggle_input_mode();
+            refresh_input_mode_indicator();
+        },
+        [] { request_settings_window(); });
     input_mode_lang_bar_item_->add_to_language_bar(threadMgr.get());
     refresh_input_mode_indicator();
 

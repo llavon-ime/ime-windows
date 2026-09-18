@@ -47,6 +47,7 @@ bool TrayIcon::create(HINSTANCE instance, OpenSettingsCallback open_settings,
     }
 
     taskbar_created_message_ = RegisterWindowMessageW(L"TaskbarCreated");
+    open_settings_message_ = RegisterWindowMessageW(L"LlavonIme.OpenSettings");
     window_ = CreateWindowExW(WS_EX_TOOLWINDOW, tray_window_class, L"Llavon IME Service",
                               WS_OVERLAPPED, 0, 0, 0, 0, nullptr, nullptr, instance_, this);
     notification_window_.store(window_, std::memory_order_release);
@@ -94,6 +95,11 @@ LRESULT CALLBACK TrayIcon::window_proc(HWND window, UINT message, WPARAM wparam,
 }
 
 LRESULT TrayIcon::handle_message(UINT message, WPARAM wparam, LPARAM lparam) {
+    if (open_settings_message_ != 0 && message == open_settings_message_) {
+        open_settings();
+        return 0;
+    }
+
     if (message == taskbar_created_message_) {
         icon_added_ = false;
         if (!add_icon()) {
