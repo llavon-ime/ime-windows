@@ -1161,8 +1161,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     }
 
     if (wParam == VK_SPACE && !compositionBuffer.empty() && compositionBuffer.current_compositable()) {
-        end_composition(pContext);
-        insert_text(pContext, u" ");
+        const auto space = full_width_mode_ ? u'\u3000' : u' ';
+        compositionBuffer.add_chosen_candidate(space);
+        set_composition_text(pContext, compositionBuffer.to_string());
         *pfEaten = TRUE;
         return S_OK;
     }
