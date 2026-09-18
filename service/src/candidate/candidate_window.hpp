@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <dwmapi.h>
 #include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
@@ -235,11 +236,11 @@ private:
     static constexpr int column_gap = 12;
     static constexpr int popup_offset_x = 0;
     static constexpr int popup_offset_y = 4;
-    static constexpr int content_padding_x = 6;
-    static constexpr int content_padding_y = 6;
-    static constexpr int row_height = 29;
-    static constexpr int bottom_bar_height = 24;
-    static constexpr int corner_radius = 9;
+    static constexpr int content_padding_x = 7;
+    static constexpr int content_padding_y = 7;
+    static constexpr int row_height = 30;
+    static constexpr int bottom_bar_height = 26;
+    static constexpr int corner_radius = 10;
     // CreateWindowInBand and its band identifiers are undocumented Windows implementation details. Band 16 is used
     // here because diagnostics/window-band-probe empirically established on Windows 11 build 26100 that:
     //   * SearchHost's visible search window is in band 13;
@@ -270,7 +271,9 @@ protected:
                 return 0;
             case WM_SIZE:
                 DebugSink::instance().send(L"UI", L"CandidateWindow::handle_message WM_SIZE");
-                apply_round_region();
+                if (!uses_system_rounded_corners_) {
+                    apply_round_region();
+                }
                 resize_xaml_island();
                 return 0;
             case WM_ERASEBKGND:
@@ -294,6 +297,7 @@ protected:
     }
 
     void on_final_destroy() noexcept override {
+        uses_system_rounded_corners_ = false;
         xaml_island_.close();
     }
 
@@ -319,7 +323,10 @@ private:
             return false;
         }
 
-        apply_round_region();
+        uses_system_rounded_corners_ = enable_system_rounded_corners();
+        if (!uses_system_rounded_corners_) {
+            apply_round_region();
+        }
         sync_window_dpi();
         ensure_xaml_island();
         render_surface();
@@ -381,6 +388,33 @@ private:
         }
         DebugSink::instance().send(L"UI", L"CandidateWindow::apply_round_region success width=" +
                                               std::to_wstring(width) + L", height=" + std::to_wstring(height));
+    }
+
+    bool enable_system_rounded_corners() {
+        if (!created()) {
+            return false;
+        }
+
+        // DWMWA_WINDOW_CORNER_PREFERENCE (33) is available on Windows 11. Resolve
+        // the attribute by value so the Windows 10 target can still fall back to
+        // a window region when the compositor does not support native rounding.
+        constexpr DWORD window_corner_preference_attribute = 33;
+        constexpr DWORD round_corner_preference = 2;
+        const HRESULT result = DwmSetWindowAttribute(
+            hwnd(), static_cast<DWMWINDOWATTRIBUTE>(window_corner_preference_attribute),
+            &round_corner_preference, sizeof(round_corner_preference));
+        if (FAILED(result)) {
+            DebugSink::instance().send(
+                L"UI", L"CandidateWindow::enable_system_rounded_corners unavailable hr=" +
+                           std::to_wstring(result));
+            return false;
+        }
+
+        // WM_SIZE can install the pixel-snapped fallback region while the HWND is
+        // being created. Remove it so DWM supplies an anti-aliased clip and shadow.
+        SetWindowRgn(hwnd(), nullptr, TRUE);
+        DebugSink::instance().send(L"UI", L"CandidateWindow::enable_system_rounded_corners success");
+        return true;
     }
 
     static UINT dpi_from_wparam(WPARAM wParam) noexcept {
@@ -586,25 +620,25 @@ private:
         static ThemePalette theme_palette(bool dark) noexcept {
             if (dark) {
                 return {
-                    {32, 32, 32},     // surface
-                    {62, 62, 62},     // border
-                    {59, 59, 59},     // selection
+                    {44, 44, 44},     // surface
+                    {69, 69, 69},     // border
+                    {60, 60, 60},     // selection
                     {96, 205, 255},   // accent
                     {245, 245, 245},  // primary text
                     {207, 207, 207},  // secondary text
                     {122, 122, 122},  // disabled text
-                    {61, 61, 61},     // divider
+                    {72, 72, 72},     // divider
                 };
             }
             return {
-                {248, 248, 248},  // surface
-                {221, 221, 221},  // border
-                {237, 237, 237},  // selection
+                {250, 250, 250},  // surface
+                {229, 229, 229},  // border
+                {240, 240, 240},  // selection
                 {0, 102, 214},    // accent
                 {33, 33, 33},     // primary text
                 {96, 96, 96},     // secondary text
                 {170, 170, 170},  // disabled text
-                {225, 225, 225},  // divider
+                {232, 232, 232},  // divider
             };
         }
 
@@ -662,9 +696,9 @@ private:
 
             Border host;
             host.Width(column_width(layout_columns));
-            host.Height(static_cast<double>(CandidateWindow::row_height - 1));
-            host.Margin(Thickness{0.0, 0.0, 0.0, 1.0});
-            host.CornerRadius(CornerRadius{5.0, 5.0, 5.0, 5.0});
+            host.Height(static_cast<double>(CandidateWindow::row_height - 2));
+            host.Margin(Thickness{0.0, 0.0, 0.0, 2.0});
+            host.CornerRadius(CornerRadius{4.0, 4.0, 4.0, 4.0});
             host.Background(selected ? brush(palette.selection) : brush(0, 0, 0, 0));
 
             StackPanel row;
@@ -673,8 +707,8 @@ private:
 
             Border accent;
             accent.Width(2.0);
-            accent.Height(15.0);
-            accent.Margin(Thickness{6.0, 6.0, 6.0, 6.0});
+            accent.Height(16.0);
+            accent.Margin(Thickness{5.0, 6.0, 6.0, 6.0});
             accent.CornerRadius(CornerRadius{2.0, 2.0, 2.0, 2.0});
             accent.Background((show_number && selected) ? brush(palette.accent) : brush(0, 0, 0, 0));
             row.Children().Append(accent);
@@ -687,7 +721,7 @@ private:
 
             auto value_text = build_text(value, (layout_columns <= 1) ? 17.0 : 16.0, palette.primary_text);
             value_text.Width(candidate_text_width(layout_columns, show_number));
-            value_text.FontWeight(selected ? FontWeights::SemiBold() : FontWeights::Normal());
+            value_text.FontWeight(FontWeights::Normal());
             value_text.Margin(Thickness{0.0, 0.0, 6.0, 0.0});
             row.Children().Append(value_text);
 
@@ -763,14 +797,7 @@ private:
             left_group.Children().Append(
                 build_footer_icon(layout_columns <= 1 ? L"\u25BC" : L"\u25B6", can_next_page, false, palette));
 
-            StackPanel right_group;
-            right_group.Orientation(Orientation::Horizontal);
-            right_group.HorizontalAlignment(HorizontalAlignment::Right);
-            right_group.Children().Append(build_footer_icon(L"\u21B5", true, true, palette));
-            right_group.Children().Append(build_footer_icon(L"\u2665", true, true, palette));
-
             footer_grid.Children().Append(left_group);
-            footer_grid.Children().Append(right_group);
             footer.Child(footer_grid);
             return footer;
         }
@@ -786,10 +813,15 @@ private:
 
             Border root;
             root.RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Light);
+            root.UseLayoutRounding(true);
             root.Background(brush(palette.surface));
             root.BorderBrush(brush(palette.border));
             root.BorderThickness(Thickness{1.0, 1.0, 1.0, 1.0});
-            root.CornerRadius(CornerRadius{10.0, 10.0, 10.0, 10.0});
+            root.CornerRadius(CornerRadius{
+                static_cast<double>(CandidateWindow::corner_radius),
+                static_cast<double>(CandidateWindow::corner_radius),
+                static_cast<double>(CandidateWindow::corner_radius),
+                static_cast<double>(CandidateWindow::corner_radius)});
 
             StackPanel surface;
             surface.Orientation(Orientation::Vertical);
@@ -1057,6 +1089,7 @@ private:
     bool can_prev_page_ = false;
     bool can_next_page_ = false;
     bool use_uwp_xaml_popup_ = false;
+    bool uses_system_rounded_corners_ = false;
     UINT current_dpi_ = default_dpi;
     HWND owner_window_ = nullptr;
     XamlIslandHost xaml_island_;

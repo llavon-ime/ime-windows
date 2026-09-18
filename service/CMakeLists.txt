@@ -148,6 +148,7 @@ target_link_libraries(llavon-ime-settings-ui PRIVATE
 target_link_libraries(llavon-ime-candidate-ui PRIVATE
     Microsoft::CppWinRT
     WindowsApp
+    dwmapi
     ole32
     runtimeobject
 )
