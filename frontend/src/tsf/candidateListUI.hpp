@@ -349,7 +349,6 @@ public:
 private:
     inline static constexpr uint32_t page_size = 9;
     inline static constexpr uint32_t expanded_columns = 4;
-    inline static constexpr uint32_t preferred_current_column = 1;
     std::vector<std::wstring> candidates;
     UINT selection_index = 0;
     UINT current_page = 0;
@@ -387,18 +386,11 @@ private:
         UINT visible_pages = 1;
         if (expanded) {
             const UINT pages = page_count();
-            visible_pages = std::min(expanded_columns, pages);
-            if (pages > visible_pages) {
-                if (current_page <= preferred_current_column) {
-                    start_page = 0;
-                } else {
-                    start_page = current_page - preferred_current_column;
-                }
-                const UINT max_start = pages - visible_pages;
-                start_page = std::min(start_page, max_start);
-            } else {
-                start_page = 0;
-            }
+            // Keep each expanded view as a stable group of columns.  The active
+            // page advances from left to right and only replaces the group after
+            // the last column, matching the Microsoft Bopomofo candidate window.
+            start_page = (current_page / expanded_columns) * expanded_columns;
+            visible_pages = std::min(expanded_columns, pages - start_page);
         }
 
         const UINT begin = start_page * page_size;
