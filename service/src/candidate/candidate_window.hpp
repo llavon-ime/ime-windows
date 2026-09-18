@@ -776,6 +776,15 @@ private:
             return host;
         }
 
+        static winrt::Windows::UI::Xaml::UIElement build_emoji_icon(
+            const ThemePalette& palette) {
+            using namespace winrt::Windows::UI::Xaml;
+
+            auto icon = build_footer_icon(L"\u2665", true, true, palette);
+            icon.IsHitTestVisible(false);
+            return icon;
+        }
+
         static winrt::Windows::UI::Xaml::UIElement build_footer(
             std::size_t layout_columns, bool can_prev_page, bool can_next_page, const ThemePalette& palette) {
             using namespace winrt::Windows::UI::Xaml;
@@ -797,7 +806,13 @@ private:
             left_group.Children().Append(
                 build_footer_icon(layout_columns <= 1 ? L"\u25BC" : L"\u25B6", can_next_page, false, palette));
 
+            StackPanel right_group;
+            right_group.Orientation(Orientation::Horizontal);
+            right_group.HorizontalAlignment(HorizontalAlignment::Right);
+            right_group.Children().Append(build_emoji_icon(palette));
+
             footer_grid.Children().Append(left_group);
+            footer_grid.Children().Append(right_group);
             footer.Child(footer_grid);
             return footer;
         }
