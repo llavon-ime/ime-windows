@@ -36,6 +36,7 @@ public:
         bool shift_space_width_toggle_enabled,
         SaveWidthToggleSetting save_width_toggle);
     bool show();
+    bool show_context_menu(POINT location);
 
 private:
     struct DeviceStorage {
@@ -61,9 +62,11 @@ private:
         llavon_settings_save_width_toggle_callback, void*);
     using StartFunction = std::int32_t (*)();
     using ShowFunction = void (*)();
+    using ShowContextMenuFunction = void (*)(std::int32_t, std::int32_t);
     using StopFunction = std::int32_t (*)();
 
     bool load();
+    bool start();
     bool configure_module();
     static std::int32_t save_trampoline(
         void* context, std::int32_t backend, const char16_t* device_id) noexcept;
@@ -78,6 +81,7 @@ private:
     ConfigureFunction configure_ = nullptr;
     StartFunction start_ = nullptr;
     ShowFunction show_ = nullptr;
+    ShowContextMenuFunction show_context_menu_ = nullptr;
     StopFunction stop_ = nullptr;
     std::vector<DeviceStorage> devices_;
     DeviceStorage active_device_;

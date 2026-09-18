@@ -86,6 +86,10 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_start(void);
 LLAVON_SETTINGS_UI_API void llavon_settings_ui_show(void);
 LLAVON_SETTINGS_UI_API void llavon_settings_ui_hide(void);
 
+// Shows the input-mode context menu at a screen-coordinate anchor.
+LLAVON_SETTINGS_UI_API void llavon_settings_ui_show_context_menu(
+    int32_t screen_x, int32_t screen_y);
+
 // Stops and joins the dedicated UI thread. Returns zero when the thread has
 // completed its XAML shutdown sequence.
 LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_stop(void);

@@ -185,7 +185,10 @@ int main(int argc, char* argv[]) {
             });
         llavon::service::TrayIcon tray;
         if (!tray.create(GetModuleHandleW(nullptr), [&settings_ui] { settings_ui.show(); },
-                         [] { launch_debugger(); })) {
+                         [] { launch_debugger(); },
+                         [&settings_ui](POINT location) {
+                             settings_ui.show_context_menu(location);
+                         })) {
             std::cerr << "[WARN] tray initialization failed: " << GetLastError() << '\n';
             return run_server(server);
         }

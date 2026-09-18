@@ -1,6 +1,7 @@
 #include "settings_ui_api.h"
 
 #include "settings_configuration.hpp"
+#include "settings_menu_window.hpp"
 #include "settings_window.hpp"
 
 #include <commctrl.h>
@@ -22,6 +23,7 @@ constexpr wchar_t command_window_class[] = L"LlavonImeSettingsUiCommandWindow";
 constexpr UINT show_message = WM_APP + 1;
 constexpr UINT hide_message = WM_APP + 2;
 constexpr UINT stop_message = WM_APP + 3;
+constexpr UINT show_context_menu_message = WM_APP + 4;
 constexpr DWORD shutdown_timeout_ms = 10000;
 
 class Runtime final {
@@ -149,6 +151,15 @@ public:
         post(hide_message);
     }
 
+    void show_context_menu(std::int32_t screen_x, std::int32_t screen_y) const noexcept {
+        const HWND command_window = command_window_.load(std::memory_order_acquire);
+        if (command_window) {
+            PostMessageW(command_window, show_context_menu_message,
+                         static_cast<WPARAM>(static_cast<std::uint32_t>(screen_x)),
+                         static_cast<LPARAM>(static_cast<std::uint32_t>(screen_y)));
+        }
+    }
+
     int32_t stop() {
         std::lock_guard lock(mutex_);
         if (!thread_) {
@@ -197,6 +208,8 @@ private:
 
             SettingsWindow settings_window(thread_configuration_);
             settings_window_ = &settings_window;
+            SettingsMenuWindow settings_menu([this] { show_on_thread(); });
+            settings_menu_ = &settings_menu;
             const HWND command_window = CreateWindowExW(
                 0, command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
             if (!command_window) {
@@ -209,6 +222,9 @@ private:
 
             MSG message{};
             while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+                if (settings_menu.pretranslate(message)) {
+                    continue;
+                }
                 if (settings_window.pretranslate(message)) {
                     continue;
                 }
@@ -216,8 +232,10 @@ private:
                 DispatchMessageW(&message);
             }
 
+            settings_menu.destroy();
             settings_window.destroy();
             drain_messages();
+            settings_menu_ = nullptr;
             settings_window_ = nullptr;
             command_window_.store(nullptr, std::memory_order_release);
             exit_code = 0;
@@ -235,6 +253,7 @@ private:
             }
         }
 
+        settings_menu_ = nullptr;
         settings_window_ = nullptr;
         command_window_.store(nullptr, std::memory_order_release);
         if (apartment_initialized) {
@@ -259,16 +278,35 @@ private:
 
         try {
             if (message == show_message) {
+                if (self->settings_menu_) {
+                    self->settings_menu_->hide();
+                }
                 self->show_on_thread();
                 return 0;
             }
             if (message == hide_message) {
+                if (self->settings_menu_) {
+                    self->settings_menu_->hide();
+                }
                 if (self->settings_window_) {
                     self->settings_window_->hide();
                 }
                 return 0;
             }
+            if (message == show_context_menu_message) {
+                if (self->settings_menu_) {
+                    const POINT anchor{
+                        static_cast<LONG>(static_cast<DWORD>(wparam)),
+                        static_cast<LONG>(static_cast<DWORD>(lparam)),
+                    };
+                    self->settings_menu_->show(reinterpret_cast<HINSTANCE>(&__ImageBase), anchor);
+                }
+                return 0;
+            }
             if (message == stop_message) {
+                if (self->settings_menu_) {
+                    self->settings_menu_->destroy();
+                }
                 if (self->settings_window_) {
                     self->settings_window_->destroy();
                 }
@@ -318,6 +356,7 @@ private:
     std::atomic<HWND> command_window_{nullptr};
     std::atomic<int32_t> start_result_{ERROR_GEN_FAILURE};
     SettingsWindow* settings_window_ = nullptr;
+    SettingsMenuWindow* settings_menu_ = nullptr;
     SettingsConfiguration configuration_;
     SettingsConfiguration thread_configuration_;
 };
@@ -365,6 +404,11 @@ extern "C" void llavon_settings_ui_show(void) {
 
 extern "C" void llavon_settings_ui_hide(void) {
     llavon::settings::runtime().hide();
+}
+
+extern "C" void llavon_settings_ui_show_context_menu(int32_t screen_x,
+                                                       int32_t screen_y) {
+    llavon::settings::runtime().show_context_menu(screen_x, screen_y);
 }
 
 extern "C" int32_t llavon_settings_ui_stop(void) {

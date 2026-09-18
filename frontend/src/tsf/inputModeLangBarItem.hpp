@@ -21,8 +21,8 @@ class InputModeLangBarItem
       public module_lock_updater {
 public:
     explicit InputModeLangBarItem(std::function<void()> on_click = {},
-                                  std::function<void()> on_open_settings = {});
-    ~InputModeLangBarItem();
+                                  std::function<void()> on_open_settings = {},
+                                  std::function<void(POINT)> on_open_menu = {});
 
     HRESULT add_to_language_bar(ITfThreadMgr* thread_mgr);
     HRESULT remove_from_language_bar(ITfThreadMgr* thread_mgr);
@@ -51,8 +51,7 @@ private:
     winrt::com_ptr<ITfLangBarItemSink> sink_;
     std::function<void()> on_click_;
     std::function<void()> on_open_settings_;
-    HBITMAP settings_menu_bitmap_ = nullptr;
-    HBITMAP settings_menu_mask_ = nullptr;
+    std::function<void(POINT)> on_open_menu_;
     InputMode mode_ = InputMode::Chinese;
     DWORD status_ = 0;
     bool added_ = false;

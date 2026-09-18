@@ -33,10 +33,12 @@ TrayIcon::~TrayIcon() {
 }
 
 bool TrayIcon::create(HINSTANCE instance, OpenSettingsCallback open_settings,
-                      OpenDebuggerCallback open_debugger) {
+                      OpenDebuggerCallback open_debugger,
+                      ShowInputModeMenuCallback show_input_mode_menu) {
     instance_ = instance;
     open_settings_ = std::move(open_settings);
     open_debugger_ = std::move(open_debugger);
+    show_input_mode_menu_ = std::move(show_input_mode_menu);
 
     WNDCLASSEXW window_class{sizeof(window_class)};
     window_class.lpfnWndProc = window_proc;
@@ -48,6 +50,7 @@ bool TrayIcon::create(HINSTANCE instance, OpenSettingsCallback open_settings,
 
     taskbar_created_message_ = RegisterWindowMessageW(L"TaskbarCreated");
     open_settings_message_ = RegisterWindowMessageW(L"LlavonIme.OpenSettings");
+    show_input_mode_menu_message_ = RegisterWindowMessageW(L"LlavonIme.ShowInputModeMenu");
     window_ = CreateWindowExW(WS_EX_TOOLWINDOW, tray_window_class, L"Llavon IME Service",
                               WS_OVERLAPPED, 0, 0, 0, 0, nullptr, nullptr, instance_, this);
     notification_window_.store(window_, std::memory_order_release);
@@ -97,6 +100,16 @@ LRESULT CALLBACK TrayIcon::window_proc(HWND window, UINT message, WPARAM wparam,
 LRESULT TrayIcon::handle_message(UINT message, WPARAM wparam, LPARAM lparam) {
     if (open_settings_message_ != 0 && message == open_settings_message_) {
         open_settings();
+        return 0;
+    }
+    if (show_input_mode_menu_message_ != 0 && message == show_input_mode_menu_message_) {
+        if (show_input_mode_menu_) {
+            const POINT location{
+                static_cast<LONG>(static_cast<DWORD>(wparam)),
+                static_cast<LONG>(static_cast<DWORD>(lparam)),
+            };
+            show_input_mode_menu_(location);
+        }
         return 0;
     }
 

@@ -151,6 +151,24 @@ SettingsUiLoader::~SettingsUiLoader() {
 }
 
 bool SettingsUiLoader::show() {
+    if (!start()) {
+        return false;
+    }
+
+    show_();
+    return true;
+}
+
+bool SettingsUiLoader::show_context_menu(POINT location) {
+    if (!start()) {
+        return false;
+    }
+
+    show_context_menu_(location.x, location.y);
+    return true;
+}
+
+bool SettingsUiLoader::start() {
     if (!load()) {
         report_error(L"The settings UI module could not be loaded.");
         return false;
@@ -163,8 +181,6 @@ bool SettingsUiLoader::show() {
         }
         started_ = true;
     }
-
-    show_();
     return true;
 }
 
@@ -187,13 +203,17 @@ bool SettingsUiLoader::load() {
     start_ = resolve<StartFunction>(module_, "llavon_settings_ui_start");
     configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure");
     show_ = resolve<ShowFunction>(module_, "llavon_settings_ui_show");
+    show_context_menu_ =
+        resolve<ShowContextMenuFunction>(module_, "llavon_settings_ui_show_context_menu");
     stop_ = resolve<StopFunction>(module_, "llavon_settings_ui_stop");
-    if (!configure_ || !start_ || !show_ || !stop_ || !configure_module()) {
+    if (!configure_ || !start_ || !show_ || !show_context_menu_ || !stop_ ||
+        !configure_module()) {
         FreeLibrary(module_);
         module_ = nullptr;
         configure_ = nullptr;
         start_ = nullptr;
         show_ = nullptr;
+        show_context_menu_ = nullptr;
         stop_ = nullptr;
         return false;
     }

@@ -75,6 +75,26 @@ void request_settings_window() noexcept {
     PostMessageW(service_window, message, 0, 0);
 }
 
+void request_settings_menu(POINT location) noexcept {
+    constexpr wchar_t service_window_class[] = L"LlavonImeServiceTrayWindow";
+    constexpr wchar_t show_menu_message_name[] = L"LlavonIme.ShowInputModeMenu";
+
+    const HWND service_window = FindWindowW(service_window_class, nullptr);
+    const UINT message = RegisterWindowMessageW(show_menu_message_name);
+    if (!service_window || message == 0) {
+        return;
+    }
+
+    DWORD service_process_id = 0;
+    GetWindowThreadProcessId(service_window, &service_process_id);
+    if (service_process_id != 0) {
+        AllowSetForegroundWindow(service_process_id);
+    }
+    PostMessageW(service_window, message,
+                 static_cast<WPARAM>(static_cast<std::uint32_t>(location.x)),
+                 static_cast<LPARAM>(static_cast<std::uint32_t>(location.y)));
+}
+
 std::u16string to_full_width_ascii(std::u16string_view text) {
     std::u16string result;
     result.reserve(text.size());
@@ -577,7 +597,8 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
             get_engine()->toggle_input_mode();
             refresh_input_mode_indicator();
         },
-        [] { request_settings_window(); });
+        [] { request_settings_window(); },
+        [](POINT location) { request_settings_menu(location); });
     input_mode_lang_bar_item_->add_to_language_bar(threadMgr.get());
     refresh_input_mode_indicator();
 

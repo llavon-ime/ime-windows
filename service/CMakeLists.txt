@@ -41,6 +41,8 @@ add_library(llavon-ime-candidate-ui SHARED
 
 add_library(llavon-ime-settings-ui SHARED
     src/settings/settings_configuration.hpp
+    src/settings/settings_menu_window.cpp
+    src/settings/settings_menu_window.hpp
     src/settings/settings_runtime.cpp
     src/settings/settings_ui_api.h
     src/settings/settings_window.cpp
