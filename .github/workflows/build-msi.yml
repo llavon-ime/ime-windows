@@ -110,7 +110,7 @@ jobs:
             Remove-Item -LiteralPath $modelPath
           }
 
-          $modelUrl = "https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF/resolve/$($env:MODEL_REVISION)/$modelFilename?download=true"
+          $modelUrl = "https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF/resolve/$($env:MODEL_REVISION)/${modelFilename}?download=true"
           try {
             Invoke-WebRequest -Uri $modelUrl -OutFile $partialPath
             $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $partialPath).Hash.ToLowerInvariant()
