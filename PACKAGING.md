@@ -1,7 +1,7 @@
 # Packaging
 
 The top-level CMake project configures every Windows executable and DLL in one
-build graph, downloads the packaged model, then creates a Windows MSI with
+build graph, obtains the latest packaged model, then creates a Windows MSI with
 CPack and WiX. The cross-platform `ime-core` repository remains a submodule,
 but participates in this build as a normal static-library target.
 
@@ -16,6 +16,11 @@ packaging. It also installs the WiX UI extension into a build-local extension
 cache, so no global WiX installation is required.
 
 ## Build MSI
+
+For local packaging, CMake resolves the current Hugging Face `main` revision
+and downloads the model when that revision differs from the recorded local
+revision. CMake does not perform SHA-256 verification. The GitHub Actions
+workflow separately handles cache invalidation and SHA-256 verification for CI.
 
 ```powershell
 cmake --preset windows
@@ -43,7 +48,9 @@ The package target performs these steps:
 - Collects vcpkg package license files from the unified manifest installation.
 - Includes the model attribution and CC BY-NC 4.0 terms in the MSI license
   agreement and as a separately installed license file.
-- Downloads `llavon-ime-llama-250m-Q4_K_M.gguf` from the hard-coded Hugging Face URL.
+- Locally, resolves the current Hugging Face revision and downloads the model
+  when it changes. In CI, keys the model cache by its LFS SHA-256 and verifies
+  the downloaded file before CMake runs.
 - Packages `bin`, `tables`, `models`, and `licenses` into an x64 per-machine MSI.
 - Registers `llavon-ime.dll` with `regsvr32` during install and unregisters it during uninstall.
 - Adds a per-machine startup entry for the backend service and removes it during uninstall.

@@ -111,7 +111,7 @@ cmake --build --preset package --parallel
 build/windows/llavon-ime-0.1.0-windows.msi
 ```
 
-首次打包時會從網路下載模型、vcpkg 相依套件及 WiX 工具，因此需要可用的網路連線。
+本機打包時會檢查 Hugging Face 上的最新模型 revision，revision 更新時會重新下載模型。GitHub Actions 另會使用 SHA-256 管理及驗證模型 cache；首次打包也會從網路下載 vcpkg 相依套件及 WiX 工具。
 
 ## 授權
 

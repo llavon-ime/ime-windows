@@ -34,27 +34,96 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Resolve vcpkg cache identity
+        id: vcpkg-cache
+        shell: pwsh
+        run: |
+          $imageVersion = $env:ImageVersion
+          if ($imageVersion -notmatch '^[0-9A-Za-z._-]+$') {
+            throw "GitHub runner did not provide a valid ImageVersion: $imageVersion"
+          }
+
+          $vcpkgRevision = (& git -C vcpkg rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $vcpkgRevision -notmatch '^[0-9a-f]{40}$') {
+            throw "Could not resolve the vcpkg submodule revision: $vcpkgRevision"
+          }
+
+          "image=$imageVersion" >> $env:GITHUB_OUTPUT
+          "revision=$vcpkgRevision" >> $env:GITHUB_OUTPUT
+
       - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
           path: |
             .vcpkg-cache
             vcpkg/downloads
-          key: ${{ runner.os }}-vcpkg-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json') }}
-          restore-keys: |
-            ${{ runner.os }}-vcpkg-x64-windows-cpu-dispatch-
+          key: v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-cache.outputs.image }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json') }}
+
+      - name: Resolve model metadata
+        id: model
+        shell: pwsh
+        run: |
+          $metadataUrl = 'https://huggingface.co/api/models/tony65535/llavon-ime-llama-250m-GGUF/revision/main?blobs=true'
+          $modelFilename = 'llavon-ime-llama-250m-Q4_K_M.gguf'
+          $metadata = Invoke-RestMethod -Uri $metadataUrl
+          $model = @($metadata.siblings | Where-Object rfilename -EQ $modelFilename)
+
+          if ($metadata.sha -notmatch '^[0-9a-f]{40}$') {
+            throw "Hugging Face returned an invalid model revision: $($metadata.sha)"
+          }
+          if ($model.Count -ne 1 -or $model[0].lfs.sha256 -notmatch '^[0-9a-f]{64}$') {
+            throw "Hugging Face did not return one valid LFS SHA-256 for $modelFilename"
+          }
+
+          "revision=$($metadata.sha)" >> $env:GITHUB_OUTPUT
+          "sha256=$($model[0].lfs.sha256)" >> $env:GITHUB_OUTPUT
 
       - name: Cache model download
         uses: actions/cache@v4
         with:
           path: build/windows/downloads
-          key: ${{ runner.os }}-model-${{ hashFiles('CMakeLists.txt', 'cmake/DownloadModel.cmake') }}
-          restore-keys: |
-            ${{ runner.os }}-model-
+          key: ${{ runner.os }}-model-${{ steps.model.outputs.sha256 }}
 
       - name: Create cache directories
         shell: pwsh
         run: New-Item -ItemType Directory -Force .vcpkg-cache, build/windows/downloads | Out-Null
+
+      - name: Prepare verified model
+        shell: pwsh
+        env:
+          MODEL_REVISION: ${{ steps.model.outputs.revision }}
+          MODEL_SHA256: ${{ steps.model.outputs.sha256 }}
+        run: |
+          $modelFilename = 'llavon-ime-llama-250m-Q4_K_M.gguf'
+          $modelPath = Join-Path $PWD "build/windows/downloads/$modelFilename"
+          $revisionPath = "$modelPath.revision"
+          $partialPath = "$modelPath.partial"
+          $expectedSha256 = $env:MODEL_SHA256.ToLowerInvariant()
+
+          if (Test-Path -LiteralPath $modelPath) {
+            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $modelPath).Hash.ToLowerInvariant()
+            if ($actualSha256 -eq $expectedSha256) {
+              Set-Content -LiteralPath $revisionPath -Value $env:MODEL_REVISION -NoNewline
+              Write-Host "Model cache verified: $modelPath"
+              return
+            }
+            Remove-Item -LiteralPath $modelPath
+          }
+
+          $modelUrl = "https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF/resolve/$($env:MODEL_REVISION)/$modelFilename?download=true"
+          try {
+            Invoke-WebRequest -Uri $modelUrl -OutFile $partialPath
+            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $partialPath).Hash.ToLowerInvariant()
+            if ($actualSha256 -ne $expectedSha256) {
+              throw "Downloaded model SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
+            }
+            Move-Item -LiteralPath $partialPath -Destination $modelPath -Force
+            Set-Content -LiteralPath $revisionPath -Value $env:MODEL_REVISION -NoNewline
+          } finally {
+            if (Test-Path -LiteralPath $partialPath) {
+              Remove-Item -LiteralPath $partialPath
+            }
+          }
 
       - name: Bootstrap vcpkg
         shell: pwsh
@@ -62,7 +131,10 @@ jobs:
 
       - name: Configure
         shell: pwsh
-        run: cmake --preset windows -DVCPKG_TARGET_TRIPLET=x64-windows-cpu-dispatch
+        run: >-
+          cmake --preset windows
+          -DVCPKG_TARGET_TRIPLET=x64-windows-cpu-dispatch
+          "-DLLAVON_IME_MODEL_REVISION=${{ steps.model.outputs.revision }}"
 
       - name: Build MSI
         shell: pwsh

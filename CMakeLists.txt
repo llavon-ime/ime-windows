@@ -70,18 +70,22 @@ endif()
 set(IME_WINDOWS_SERVICE_BUILD_COMMIT "${LLAVON_IME_BUILD_COMMIT}")
 set(IME_WINDOWS_SERVICE_BUILD_NUMBER "${LLAVON_IME_BUILD_NUMBER}")
 
-set(LLAVON_IME_MODEL_URL
-    "https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF/resolve/main/llavon-ime-llama-250m-Q4_K_M.gguf?download=true"
+set(LLAVON_IME_MODEL_REPO
+    "tony65535/llavon-ime-llama-250m-GGUF"
     CACHE STRING
-    "Model URL packaged with the installer"
+    "Hugging Face repository containing the packaged model"
+)
+set(LLAVON_IME_MODEL_REVISION
+    ""
+    CACHE STRING
+    "Optional pre-resolved Hugging Face model revision"
 )
 set(LLAVON_IME_MODEL_FILENAME "llavon-ime-llama-250m-Q4_K_M.gguf")
-set(LLAVON_IME_DOWNLOAD_DIR
-    "${CMAKE_CURRENT_BINARY_DIR}/downloads"
-    CACHE PATH
-    "Directory used to cache downloaded package inputs"
+set(LLAVON_IME_MODEL_PATH
+    "${CMAKE_CURRENT_BINARY_DIR}/downloads/${LLAVON_IME_MODEL_FILENAME}"
+    CACHE FILEPATH
+    "Model file to include in the package"
 )
-set(LLAVON_IME_MODEL_PATH "${LLAVON_IME_DOWNLOAD_DIR}/${LLAVON_IME_MODEL_FILENAME}")
 
 set(LLAVON_IME_WIX_VERSION "4.0.4" CACHE STRING "WiX .NET tool version used by CPack")
 set(LLAVON_IME_WIX_UI_EXTENSION_VERSION "4.0.4" CACHE STRING "WiX UI extension version used by CPack")
@@ -174,17 +178,20 @@ add_custom_target(llavon-ime-vcpkg-licenses
         "${LLAVON_IME_VCPKG_LICENSE_MARKER}"
 )
 
-add_custom_command(
-    OUTPUT "${LLAVON_IME_MODEL_PATH}"
+add_custom_target(llavon-ime-model
     COMMAND
         "${CMAKE_COMMAND}"
-            "-DLLAVON_IME_MODEL_URL=${LLAVON_IME_MODEL_URL}"
+            "-DLLAVON_IME_MODEL_REPO=${LLAVON_IME_MODEL_REPO}"
+            "-DLLAVON_IME_MODEL_REVISION=${LLAVON_IME_MODEL_REVISION}"
+            "-DLLAVON_IME_MODEL_FILENAME=${LLAVON_IME_MODEL_FILENAME}"
             "-DLLAVON_IME_MODEL_PATH=${LLAVON_IME_MODEL_PATH}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/DownloadModel.cmake"
-    COMMENT "Downloading ${LLAVON_IME_MODEL_FILENAME}"
+    BYPRODUCTS
+        "${LLAVON_IME_MODEL_PATH}"
+        "${LLAVON_IME_MODEL_PATH}.revision"
+    COMMENT "Ensuring the latest ${LLAVON_IME_MODEL_FILENAME}"
     VERBATIM
 )
-add_custom_target(llavon-ime-model DEPENDS "${LLAVON_IME_MODEL_PATH}")
 
 add_custom_command(
     OUTPUT
