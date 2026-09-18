@@ -1,36 +1,80 @@
 # 拉風輸入法（Windows）
 
-拉風輸入法（Llavon IME）是一套採用大型語言模型技術棧打造的端到端 Windows 注音輸入法，涵蓋專用語言模型、本機推論引擎、Windows TSF 前端與安裝部署，而不是將一般聊天模型或雲端 API 簡單接到傳統輸入法上。
+拉風輸入法（Llavon IME）是一套專為繁體中文注音輸入打造的 Windows 輸入法。它使用約 2.5 億參數的語言模型，根據前文與注音內容預測更合適的文字，同時確保候選字符合輸入的讀音。
 
-相較於主要依靠靜態詞庫、固定詞頻與人工規則的傳統選字方式，拉風輸入法使用約 2.5 億參數、為繁體中文注音輸入訓練的 LLaMA 架構模型，將前文語境、注音序列與已選文字一併納入預測。推論結果仍受合法注音候選集合約束，因此能結合神經語言模型的上下文理解能力與輸入法所需的讀音正確性。
+所有輸入內容與模型推論都在電腦本機完成，不需要連線至雲端，也不會為了選字而上傳正在輸入的文字。
 
-模型以 GGUF 量化格式透過 llama.cpp 完全在本機執行，支援 CPU 推論與可用時的 GPU offload，不需要將輸入內容傳送至雲端。原生 TSF DLL 與背景模型服務彼此分離，兼顧 Windows 應用程式相容性、推論資源管理與後續替換模型的彈性。目前專案仍在開發階段。
+> [!IMPORTANT]
+> 本專案仍在早期開發階段，功能、操作方式及安裝流程都可能變動。目前僅支援 x64 版本的 Windows 10 或更新版本。
 
-## 專案組成
+## 專案特點
 
-- `frontend`：Windows TSF 輸入法前端，負責組字、選字狀態、TSF 整合與輸入法註冊。
-- `service`：Windows Named Pipe 背景服務，負責程序生命週期、IPC、候選字視窗與 Windows 執行環境整合。
-- `ime-core`：頂層 submodule 與跨平台 C++ 推論函式庫，負責 GGUF 模型載入、tokenization 與 llama.cpp 推論。
-- 設定介面：由 `service` 內的 `llavon-ime-settings-ui.dll` 提供，使用獨立 STA thread 與 XAML Island，並由常駐 service 的系統匣按需載入；不再新增設定用 EXE。
-- 候選字介面：由 `service` 內的 `llavon-ime-candidate-ui.dll` 提供，使用自己的 STA thread、HWND 與 XAML Island；TSF frontend 透過獨立的 `\\.\pipe\llavon-ime-candidate-ui` 傳送呈現快照。
-- `debugger`：提供獨立的 `llavon-ime-debugger.exe` 與共用 producer library。Debugger 擁有 `\\.\pipe\llavon-ime-debugger` multi-client server，service 與各個 TSF frontend host process 都是 client。
-- `cmake`：模型下載、WiX 安裝檔與第三方授權檔案的建置腳本。
-
-前端與背景服務的推論／輸入模式通訊使用 Windows Named Pipe `\\.\pipe\llavon-ime`，候選字介面則使用完全獨立的 `\\.\pipe\llavon-ime-candidate-ui`。所有 Windows targets 由頂層 CMake 統一建置；`ime-core` 的版本由根目錄 submodule pointer 鎖定。
-
-## 模型
-
-本專案預設使用 Hugging Face 上的 [`llavon-ime-llama-250m-Q4_K_M.gguf`](https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF/blob/main/llavon-ime-llama-250m-Q4_K_M.gguf)。建立 MSI 安裝檔時，建置系統會自動下載這個模型；其他版本與相關資訊可在 [`llavon-ime-llama-250m-GGUF`](https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF) 模型頁查看。
-
-模型權重另依 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/deed.zh-hant) 授權，僅限非商業用途，使用或散布時須註明來源；此授權與本專案程式碼的 BSD 2-Clause License 分開適用。
+- **理解上下文的選字**：依據前後文、注音序列與已選文字預測候選字，不只依靠固定詞頻。
+- **專為注音輸入訓練**：採用專用繁體中文注音模型，而非將一般聊天模型直接接到傳統輸入法。
+- **完全本機運作**：模型與推論引擎皆在本機執行，輸入內容無須傳送至雲端。
+- **熟悉的操作方式**：使用標準注音鍵盤配置，選字操作力求與微軟注音相似。
+- **可自訂常用名字**：可在設定中加入名字及其注音，改善人名輸入結果。
+- **推論裝置設定**：可查看目前使用的推論裝置，並依電腦環境選擇自動、CPU 或可用的 GPU 後端。
+- **內建更新檢查**：可從設定視窗檢查是否有新的測試版本。
 
 ## 安裝
 
-可從本專案的 [最新版本](../../releases/tag/latest) 下載 MSI 安裝檔。安裝程式會註冊輸入法並設定背景服務隨 Windows 啟動；安裝完成後，可至 Windows 的語言與鍵盤設定加入拉風輸入法。
+1. 前往 [最新版本下載頁面](https://github.com/llavon-ime/ime-windows/releases/tag/latest)。
+2. 下載副檔名為 `.msi` 的安裝檔。
+3. 執行安裝檔並依畫面指示完成安裝。這是全系統安裝，Windows 可能會要求系統管理員權限。
+4. 安裝完成後，按 `Windows 鍵 + 空白鍵`，或點選工作列右下角的輸入法選單，切換至「拉風輸入法」。
 
-> 本專案仍在早期開發階段，功能、操作方式及安裝流程都可能變動。
+如果選單中沒有出現拉風輸入法，可前往 Windows 的「設定」→「時間與語言」→「語言與地區」，在繁體中文的鍵盤選項中確認輸入法是否已加入。
 
-## 從原始碼建置
+## 使用方式
+
+切換至拉風輸入法後，即可使用標準注音鍵盤輸入。候選字與選字操作力求與微軟注音相似，熟悉微軟注音的使用者可以直接開始輸入。
+
+- 單按 `Shift` 可切換中文與英文輸入模式。
+- 工作列上的「中／英」輸入模式圖示也可以用來切換模式。
+- 按住 `Shift` 輸入時，可暫時輸入英文；放開後會回到原本的中文模式。
+- 如需使用 `Shift + 空白鍵` 切換全形／半形，可先在設定視窗中開啟這項功能。
+
+首次使用時，背景服務需要載入本機模型，開始輸入前可能需要稍候片刻。
+
+## 開啟設定
+
+安裝後，Windows 系統匣會顯示「拉風輸入法」圖示。可用以下任一方式開啟設定視窗：
+
+- 雙擊系統匣中的「拉風輸入法」圖示。
+- 右鍵點擊該系統匣圖示，再選擇「開啟設定」。
+- 右鍵點擊工作列上的「中／英」輸入模式圖示，再選擇「設定」。
+
+如果圖示沒有直接顯示，請先展開工作列右下角的隱藏圖示區域。設定視窗目前提供：
+
+- 選擇推論裝置。
+- 開啟或關閉 `Shift + 空白鍵` 全形／半形切換。
+- 新增、修改與移除自訂名字及其注音。
+- 查看目前版本並檢查更新。
+
+## 解除安裝
+
+可從 Windows「設定」→「應用程式」→「已安裝的應用程式」解除安裝拉風輸入法，也可使用開始功能表「Llavon IME」資料夾中的解除安裝捷徑。
+
+## 模型與隱私
+
+本專案預設使用 [`llavon-ime-llama-250m-Q4_K_M.gguf`](https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF/blob/main/llavon-ime-llama-250m-Q4_K_M.gguf)。模型以 GGUF 量化格式透過 llama.cpp 在本機執行；其他版本與相關資訊可在 [`llavon-ime-llama-250m-GGUF`](https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF) 模型頁查看。
+
+模型權重另依 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/deed.zh-hant) 授權，僅限非商業用途，使用或散布時須註明來源；此授權與本專案程式碼的 BSD 2-Clause License 分開適用。
+
+## 開發者資訊
+
+專案主要分為以下元件：
+
+- `frontend`：Windows TSF 輸入法前端，負責組字、選字狀態與輸入法註冊。
+- `service`：本機背景服務，負責模型推論、設定視窗、候選字視窗與程序生命週期。
+- `ime-core`：跨平台 C++ 推論函式庫，負責模型載入、tokenization 與 llama.cpp 推論。
+- `debugger`：供開發與診斷使用的多程序記錄檢視器。
+- `cmake`：模型下載、WiX 安裝檔與第三方授權檔案的建置腳本。
+
+前端與背景服務透過 Windows Named Pipe 通訊，Windows targets 則由頂層 CMake 統一建置。更完整的打包與執行路徑說明請參考 [PACKAGING.md](PACKAGING.md)。
+
+### 從原始碼建置
 
 建置環境需要：
 
@@ -67,7 +111,7 @@ cmake --build --preset package --parallel
 build/windows/llavon-ime-0.1.0-windows.msi
 ```
 
-首次打包時會從網路下載模型、vcpkg 相依套件及 WiX 工具，因此需要可用的網路連線。更完整的打包與執行路徑說明請參考 [PACKAGING.md](PACKAGING.md)。
+首次打包時會從網路下載模型、vcpkg 相依套件及 WiX 工具，因此需要可用的網路連線。
 
 ## 授權
 
