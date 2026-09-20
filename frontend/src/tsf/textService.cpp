@@ -1426,26 +1426,25 @@ HRESULT TextService::start_composition(ITfContext* pContext) {
  */
 HRESULT TextService::end_composition(ITfContext* pContext) {
     candidate_ui_->hide();
+    if (!pContext) return E_INVALIDARG;
     if (!itfComposition) {
         clear_composition_state();
         return S_OK;
     }
 
-    const std::u16string text = compositionBuffer.to_string();
     winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
-    editSession->set_operation([this, pContext, text](TfEditCookie ec) {
+    editSession->set_operation([this, pContext](TfEditCookie ec) {
         before_return cleanup([this]() { clear_composition_state(); });
         if (itfComposition) {
+            // The composition range already contains the final text. Rewriting it
+            // here makes Chromium treat the commit as a replacement operation,
+            // which can delete adjacent text around contenteditable boundaries.
             winrt::com_ptr<ITfRange> range;
             itfComposition->GetRange(range.put()) | win::check();
-            range->SetText(ec, 0, convu16(text.data()), static_cast<LONG>(text.size())) | win::check();
 
             winrt::com_ptr<ITfRange> caret_range;
             range->Clone(caret_range.put()) | win::check();
             caret_range->Collapse(ec, TF_ANCHOR_END) | win::check();
-
-            itfComposition->EndComposition(ec) | win::check();
-            itfComposition = nullptr;
 
             TF_SELECTION selection = {};
             selection.range = caret_range.get();
@@ -1453,14 +1452,23 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
             selection.style.fInterimChar = FALSE;
             pContext->SetSelection(ec, 1, &selection) | win::check();
 
+            // EndComposition only clears GUID_PROP_COMPOSING. The display
+            // attribute is owned by this text service and must be removed here.
+            winrt::com_ptr<ITfProperty> attribute_property;
+            if (SUCCEEDED(pContext->GetProperty(GUID_PROP_ATTRIBUTE, attribute_property.put()))) {
+                attribute_property->Clear(ec, range.get());
+            }
+
+            auto composition = itfComposition;
+            composition->EndComposition(ec) | win::check();
+            itfComposition = nullptr;
         }
     });
 
-    HRESULT hrSession;
-    pContext->RequestEditSession(_tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &hrSession) |
-        win::check();
-
-    return S_OK;
+    HRESULT session_hr = E_FAIL;
+    const HRESULT request_hr = pContext->RequestEditSession(
+        _tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &session_hr);
+    return FAILED(request_hr) ? request_hr : session_hr;
 }
 
 HRESULT TextService::discard_composition(ITfContext* pContext) {
