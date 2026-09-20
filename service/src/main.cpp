@@ -25,6 +25,37 @@ namespace {
 constexpr const wchar_t* kModelFilename = L"llavon-ime-llama-250m-Q4_K_M.gguf";
 constexpr const wchar_t* kModelPathEnv = L"LLAVON_IME_MODEL_PATH";
 constexpr const wchar_t* kTablesDirEnv = L"LLAVON_IME_TABLES_DIR";
+constexpr const wchar_t* kServiceInstanceMutexName = L"Local\\LlavonImeServiceInstance";
+
+class ServiceInstanceLock {
+public:
+    ServiceInstanceLock() {
+        handle_ = CreateMutexW(nullptr, TRUE, kServiceInstanceMutexName);
+        if (!handle_) {
+            throw std::runtime_error(
+                "failed to create service instance mutex: " + std::to_string(GetLastError()));
+        }
+
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+            CloseHandle(handle_);
+            handle_ = nullptr;
+        }
+    }
+
+    ~ServiceInstanceLock() {
+        if (!handle_) return;
+        ReleaseMutex(handle_);
+        CloseHandle(handle_);
+    }
+
+    ServiceInstanceLock(const ServiceInstanceLock&) = delete;
+    ServiceInstanceLock& operator=(const ServiceInstanceLock&) = delete;
+
+    bool owns_instance() const noexcept { return handle_ != nullptr; }
+
+private:
+    HANDLE handle_ = nullptr;
+};
 
 void print_usage(const char* executable) {
     std::cerr << "Usage: " << executable << " [<model-path> <tables-dir>]\n";
@@ -127,12 +158,19 @@ int run_server(
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    std::clog << "[SRV] IME Windows Service starting\n";
     try {
         if (argc == 2 && std::string(argv[1]) == "--help") {
             print_usage(argv[0]);
             return 0;
         }
+
+        ServiceInstanceLock instance_lock;
+        if (!instance_lock.owns_instance()) {
+            std::clog << "[SRV] IME Windows Service already running; exiting\n";
+            return 0;
+        }
+
+        std::clog << "[SRV] IME Windows Service starting\n";
 
         auto config = parse_core_config(argc, argv);
         config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
