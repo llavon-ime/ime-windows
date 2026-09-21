@@ -39,11 +39,11 @@
       ExeCommand="&quot;[System64Folder]regsvr32.exe&quot; /u /s &quot;[INSTALL_ROOT]bin\llavon-ime.dll&quot;" />
     <CustomAction
       Id="RestartLlavonImeService"
-      Directory="INSTALL_ROOT"
-      ExeCommand="&quot;[SystemFolder]wscript.exe&quot; &quot;[INSTALL_ROOT]bin\start-llavon-ime-service.vbs&quot;"
+      BinaryRef="LlavonImeLifecycleHelper"
+      ExeCommand="start-service &quot;[INSTALL_ROOT]bin\llavon-ime-service.exe&quot;"
       Execute="immediate"
       Impersonate="yes"
-      Return="asyncNoWait" />
+      Return="check" />
     <InstallExecuteSequence>
       <Custom Action="ReleaseLlavonImeForUpgrade" After="InstallValidate"
               Condition="WIX_UPGRADE_DETECTED" />

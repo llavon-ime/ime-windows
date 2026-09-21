@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "system/globals.h"
+#include "system/serviceLauncher.hpp"
 
 namespace {
 
@@ -270,15 +271,23 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     wchar_t** arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count);
     if (!arguments || argument_count != 3 ||
         (std::wstring_view(arguments[1]) != L"prepare-update" &&
-         std::wstring_view(arguments[1]) != L"prepare-uninstall")) {
+         std::wstring_view(arguments[1]) != L"prepare-uninstall" &&
+         std::wstring_view(arguments[1]) != L"start-service")) {
         if (arguments) {
             LocalFree(arguments);
         }
         return ERROR_INVALID_PARAMETER;
     }
 
+    const std::wstring operation = arguments[1];
     const std::wstring service_path = arguments[2];
     LocalFree(arguments);
+
+    if (operation == L"start-service") {
+        return tsf::launch_process_with_shell_parent(service_path)
+                   ? ERROR_SUCCESS
+                   : ERROR_PROCESS_ABORTED;
+    }
 
     const HRESULT stop_result = stop_service(service_path);
     if (FAILED(stop_result)) {

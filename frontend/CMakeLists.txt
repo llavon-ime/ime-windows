@@ -6,7 +6,10 @@ set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/ime.def")
 include_directories(src)
 
 add_library(llavon-ime SHARED ${SOURCES} ${HEADERS} ${RESOURCES} ${DEF_FILE})
-add_executable(llavon-ime-lifecycle WIN32 tools/tsf_lifecycle.cpp)
+add_executable(llavon-ime-lifecycle WIN32
+    tools/tsf_lifecycle.cpp
+    src/system/serviceLauncher.cpp
+)
 target_compile_features(llavon-ime PRIVATE cxx_std_23)
 target_compile_features(llavon-ime-lifecycle PRIVATE cxx_std_23)
 set_target_properties(llavon-ime PROPERTIES

@@ -41,7 +41,6 @@ private:
     bool ensure_pipe();
     bool connect_pipe();
     bool retry_connect_pipe();
-    bool launch_backend() const;
     bool write_command(Command command);
     bool write_bytes(const void* data, DWORD size);
 
@@ -51,7 +50,6 @@ private:
     }
 
     static constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime-candidate-ui";
-    static constexpr const wchar_t* launch_mutex_name = L"Local\\LlavonImeBackendStart";
     static constexpr uint16_t protocol_version = 3;
     static constexpr uint32_t maximum_candidate_count = 36;
     static constexpr uint32_t maximum_candidate_length = 256;

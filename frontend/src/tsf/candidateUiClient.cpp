@@ -1,66 +1,10 @@
 #include "candidateUiClient.hpp"
 
-#include "system/globals.h"
+#include "system/serviceLauncher.hpp"
 
-#include <filesystem>
-#include <optional>
 #include <string>
 
 namespace tsf {
-namespace {
-
-std::optional<std::filesystem::path> module_directory() {
-    if (!Globals::hinstance) {
-        return std::nullopt;
-    }
-
-    std::wstring buffer(MAX_PATH, L'\0');
-    for (;;) {
-        const DWORD copied = GetModuleFileNameW(
-            Globals::hinstance, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (copied == 0) {
-            return std::nullopt;
-        }
-        if (copied < buffer.size() - 1) {
-            buffer.resize(copied);
-            return std::filesystem::path(buffer).parent_path();
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-}
-
-std::optional<std::filesystem::path> environment_path(const wchar_t* name) {
-    const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
-    if (required == 0) {
-        return std::nullopt;
-    }
-
-    std::wstring value(required, L'\0');
-    const DWORD copied = GetEnvironmentVariableW(name, value.data(), required);
-    if (copied == 0) {
-        return std::nullopt;
-    }
-    value.resize(copied);
-    return std::filesystem::path(value);
-}
-
-std::optional<std::filesystem::path> service_executable_path() {
-    std::error_code error;
-    if (auto configured = environment_path(L"LLAVON_IME_SERVICE_PATH")) {
-        if (std::filesystem::is_regular_file(*configured, error)) {
-            return configured;
-        }
-    }
-    if (auto directory = module_directory()) {
-        auto candidate = *directory / "llavon-ime-service.exe";
-        if (std::filesystem::is_regular_file(candidate, error)) {
-            return candidate;
-        }
-    }
-    return std::nullopt;
-}
-
-}  // namespace
 
 CandidateUiClient::~CandidateUiClient() {
     hide();
@@ -134,9 +78,9 @@ bool CandidateUiClient::ensure_pipe() {
         return true;
     }
 
-    HANDLE launch_mutex = CreateMutexW(nullptr, FALSE, launch_mutex_name);
+    HANDLE launch_mutex = CreateMutexW(nullptr, FALSE, service_launch_mutex_name);
     if (!launch_mutex) {
-        launch_backend();
+        launch_service_backend();
         return retry_connect_pipe();
     }
 
@@ -144,7 +88,7 @@ bool CandidateUiClient::ensure_pipe() {
     const bool owns_launch = wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED;
     if (owns_launch) {
         if (!connect_pipe()) {
-            launch_backend();
+            launch_service_backend();
         }
         const bool connected = retry_connect_pipe();
         ReleaseMutex(launch_mutex);
@@ -172,30 +116,6 @@ bool CandidateUiClient::retry_connect_pipe() {
         Sleep(100);
     }
     return false;
-}
-
-bool CandidateUiClient::launch_backend() const {
-    const auto executable = service_executable_path();
-    if (!executable) {
-        return false;
-    }
-
-    std::wstring command_line = L"\"" + executable->wstring() + L"\"";
-    const std::wstring working_directory = executable->parent_path().wstring();
-    STARTUPINFOW startup_info{};
-    startup_info.cb = sizeof(startup_info);
-    PROCESS_INFORMATION process_info{};
-    const BOOL created = CreateProcessW(
-        nullptr, command_line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
-        working_directory.empty() ? nullptr : working_directory.c_str(), &startup_info,
-        &process_info);
-    if (!created) {
-        return false;
-    }
-
-    CloseHandle(process_info.hThread);
-    CloseHandle(process_info.hProcess);
-    return true;
 }
 
 bool CandidateUiClient::write_command(Command command) {
