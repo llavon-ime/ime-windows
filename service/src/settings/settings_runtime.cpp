@@ -45,6 +45,9 @@ public:
                       std::int32_t fell_back_to_cpu,
                       llavon_settings_save_inference_callback save_callback,
                       void* save_context,
+                      const char16_t* model_path,
+                      llavon_settings_save_model_path_callback save_model_path_callback,
+                      void* save_model_path_context,
                       const llavon_settings_custom_name* custom_names,
                       std::size_t custom_name_count,
                       llavon_settings_save_custom_names_callback save_custom_names_callback,
@@ -57,6 +60,7 @@ public:
             return ERROR_BUSY;
         }
         if ((device_count != 0 && !devices) || !active_device || !save_callback ||
+            !model_path || !save_model_path_callback ||
             (custom_name_count != 0 && !custom_names) || !save_custom_names_callback ||
             !save_width_toggle_callback) {
             return ERROR_INVALID_PARAMETER;
@@ -77,6 +81,9 @@ public:
         configuration.fell_back_to_cpu = fell_back_to_cpu != 0;
         configuration.save_callback = save_callback;
         configuration.save_context = save_context;
+        configuration.model_path = model_path;
+        configuration.save_model_path_callback = save_model_path_callback;
+        configuration.save_model_path_context = save_model_path_context;
         configuration.save_custom_names_callback = save_custom_names_callback;
         configuration.save_custom_names_context = save_custom_names_context;
         configuration.shift_space_width_toggle_enabled =
@@ -512,6 +519,9 @@ extern "C" int32_t llavon_settings_ui_configure(
     int32_t fell_back_to_cpu,
     llavon_settings_save_inference_callback save_callback,
     void* save_context,
+    const char16_t* model_path,
+    llavon_settings_save_model_path_callback save_model_path_callback,
+    void* save_model_path_context,
     const struct llavon_settings_custom_name* custom_names,
     size_t custom_name_count,
     llavon_settings_save_custom_names_callback save_custom_names_callback,
@@ -522,6 +532,7 @@ extern "C" int32_t llavon_settings_ui_configure(
     return llavon::settings::runtime().configure(
         devices, device_count, selected_backend, selected_device_id, active_device,
         gpu_offload, fell_back_to_cpu, save_callback, save_context,
+        model_path, save_model_path_callback, save_model_path_context,
         custom_names, custom_name_count, save_custom_names_callback,
         save_custom_names_context, shift_space_width_toggle_enabled,
         save_width_toggle_callback, save_width_toggle_context);

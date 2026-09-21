@@ -3,6 +3,7 @@
 #include "../resource.h"
 
 #include <dwmapi.h>
+#include <shobjidl_core.h>
 #include <rfl/json.hpp>
 #include <utf8/cpp20.h>
 
@@ -462,6 +463,62 @@ void SettingsWindow::build_page() {
     page.Width(700);
     page.HorizontalAlignment(HorizontalAlignment::Left);
     page.Padding(Thickness{32, 24, 32, 40});
+
+    page.Children().Append(make_section_title(L"模型檔案"));
+
+    StackPanel model_section;
+    model_section.Spacing(8);
+    model_section.Margin(Thickness{0, 0, 0, 24});
+    model_section.Children().Append(
+        make_text(L"指定要載入的 GGUF 模型檔案。", body_text_size));
+
+    Grid model_path_row;
+    model_path_row.Width(settings_content_width);
+    model_path_row.HorizontalAlignment(HorizontalAlignment::Left);
+    ColumnDefinition model_path_column;
+    model_path_column.Width(GridLength{1, GridUnitType::Star});
+    model_path_row.ColumnDefinitions().Append(model_path_column);
+    ColumnDefinition model_path_gap;
+    model_path_gap.Width(GridLength{12, GridUnitType::Pixel});
+    model_path_row.ColumnDefinitions().Append(model_path_gap);
+    ColumnDefinition browse_column;
+    browse_column.Width(GridLength{1, GridUnitType::Auto});
+    model_path_row.ColumnDefinitions().Append(browse_column);
+
+    model_path_ = TextBox();
+    model_path_.Text(to_hstring(configuration_.model_path));
+    model_path_.PlaceholderText(L"選擇 .gguf 模型檔案");
+    model_path_.MinHeight(control_height);
+    model_path_.FontSize(body_text_size);
+    model_path_.TextChanged(
+        [this](const auto&, const auto&) { update_model_path_save_state(); });
+    Grid::SetColumn(model_path_, 0);
+    model_path_row.Children().Append(model_path_);
+
+    browse_model_button_ = Button();
+    browse_model_button_.Content(winrt::box_value(L"瀏覽…"));
+    browse_model_button_.MinWidth(88);
+    browse_model_button_.MinHeight(control_height);
+    browse_model_button_.FontSize(body_text_size);
+    browse_model_button_.Click([this](const auto&, const auto&) { browse_model_file(); });
+    Grid::SetColumn(browse_model_button_, 2);
+    model_path_row.Children().Append(browse_model_button_);
+    model_section.Children().Append(model_path_row);
+
+    save_model_button_ = Button();
+    save_model_button_.Content(winrt::box_value(L"套用模型"));
+    save_model_button_.MinWidth(112);
+    save_model_button_.MinHeight(control_height);
+    save_model_button_.FontSize(body_text_size);
+    save_model_button_.HorizontalAlignment(HorizontalAlignment::Left);
+    save_model_button_.IsEnabled(false);
+    save_model_button_.Click([this](const auto&, const auto&) { save_model_path(); });
+    model_section.Children().Append(save_model_button_);
+
+    model_note_ = make_text(L"", caption_text_size);
+    model_note_.Visibility(Visibility::Collapsed);
+    model_section.Children().Append(model_note_);
+    page.Children().Append(model_section);
 
     page.Children().Append(make_section_title(L"推論裝置"));
 
@@ -1047,6 +1104,87 @@ void SettingsWindow::update_custom_names_save_state() {
     }
 }
 
+void SettingsWindow::browse_model_file() {
+    winrt::com_ptr<IFileOpenDialog> dialog;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(dialog.put())))) {
+        model_note_.Text(L"無法開啟檔案選擇器。");
+        model_note_.Visibility(Visibility::Visible);
+        return;
+    }
+
+    DWORD options = 0;
+    if (SUCCEEDED(dialog->GetOptions(&options))) {
+        dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST |
+                           FOS_PATHMUSTEXIST);
+    }
+    const COMDLG_FILTERSPEC filters[] = {
+        {L"GGUF 模型 (*.gguf)", L"*.gguf"},
+        {L"所有檔案 (*.*)", L"*.*"},
+    };
+    dialog->SetFileTypes(static_cast<UINT>(std::size(filters)), filters);
+    dialog->SetDefaultExtension(L"gguf");
+    dialog->SetTitle(L"選擇模型檔案");
+
+    const HRESULT shown = dialog->Show(window_);
+    if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
+    if (FAILED(shown)) {
+        model_note_.Text(L"無法選取模型檔案。");
+        model_note_.Visibility(Visibility::Visible);
+        return;
+    }
+
+    winrt::com_ptr<IShellItem> item;
+    if (FAILED(dialog->GetResult(item.put()))) return;
+    PWSTR selected_path = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &selected_path))) return;
+    const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> owned_path(
+        selected_path, CoTaskMemFree);
+    model_path_.Text(owned_path.get());
+}
+
+void SettingsWindow::save_model_path() {
+    if (!model_path_ || !save_model_button_ || !model_note_ ||
+        !configuration_.save_model_path_callback) {
+        return;
+    }
+
+    const std::u16string path = trim(to_utf16(model_path_.Text()));
+    if (path.empty()) {
+        model_note_.Text(L"請先選擇模型檔案。");
+        model_note_.Visibility(Visibility::Visible);
+        return;
+    }
+
+    const std::int32_t result = configuration_.save_model_path_callback(
+        configuration_.save_model_path_context, path.c_str());
+    if (result == ERROR_SUCCESS) {
+        configuration_.model_path = path;
+        model_path_.Text(to_hstring(path));
+        save_model_button_.IsEnabled(false);
+        model_note_.Text(L"已載入並儲存模型檔案位置。");
+    } else {
+        model_note_.Text(L"無法載入模型；請確認檔案存在且為有效的 GGUF 模型。");
+    }
+    model_note_.Visibility(Visibility::Visible);
+}
+
+void SettingsWindow::update_model_path_save_state() {
+    if (!model_path_ || !save_model_button_ || !model_note_) return;
+    const std::u16string path = trim(to_utf16(model_path_.Text()));
+    const bool changed = !path.empty() && path != configuration_.model_path;
+    save_model_button_.IsEnabled(changed);
+    if (path.empty()) {
+        model_note_.Text(L"請指定模型檔案位置。");
+        model_note_.Visibility(Visibility::Visible);
+    } else if (changed) {
+        model_note_.Text(L"套用時會重新載入模型。");
+        model_note_.Visibility(Visibility::Visible);
+    } else {
+        model_note_.Visibility(Visibility::Collapsed);
+    }
+}
+
 void SettingsWindow::save_inference_setting() {
     if (!inference_device_ || !note_ || !configuration_.save_callback) {
         return;
@@ -1287,6 +1425,10 @@ void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
 void SettingsWindow::close_xaml() noexcept {
     island_window_ = nullptr;
     island_native_ = nullptr;
+    model_path_ = nullptr;
+    browse_model_button_ = nullptr;
+    save_model_button_ = nullptr;
+    model_note_ = nullptr;
     active_device_status_ = nullptr;
     inference_device_ = nullptr;
     save_inference_button_ = nullptr;

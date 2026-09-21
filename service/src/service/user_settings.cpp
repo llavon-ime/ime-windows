@@ -118,6 +118,21 @@ bool save_inference_settings(const InferenceDeviceSelection& selection) noexcept
     }
 }
 
+bool save_model_path(std::string model_path) noexcept {
+    try {
+        std::lock_guard lock(settings_mutex);
+        auto settings = load_settings_unlocked();
+        settings.model_path = std::move(model_path);
+        return save_settings_unlocked(settings);
+    } catch (const std::exception& error) {
+        std::clog << "[SRV] unable to save model path: " << error.what() << '\n';
+        return false;
+    } catch (...) {
+        std::clog << "[SRV] unable to save model path\n";
+        return false;
+    }
+}
+
 bool save_custom_names(const std::vector<CustomNameSetting>& custom_names) noexcept {
     try {
         std::lock_guard lock(settings_mutex);

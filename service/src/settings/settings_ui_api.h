@@ -50,6 +50,8 @@ struct llavon_settings_custom_name {
 
 typedef int32_t (*llavon_settings_save_inference_callback)(
     void* context, int32_t backend, const llavon_char16_t* device_id);
+typedef int32_t (*llavon_settings_save_model_path_callback)(
+    void* context, const llavon_char16_t* model_path);
 typedef int32_t (*llavon_settings_save_custom_names_callback)(
     void* context, const struct llavon_settings_custom_name* custom_names,
     size_t custom_name_count);
@@ -69,6 +71,9 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure(
     int32_t fell_back_to_cpu,
     llavon_settings_save_inference_callback save_callback,
     void* save_context,
+    const llavon_char16_t* model_path,
+    llavon_settings_save_model_path_callback save_model_path_callback,
+    void* save_model_path_context,
     const struct llavon_settings_custom_name* custom_names,
     size_t custom_name_count,
     llavon_settings_save_custom_names_callback save_custom_names_callback,

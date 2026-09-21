@@ -39,6 +39,9 @@ private:
 
     void initialize_xaml_island();
     void build_page();
+    void browse_model_file();
+    void save_model_path();
+    void update_model_path_save_state();
     void save_inference_setting();
     void update_inference_save_state();
     void add_custom_name_row(
@@ -76,6 +79,10 @@ private:
     winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
     winrt::com_ptr<IDesktopWindowXamlSourceNative2> island_native_;
     winrt::Windows::UI::Xaml::Controls::Grid shell_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBox model_path_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::Button browse_model_button_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::Button save_model_button_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBlock model_note_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBlock active_device_status_{nullptr};
     winrt::Windows::UI::Xaml::Controls::ComboBox inference_device_{nullptr};
     winrt::Windows::UI::Xaml::Controls::Button save_inference_button_{nullptr};

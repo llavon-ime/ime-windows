@@ -1,4 +1,5 @@
 #include <ime-core/core.hpp>
+#include <utf8/cpp20.h>
 #include <windows.h>
 
 #include "service/prediction_pipe_server.hpp"
@@ -102,6 +103,13 @@ std::filesystem::path default_model_path() {
     return executable_directory().parent_path() / "models" / kModelFilename;
 }
 
+std::filesystem::path resolve_configured_model_path(std::filesystem::path path) {
+    if (path.is_relative()) {
+        path = executable_directory().parent_path() / path;
+    }
+    return path.lexically_normal();
+}
+
 std::filesystem::path default_tables_directory() {
     if (auto path = environment_path(kTablesDirEnv)) {
         return *path;
@@ -175,6 +183,10 @@ int main(int argc, char* argv[]) {
         auto config = parse_core_config(argc, argv);
         config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
         const auto user_settings = llavon::service::load_settings();
+        if (argc == 1 && !user_settings.model_path.empty()) {
+            config.model_path = resolve_configured_model_path(
+                std::filesystem::path(utf8::utf8to16(user_settings.model_path)));
+        }
         config.inference_device = user_settings.inference;
 
         std::vector<llavon::ime::core::InferenceDeviceInfo> inference_devices;
@@ -193,16 +205,53 @@ int main(int argc, char* argv[]) {
             std::move(core), candidate_ui, custom_names);
         auto custom_names_update_mutex = std::make_shared<std::mutex>();
         llavon::service::SettingsUiLoader settings_ui;
+        auto active_config = std::make_shared<llavon::ime::core::CoreConfig>(config);
+        std::u16string displayed_model_path;
+        if (argc != 1) {
+            displayed_model_path = config.model_path.u16string();
+        } else if (!user_settings.model_path.empty()) {
+            displayed_model_path = utf8::utf8to16(user_settings.model_path);
+        } else if (environment_path(kModelPathEnv)) {
+            displayed_model_path = config.model_path.u16string();
+        } else {
+            displayed_model_path = u"./models/llavon-ime-llama-250m-Q4_K_M.gguf";
+        }
         settings_ui.configure(
             inference_devices, user_settings.inference, active_inference,
-            [&server, config](const llavon::ime::core::InferenceDeviceSelection& selection) {
+            [&server, active_config](
+                const llavon::ime::core::InferenceDeviceSelection& selection) {
                 try {
-                    auto reload_config = config;
+                    auto reload_config = *active_config;
                     reload_config.inference_device = selection;
                     (void)server.replace_core(std::move(reload_config));
-                    return llavon::service::save_inference_settings(selection);
+                    if (!llavon::service::save_inference_settings(selection)) return false;
+                    active_config->inference_device = selection;
+                    return true;
                 } catch (const std::exception& error) {
                     std::cerr << "[ERR] unable to reload inference core: "
+                              << error.what() << '\n';
+                    return false;
+                }
+            },
+            std::move(displayed_model_path),
+            [&server, active_config](const std::filesystem::path& model_path) {
+                try {
+                    const auto resolved_model_path =
+                        resolve_configured_model_path(model_path);
+                    std::error_code error;
+                    if (!std::filesystem::is_regular_file(resolved_model_path, error)) {
+                        return false;
+                    }
+
+                    auto reload_config = *active_config;
+                    reload_config.model_path = resolved_model_path;
+                    (void)server.replace_core(std::move(reload_config));
+                    const auto model_path_utf8 = utf8::utf16to8(model_path.u16string());
+                    if (!llavon::service::save_model_path(model_path_utf8)) return false;
+                    active_config->model_path = resolved_model_path;
+                    return true;
+                } catch (const std::exception& error) {
+                    std::cerr << "[ERR] unable to reload model: "
                               << error.what() << '\n';
                     return false;
                 }

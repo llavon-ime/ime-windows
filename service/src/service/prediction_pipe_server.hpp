@@ -232,12 +232,12 @@ public:
 
     llavon::ime::core::InferenceRuntimeInfo replace_core(
         llavon::ime::core::CoreConfig config) {
+        auto replacement =
+            std::make_shared<llavon::ime::core::Core>(std::move(config));
         sessions_.clear();
         idle_.clear();
         recency_.clear();
-        core_.reset();
-
-        core_ = std::make_shared<llavon::ime::core::Core>(std::move(config));
+        core_ = std::move(replacement);
         return core_->inference_runtime_info();
     }
 

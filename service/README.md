@@ -12,10 +12,10 @@ The service also owns the interactive per-user process shell:
   and inbox `Windows.UI.Xaml` island.
 - Settings UI calls are queued to the DLL's STA thread and never execute XAML
   or model work on the inference worker.
-- The inference-device setting is stored in
+- The model path and inference-device setting are stored in
   `%LOCALAPPDATA%\Llavon IME\settings.json`. The service reads it at process
-  startup and translates it into `ime-core::CoreConfig`; changes made in the
-  settings window take effect on the next service start.
+  startup and translates it into `ime-core::CoreConfig`; model and device
+  changes made in the settings window reload the inference core immediately.
 - After the model has loaded, the settings window receives the active backend,
   hardware description, device ID, and GPU-offload state reported by
   `ime-core`; this runtime status is kept separate from the next-start setting.
@@ -60,7 +60,8 @@ The service keeps the existing executable and IPC compatibility names:
 - named pipe: `\\.\pipe\llavon-ime`
 - candidate UI named pipe: `\\.\pipe\llavon-ime-candidate-ui`
 - debugger named pipe: `\\.\pipe\llavon-ime-debugger`
-- model path: `LLAVON_IME_MODEL_PATH`
+- default model path override: `LLAVON_IME_MODEL_PATH` (the saved setting takes
+  precedence during normal startup)
 - tables path: `LLAVON_IME_TABLES_DIR`
 
 ## Build

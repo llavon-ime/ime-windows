@@ -91,6 +91,8 @@ void SettingsUiLoader::configure(
     llavon::ime::core::InferenceDeviceSelection selected,
     const llavon::ime::core::InferenceRuntimeInfo& active,
     SaveInferenceSettings save_settings,
+    std::u16string model_path,
+    SaveModelPath save_model_path,
     std::vector<CustomNameSetting> custom_names,
     SaveCustomNames save_custom_names,
     bool shift_space_width_toggle_enabled,
@@ -123,6 +125,8 @@ void SettingsUiLoader::configure(
     fell_back_to_cpu_ = active.fell_back_to_cpu;
     selected_ = std::move(selected);
     save_settings_ = std::move(save_settings);
+    model_path_ = std::move(model_path);
+    save_model_path_ = std::move(save_model_path);
     custom_names_.clear();
     custom_names_.reserve(custom_names.size());
     for (const auto& custom_name : custom_names) {
@@ -263,10 +267,27 @@ bool SettingsUiLoader::configure_module() {
                devices.data(), devices.size(), backend_value(selected_.backend),
                selected_device_id.c_str(), &active_device, gpu_offload_ ? 1 : 0,
                fell_back_to_cpu_ ? 1 : 0, save_trampoline, this,
+               model_path_.c_str(), save_model_path_trampoline, this,
                custom_names.data(), custom_names.size(),
                save_custom_names_trampoline, this,
                shift_space_width_toggle_enabled_ ? 1 : 0,
                save_width_toggle_trampoline, this) == 0;
+}
+
+std::int32_t SettingsUiLoader::save_model_path_trampoline(
+    void* context, const char16_t* model_path) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->save_model_path_ || !model_path) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    try {
+        const std::filesystem::path path{std::u16string_view(model_path)};
+        if (!self->save_model_path_(path)) return ERROR_WRITE_FAULT;
+        self->model_path_ = path.u16string();
+        return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_WRITE_FAULT;
+    }
 }
 
 std::int32_t SettingsUiLoader::save_width_toggle_trampoline(

@@ -16,6 +16,7 @@ struct CustomNameSetting {
 
 struct UserSettings {
     llavon::ime::core::InferenceDeviceSelection inference;
+    std::string model_path;
     std::vector<CustomNameSetting> custom_names;
     bool shift_space_width_toggle_enabled = false;
 };
@@ -24,6 +25,7 @@ UserSettings load_settings() noexcept;
 
 bool save_inference_settings(
     const llavon::ime::core::InferenceDeviceSelection& selection) noexcept;
+bool save_model_path(std::string model_path) noexcept;
 bool save_custom_names(
     const std::vector<CustomNameSetting>& custom_names) noexcept;
 bool save_shift_space_width_toggle_setting(bool enabled) noexcept;

@@ -22,6 +22,7 @@ public:
 
     using SaveInferenceSettings = std::function<bool(
         const llavon::ime::core::InferenceDeviceSelection&)>;
+    using SaveModelPath = std::function<bool(const std::filesystem::path&)>;
     using SaveCustomNames =
         std::function<bool(const std::vector<CustomNameSetting>&)>;
     using SaveWidthToggleSetting = std::function<bool(bool)>;
@@ -31,6 +32,8 @@ public:
         llavon::ime::core::InferenceDeviceSelection selected,
         const llavon::ime::core::InferenceRuntimeInfo& active,
         SaveInferenceSettings save_settings,
+        std::u16string model_path,
+        SaveModelPath save_model_path,
         std::vector<CustomNameSetting> custom_names,
         SaveCustomNames save_custom_names,
         bool shift_space_width_toggle_enabled,
@@ -57,6 +60,7 @@ private:
         const llavon_settings_inference_device*, std::size_t, std::int32_t,
         const char16_t*, const llavon_settings_inference_device*, std::int32_t,
         std::int32_t, llavon_settings_save_inference_callback, void*,
+        const char16_t*, llavon_settings_save_model_path_callback, void*,
         const llavon_settings_custom_name*, std::size_t,
         llavon_settings_save_custom_names_callback, void*, std::int32_t,
         llavon_settings_save_width_toggle_callback, void*);
@@ -73,6 +77,8 @@ private:
     static std::int32_t save_custom_names_trampoline(
         void* context, const llavon_settings_custom_name* custom_names,
         std::size_t custom_name_count) noexcept;
+    static std::int32_t save_model_path_trampoline(
+        void* context, const char16_t* model_path) noexcept;
     static std::int32_t save_width_toggle_trampoline(
         void* context, std::int32_t enabled) noexcept;
     void report_error(const wchar_t* detail) const noexcept;
@@ -89,6 +95,8 @@ private:
     bool fell_back_to_cpu_ = false;
     llavon::ime::core::InferenceDeviceSelection selected_;
     SaveInferenceSettings save_settings_;
+    std::u16string model_path_;
+    SaveModelPath save_model_path_;
     std::vector<CustomNameStorage> custom_names_;
     SaveCustomNames save_custom_names_;
     bool shift_space_width_toggle_enabled_ = false;
