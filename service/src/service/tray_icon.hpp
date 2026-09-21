@@ -13,6 +13,7 @@ public:
     using OpenSettingsCallback = std::function<void()>;
     using OpenDebuggerCallback = std::function<void()>;
     using ShowInputModeMenuCallback = std::function<void(POINT)>;
+    using ShutdownCallback = std::function<void()>;
 
     TrayIcon() = default;
     TrayIcon(const TrayIcon&) = delete;
@@ -21,7 +22,8 @@ public:
 
     bool create(HINSTANCE instance, OpenSettingsCallback open_settings,
                 OpenDebuggerCallback open_debugger,
-                ShowInputModeMenuCallback show_input_mode_menu);
+                ShowInputModeMenuCallback show_input_mode_menu,
+                ShutdownCallback shutdown);
     int run_message_loop();
     void notify_server_stopped(int exit_code) const noexcept;
 
@@ -41,10 +43,12 @@ private:
     UINT taskbar_created_message_ = 0;
     UINT open_settings_message_ = 0;
     UINT show_input_mode_menu_message_ = 0;
+    UINT shutdown_message_ = 0;
     NOTIFYICONDATAW icon_data_{};
     OpenSettingsCallback open_settings_;
     OpenDebuggerCallback open_debugger_;
     ShowInputModeMenuCallback show_input_mode_menu_;
+    ShutdownCallback shutdown_;
     bool icon_added_ = false;
     int exit_code_ = 0;
 };

@@ -13,6 +13,7 @@ constexpr wchar_t tray_window_class[] = L"LlavonImeServiceTrayWindow";
 constexpr wchar_t tray_tooltip[] = L"Llavon 輸入法";
 constexpr UINT tray_callback_message = WM_APP + 20;
 constexpr UINT server_stopped_message = WM_APP + 21;
+constexpr LRESULT shutdown_acknowledged = 0x4c4c4156;
 constexpr UINT open_settings_command = 1;
 constexpr UINT open_debugger_command = 2;
 constexpr UINT_PTR tray_retry_timer = 1;
@@ -34,11 +35,13 @@ TrayIcon::~TrayIcon() {
 
 bool TrayIcon::create(HINSTANCE instance, OpenSettingsCallback open_settings,
                       OpenDebuggerCallback open_debugger,
-                      ShowInputModeMenuCallback show_input_mode_menu) {
+                      ShowInputModeMenuCallback show_input_mode_menu,
+                      ShutdownCallback shutdown) {
     instance_ = instance;
     open_settings_ = std::move(open_settings);
     open_debugger_ = std::move(open_debugger);
     show_input_mode_menu_ = std::move(show_input_mode_menu);
+    shutdown_ = std::move(shutdown);
 
     WNDCLASSEXW window_class{sizeof(window_class)};
     window_class.lpfnWndProc = window_proc;
@@ -51,6 +54,7 @@ bool TrayIcon::create(HINSTANCE instance, OpenSettingsCallback open_settings,
     taskbar_created_message_ = RegisterWindowMessageW(L"TaskbarCreated");
     open_settings_message_ = RegisterWindowMessageW(L"LlavonIme.OpenSettings");
     show_input_mode_menu_message_ = RegisterWindowMessageW(L"LlavonIme.ShowInputModeMenu");
+    shutdown_message_ = RegisterWindowMessageW(L"LlavonIme.Shutdown");
     window_ = CreateWindowExW(WS_EX_TOOLWINDOW, tray_window_class, L"Llavon IME Service",
                               WS_OVERLAPPED, 0, 0, 0, 0, nullptr, nullptr, instance_, this);
     notification_window_.store(window_, std::memory_order_release);
@@ -98,6 +102,15 @@ LRESULT CALLBACK TrayIcon::window_proc(HWND window, UINT message, WPARAM wparam,
 }
 
 LRESULT TrayIcon::handle_message(UINT message, WPARAM wparam, LPARAM lparam) {
+    if (shutdown_message_ != 0 && message == shutdown_message_) {
+        if (shutdown_) {
+            auto shutdown = std::move(shutdown_);
+            shutdown();
+        }
+        exit_code_ = 0;
+        DestroyWindow(window_);
+        return shutdown_acknowledged;
+    }
     if (open_settings_message_ != 0 && message == open_settings_message_) {
         open_settings();
         return 0;

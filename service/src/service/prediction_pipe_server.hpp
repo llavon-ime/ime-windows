@@ -8,6 +8,7 @@
 #include <asio.hpp>
 #include <ime-core/core.hpp>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <future>
 #include <iostream>
@@ -498,7 +499,17 @@ public:
                            completion->set_exception(std::current_exception());
                        }
                    });
+        while (result.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+            if (!accepting_reloads_.load(std::memory_order_acquire)) {
+                throw std::runtime_error("prediction server stopped during model reload");
+            }
+        }
         return result.get();
+    }
+
+    void stop() noexcept {
+        accepting_reloads_.store(false, std::memory_order_release);
+        io_ctx_.stop();
     }
 
     int run() {

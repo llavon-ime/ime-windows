@@ -144,6 +144,7 @@ add_subdirectory(frontend)
 add_custom_target(llavon-ime-artifacts
     DEPENDS
         llavon-ime
+        llavon-ime-lifecycle
         llavon-ime-service
         llavon-ime-settings-ui
         llavon-ime-candidate-ui
@@ -298,7 +299,16 @@ set(CPACK_WIX_INSTALL_SCOPE "perMachine")
 set(CPACK_WIX_UPGRADE_GUID "FD29FA2D-C02C-47CB-AA80-B334BACAABF0")
 set(CPACK_WIX_UI_REF "WixUI_InstallDir")
 set(CPACK_WIX_PROGRAM_MENU_FOLDER "Llavon IME")
-set(CPACK_WIX_PATCH_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/RegisterIme.wxs")
+file(TO_CMAKE_PATH
+    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/llavon-ime-lifecycle.exe"
+    LLAVON_IME_LIFECYCLE_HELPER_WIX_PATH
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/RegisterIme.wxs.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/RegisterIme.wxs"
+    @ONLY
+)
+set(CPACK_WIX_PATCH_FILE "${CMAKE_CURRENT_BINARY_DIR}/RegisterIme.wxs")
 set(CPACK_WIX_EXTRA_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/Autostart.wxs"
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/UninstallShortcut.wxs"

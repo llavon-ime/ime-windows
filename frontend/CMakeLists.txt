@@ -6,10 +6,17 @@ set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/ime.def")
 include_directories(src)
 
 add_library(llavon-ime SHARED ${SOURCES} ${HEADERS} ${RESOURCES} ${DEF_FILE})
+add_executable(llavon-ime-lifecycle WIN32 tools/tsf_lifecycle.cpp)
 target_compile_features(llavon-ime PRIVATE cxx_std_23)
+target_compile_features(llavon-ime-lifecycle PRIVATE cxx_std_23)
 set_target_properties(llavon-ime PROPERTIES
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO
+)
+set_target_properties(llavon-ime-lifecycle PROPERTIES
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 
 target_compile_definitions(llavon-ime PRIVATE
@@ -20,11 +27,25 @@ target_compile_definitions(llavon-ime PRIVATE
     WINVER=0x0A00        # Windows 10
     _WIN32_WINNT=0x0A00
 )
+target_compile_definitions(llavon-ime-lifecycle PRIVATE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    UNICODE
+    _UNICODE
+    WINVER=0x0A00
+    _WIN32_WINNT=0x0A00
+)
 
 target_compile_options(llavon-ime PRIVATE
     /W4         # 高警告等級
     /WX         # 警告視為錯誤
     /utf-8      # 原始碼 UTF-8 編碼
+)
+target_compile_options(llavon-ime-lifecycle PRIVATE
+    /W4
+    /WX
+    /utf-8
+    /permissive-
 )
 
 find_package(cppwinrt CONFIG REQUIRED)
@@ -42,6 +63,11 @@ target_link_libraries(llavon-ime PRIVATE
     llavon::debug-client
     utf8::cpp
     utf8cpp::utf8cpp
+)
+target_link_libraries(llavon-ime-lifecycle PRIVATE
+    ole32
+    shell32
+    uuid
 )
 
 

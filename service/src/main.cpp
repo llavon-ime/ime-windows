@@ -275,7 +275,8 @@ int main(int argc, char* argv[]) {
                          [] { launch_debugger(); },
                          [&settings_ui](POINT location) {
                              settings_ui.show_context_menu(location);
-                         })) {
+                         },
+                         [&server] { server.stop(); })) {
             std::cerr << "[WARN] tray initialization failed: " << GetLastError() << '\n';
             return run_server(server);
         }

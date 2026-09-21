@@ -507,7 +507,9 @@ namespace tsf {
 TextService::TextService() : candidate_ui_(std::make_unique<CandidateUiController>()) {}
 
 TextService::~TextService() {
-    unadvise_text_edit_sink();
+    // TSF normally calls Deactivate first. Keep destruction safe and complete
+    // for partial activation and unusual host shutdown paths as well.
+    deactivate();
 }
 
 HRESULT TextService::handle_com_exception(std::source_location location) noexcept {
