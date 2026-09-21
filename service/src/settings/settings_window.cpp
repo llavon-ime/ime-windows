@@ -1126,6 +1126,26 @@ void SettingsWindow::browse_model_file() {
     dialog->SetDefaultExtension(L"gguf");
     dialog->SetTitle(L"選擇模型檔案");
 
+    std::filesystem::path current_path(trim(to_utf16(model_path_.Text())));
+    if (!current_path.empty()) {
+        if (current_path.is_relative()) {
+            current_path = module_directory().parent_path() / current_path;
+        }
+        current_path = current_path.lexically_normal();
+
+        winrt::com_ptr<IShellItem> current_folder;
+        const auto parent = current_path.parent_path();
+        if (!parent.empty() &&
+            SUCCEEDED(SHCreateItemFromParsingName(
+                parent.c_str(), nullptr, IID_PPV_ARGS(current_folder.put())))) {
+            dialog->SetFolder(current_folder.get());
+        }
+        const auto filename = current_path.filename().wstring();
+        if (!filename.empty()) {
+            dialog->SetFileName(filename.c_str());
+        }
+    }
+
     const HRESULT shown = dialog->Show(window_);
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
     if (FAILED(shown)) {
