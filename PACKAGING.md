@@ -77,14 +77,14 @@ version constraints.
 
 The `*-setup.exe` bundle embeds the core MSI but keeps the small LoRA
 web-installer as a remote Burn payload. Before showing its checkbox, Burn reads
-the installed trainer CalVer from `HKLM\Software\Llavon IME\LoRA Trainer` and
-compares it with the trainer release selected by CI. Burn downloads the helper
-only after the user confirms installation. The helper then verifies the
-immutable release manifest, archive size, and SHA-256 before atomically
-replacing `<install-root>/tools/lora`. The standalone MSI remains available for
-offline and managed deployment and never installs the trainer. The bundle
-offers the `win-x64-cpu` trainer asset by default, so this path does not require
-CUDA or a CUDA Toolkit.
+the file version of `<install-root>/tools/lora/llavon-lora.exe` and compares it
+with the trainer release selected by CI. Burn downloads the helper only after
+the user confirms installation. The helper then verifies the immutable release
+manifest, archive size, and SHA-256 before atomically replacing that fixed
+directory. Neither the helper nor the bundle writes a custom LoRA registry key.
+The standalone MSI remains available for offline and managed deployment and
+never installs the trainer. The bundle offers the `win-x64-cpu` trainer asset by
+default, so this path does not require CUDA or a CUDA Toolkit.
 
 CI builds one CPU package using loadable ggml CPU backends. At runtime ggml
 selects the fastest compatible CPU variant, so AVX2 and AVX-512 systems use the

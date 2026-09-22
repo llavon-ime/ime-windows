@@ -7,11 +7,11 @@
   <String Id="InstallHeader" Value="安裝拉風輸入法" />
   <String Id="InstallMessage" Value="輸入法本體會安裝到這台電腦。LoRA 個人化訓練工具是選配元件，只有勾選並確認後才會開始下載。" />
   <String Id="InstallVersion" Value="輸入法版本 [WixBundleVersion]" />
-  <String Id="LoraMissing" Value="尚未安裝 LoRA Trainer；遠端版本為 [LoraTargetVersion]。" />
-  <String Id="LoraCurrent" Value="LoRA Trainer [LoraInstalledVersion] 已安裝，版本一致，不需下載。" />
-  <String Id="LoraDifferent" Value="本機 LoRA Trainer 為 [LoraInstalledVersion]，遠端版本為 [LoraTargetVersion]。" />
-  <String Id="LoraInstallCheckbox" Value="安裝 LoRA Trainer [LoraTargetVersion]（確認後下載）" />
-  <String Id="LoraUpdateCheckbox" Value="將 LoRA Trainer 同步至 [LoraTargetVersion]（不會降版）" />
+  <String Id="LoraMissing" Value="尚未安裝 LoRA Trainer；遠端版本為 [LoraTargetDisplayVersion]。" />
+  <String Id="LoraCurrent" Value="LoRA Trainer [LoraTargetDisplayVersion] 已安裝，版本一致，不需下載。" />
+  <String Id="LoraDifferent" Value="本機 LoRA Trainer 為 [LoraInstalledVersion]，遠端版本為 [LoraTargetDisplayVersion]。" />
+  <String Id="LoraInstallCheckbox" Value="安裝 LoRA Trainer [LoraTargetDisplayVersion]（確認後下載）" />
+  <String Id="LoraUpdateCheckbox" Value="將 LoRA Trainer 同步至 [LoraTargetDisplayVersion]（不會降版）" />
   <String Id="ConfirmCancelMessage" Value="確定要取消安裝嗎？" />
   <String Id="ExecuteUpgradeRelatedBundleMessage" Value="舊版安裝程式" />
   <String Id="HelpHeader" Value="安裝說明" />
