@@ -24,6 +24,11 @@ The service also owns the interactive per-user process shell:
 - Candidate presentation snapshots arrive through the independent
   `\\.\pipe\llavon-ime-candidate-ui` pipe. This transport does not share the
   prediction pipe's connection or protocol.
+- Every completed IME composition is sent to the service as raw context,
+  committed text, and raw Bopomofo readings. The service converts readings to
+  the validation-like `syllable`/`tone` schema and appends UTF-8 JSONL on a
+  below-normal-priority writer thread. The prediction `io_context` never opens,
+  writes, or flushes the dataset file.
 - The separately built `llavon-ime-debugger.exe` owns the multi-client
   `\\.\pipe\llavon-ime-debugger` server. The tray menu launches the packaged
   executable on demand.
@@ -63,6 +68,19 @@ The service keeps the existing executable and IPC compatibility names:
 - default model path override: `LLAVON_IME_MODEL_PATH` (the saved setting takes
   precedence during normal startup)
 - tables path: `LLAVON_IME_TABLES_DIR`
+- collected training data: `%LOCALAPPDATA%\Llavon IME\training-data\commits.jsonl`
+- collected training data path override: `LLAVON_IME_TRAINING_DATA_PATH`
+
+Ordinary Bopomofo commits use the same `schemaVersion`, `context`, `answer`,
+and `padding: [{"syllable": ..., "tone": ...}]` shape as the public validation
+set. The top-level `revice` boolean is true when any position in the commit was
+manually selected; the original Bopomofo reading remains unchanged. Literal
+punctuation and incomplete input are retained as `literal` or
+`rawReading` entries so the collector does not silently lose commits; dataset
+preparation may filter those rows. Each append-only event also has an
+`eventId`, `eventType`, and nullable `revisionOf`. The latter is reserved for a
+future correction detector that can append a replacement event when a user
+commits a typo, backspaces to it, and retypes, without mutating prior lines.
 
 ## Build
 

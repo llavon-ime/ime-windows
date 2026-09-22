@@ -4,11 +4,13 @@
 
 #include <windows.h>
 #include <sddl.h>
+#include <objbase.h>
 
 #include <asio.hpp>
 #include <ime-core/core.hpp>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <future>
 #include <iostream>
@@ -22,6 +24,7 @@
 
 #include "candidate_pipe_server.hpp"
 #include "custom_name_matcher.hpp"
+#include "training_data_writer.hpp"
 
 namespace llavon::service {
 
@@ -34,6 +37,7 @@ enum class PipeCommand : uint8_t {
     ToggleInputMode = 2,
     GetInputMode = 3,
     Ready = 4,
+    RecordCommit = 5,
 };
 
 enum class InputMode : uint8_t {
@@ -163,6 +167,45 @@ inline asio::awaitable<bool> write_exact(asio::windows::stream_handle& pipe, con
         total += n;
     }
     co_return true;
+}
+
+inline asio::awaitable<bool> read_utf16_string(
+    asio::windows::stream_handle& pipe, std::u16string& value,
+    std::uint32_t maximum_length) {
+    std::uint32_t length = 0;
+    if (!co_await read_val(pipe, length) || length > maximum_length) co_return false;
+    value.resize(length);
+    if (length > 0 &&
+        !co_await read_exact(pipe, value.data(), length * sizeof(char16_t))) {
+        co_return false;
+    }
+    co_return true;
+}
+
+inline std::string new_collection_session_id() {
+    GUID value{};
+    if (FAILED(CoCreateGuid(&value))) {
+        return std::to_string(GetCurrentProcessId()) + "-" +
+               std::to_string(GetTickCount64());
+    }
+    char text[37]{};
+    std::snprintf(
+        text, sizeof(text),
+        "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        value.Data1, value.Data2, value.Data3, value.Data4[0], value.Data4[1],
+        value.Data4[2], value.Data4[3], value.Data4[4], value.Data4[5],
+        value.Data4[6], value.Data4[7]);
+    return text;
+}
+
+inline std::string utc_timestamp() {
+    SYSTEMTIME value{};
+    GetSystemTime(&value);
+    char text[25]{};
+    std::snprintf(text, sizeof(text), "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
+                  value.wYear, value.wMonth, value.wDay, value.wHour,
+                  value.wMinute, value.wSecond, value.wMilliseconds);
+    return text;
 }
 
 template <typename T>
@@ -324,8 +367,11 @@ inline asio::awaitable<void> handle_client(
     asio::windows::stream_handle pipe,
     std::shared_ptr<SessionLru> sessions,
     std::shared_ptr<CustomNameMatcher> custom_names,
+    std::shared_ptr<TrainingDataWriter> training_data,
+    std::string collection_session_id,
     SessionLru::ClientId client_id) {
     ClientSession client_session(std::move(sessions), client_id);
+    std::uint64_t commit_sequence = 0;
 
     while (true) {
         uint8_t raw_command = 0;
@@ -353,6 +399,51 @@ inline asio::awaitable<void> handle_client(
                 std::cerr << "[ERR] ready: " << e.what() << std::endl;
             }
             co_await write_val(pipe, ok);
+            continue;
+        }
+
+        if (command == PipeCommand::RecordCommit) {
+            constexpr std::uint32_t maximum_context_length = 4096;
+            constexpr std::uint32_t maximum_answer_length = 1024;
+            constexpr std::uint32_t maximum_entry_count = 1024;
+            constexpr std::uint32_t maximum_entry_length = 64;
+            RawCommitEvent event;
+            if (!co_await read_utf16_string(
+                    pipe, event.context, maximum_context_length) ||
+                !co_await read_utf16_string(
+                    pipe, event.answer, maximum_answer_length)) {
+                break;
+            }
+
+            std::uint32_t count = 0;
+            if (!co_await read_val(pipe, count) || count == 0 ||
+                count > maximum_entry_count) {
+                break;
+            }
+            event.input.reserve(count);
+            bool valid = true;
+            for (std::uint32_t index = 0; index < count; ++index) {
+                RawCommitInputEntry entry;
+                std::uint8_t manually_selected = 0;
+                if (!co_await read_utf16_string(
+                        pipe, entry.reading, maximum_entry_length) ||
+                    !co_await read_utf16_string(
+                        pipe, entry.output, maximum_entry_length) ||
+                    entry.output.empty() ||
+                    !co_await read_val(pipe, manually_selected) ||
+                    manually_selected > 1) {
+                    valid = false;
+                    break;
+                }
+                entry.manually_selected = manually_selected != 0;
+                event.input.push_back(std::move(entry));
+            }
+            if (!valid) break;
+
+            event.session_id = collection_session_id;
+            event.sequence = ++commit_sequence;
+            event.committed_at_utc = utc_timestamp();
+            training_data->enqueue(std::move(event));
             continue;
         }
 
@@ -402,7 +493,8 @@ inline asio::awaitable<void> handle_client(
 inline asio::awaitable<void> listener(
     asio::io_context& io_ctx,
     std::shared_ptr<SessionLru> sessions,
-    std::shared_ptr<CustomNameMatcher> custom_names) {
+    std::shared_ptr<CustomNameMatcher> custom_names,
+    std::shared_ptr<TrainingDataWriter> training_data) {
     auto executor = co_await asio::this_coro::executor;
     SessionLru::ClientId next_client_id = 1;
 
@@ -457,7 +549,8 @@ inline asio::awaitable<void> listener(
         asio::windows::stream_handle stream(executor, hPipe);
         const SessionLru::ClientId client_id = next_client_id++;
         co_spawn(executor,
-                 handle_client(std::move(stream), sessions, custom_names, client_id),
+                 handle_client(std::move(stream), sessions, custom_names,
+                               training_data, new_collection_session_id(), client_id),
                  asio::detached);
     }
 }
@@ -472,7 +565,8 @@ public:
         std::shared_ptr<CustomNameMatcher> custom_names)
         : sessions_(std::make_shared<prediction_pipe::SessionLru>(std::move(core))),
           candidate_ui_(candidate_ui),
-          custom_names_(std::move(custom_names)) {
+          custom_names_(std::move(custom_names)),
+          training_data_(std::make_shared<TrainingDataWriter>()) {
         if (!custom_names_) {
             throw std::invalid_argument("prediction server dependencies are required");
         }
@@ -523,7 +617,8 @@ public:
 
         CandidatePipeServer candidate_pipe(candidate_ui_);
         co_spawn(io_ctx_,
-                 prediction_pipe::listener(io_ctx_, sessions_, custom_names_),
+                 prediction_pipe::listener(
+                     io_ctx_, sessions_, custom_names_, training_data_),
                  asio::detached);
         co_spawn(io_ctx_, candidate_pipe.listen(), asio::detached);
         io_ctx_.run();
@@ -537,6 +632,7 @@ private:
     std::shared_ptr<prediction_pipe::SessionLru> sessions_;
     CandidateUiLoader& candidate_ui_;
     std::shared_ptr<CustomNameMatcher> custom_names_;
+    std::shared_ptr<TrainingDataWriter> training_data_;
     std::atomic<bool> accepting_reloads_{true};
 };
 

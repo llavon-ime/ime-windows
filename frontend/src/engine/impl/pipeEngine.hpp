@@ -18,6 +18,7 @@ enum class PipeCommand : uint8_t {
     ToggleInputMode = 2,
     GetInputMode = 3,
     Ready = 4,
+    RecordCommit = 5,
 };
 
 class PipeEngine : public IEngine {
@@ -186,6 +187,34 @@ public:
                 }
             }
             padding[i].predicted = true;
+        }
+    }
+
+    void record_commit(const CommitSample& sample) override {
+        if (sample.answer.empty() || sample.input.empty() || !ensure_pipe()) return;
+
+        if (!write_command(PipeCommand::RecordCommit)) { disconnect(); return; }
+
+        const auto write_string = [](std::u16string_view value) {
+            const auto length = static_cast<std::uint32_t>(value.size());
+            if (!write_exact(length)) return false;
+            return length == 0 || write_exact(value.data(), length * sizeof(char16_t));
+        };
+
+        if (!write_string(sample.context) || !write_string(sample.answer)) {
+            disconnect();
+            return;
+        }
+
+        const auto count = static_cast<std::uint32_t>(sample.input.size());
+        if (!write_exact(count)) { disconnect(); return; }
+        for (const auto& entry : sample.input) {
+            const std::uint8_t manually_selected = entry.manually_selected ? 1 : 0;
+            if (!write_string(entry.reading) || !write_string(entry.output) ||
+                !write_exact(manually_selected)) {
+                disconnect();
+                return;
+            }
         }
     }
 

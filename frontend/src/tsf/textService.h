@@ -125,6 +125,7 @@ private:
     bool composition_belongs_to(ITfContext* context) const;
     bool has_composition_state() const;
     void clear_composition_state();
+    void record_commit(CommitSample sample) noexcept;
     // Multifunctional shortcut handling
     std::optional<std::u16string> multifuntional_shortcut(WPARAM wParam);
 
@@ -147,6 +148,8 @@ private:
     DWORD text_edit_sink_cookie_ = TF_INVALID_COOKIE;
     std::optional<PendingE2eTrace> pending_e2e_trace_;
     std::uint64_t next_e2e_sequence_ = 1;
+    std::u16string collection_context_;
+    bool commit_reported_ = false;
     // Multifunctional shortcut handling
     bool backtick_used_as_modifier_ = false;
 };

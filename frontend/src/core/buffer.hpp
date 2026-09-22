@@ -210,6 +210,21 @@ public:
         }
         return res;
     }
+    CommitSample commit_sample(std::u16string context) const {
+        CommitSample sample;
+        sample.context = std::move(context);
+        sample.input.reserve(buffer.size());
+        for (const auto& item : buffer) {
+            const auto output = item.current();
+            sample.answer += output;
+            sample.input.push_back(CommitInputEntry{
+                .reading = item.to_bopomofo_string(),
+                .output = output,
+                .manually_selected = item.was_manually_selected(),
+            });
+        }
+        return sample;
+    }
 };
 
 }  // namespace tsf

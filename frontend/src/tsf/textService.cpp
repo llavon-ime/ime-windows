@@ -757,6 +757,19 @@ void TextService::clear_composition_state() {
     itfComposition = nullptr;
     composition_context_ = nullptr;
     compositionBuffer.clear();
+    collection_context_.clear();
+    commit_reported_ = false;
+}
+
+void TextService::record_commit(CommitSample sample) noexcept {
+    if (sample.answer.empty() || sample.input.empty()) {
+        return;
+    }
+    try {
+        get_engine()->record_commit(sample);
+    } catch (...) {
+        // Collection is best effort and must never break text input.
+    }
 }
 
 /**
@@ -1193,6 +1206,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     if (!invalid_span) {
         e2e_trace.pre_context_started = std::chrono::steady_clock::now();
         auto pre_context = get_pre_composit_context(pContext);
+        collection_context_ = pre_context;
         e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
         e2e_trace.predict_started = std::chrono::steady_clock::now();
         prediction_performed = compositionBuffer.predict_paddings(std::move(pre_context));
@@ -1257,6 +1271,10 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* /*pContext*/, REFGUID /*rgu
 STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/, ITfComposition* pComposition) try {
     if (itfComposition && pComposition && !same_com_object(itfComposition.get(), pComposition)) {
         return S_OK;
+    }
+    if (!commit_reported_ && !compositionBuffer.empty()) {
+        commit_reported_ = true;
+        record_commit(compositionBuffer.commit_sample(collection_context_));
     }
     clear_composition_state();
     return S_OK;
@@ -1434,6 +1452,9 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
         return S_OK;
     }
 
+    auto sample = compositionBuffer.commit_sample(get_pre_composit_context(pContext));
+    commit_reported_ = true;
+
     winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
     editSession->set_operation([this, pContext](TfEditCookie ec) {
         before_return cleanup([this]() { clear_composition_state(); });
@@ -1470,7 +1491,13 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
     HRESULT session_hr = E_FAIL;
     const HRESULT request_hr = pContext->RequestEditSession(
         _tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &session_hr);
-    return FAILED(request_hr) ? request_hr : session_hr;
+    const HRESULT result = FAILED(request_hr) ? request_hr : session_hr;
+    if (SUCCEEDED(result)) {
+        record_commit(std::move(sample));
+    } else {
+        commit_reported_ = false;
+    }
+    return result;
 }
 
 HRESULT TextService::discard_composition(ITfContext* pContext) {
@@ -1649,6 +1676,7 @@ void TextService::refresh_composition_after_candidate_finalize(
     compositionBuffer.invalidate_all_predictions();
     e2e_trace.pre_context_started = std::chrono::steady_clock::now();
     auto pre_context = get_pre_composit_context(pContext);
+    collection_context_ = pre_context;
     e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
     e2e_trace.predict_started = std::chrono::steady_clock::now();
     const bool prediction_performed = compositionBuffer.predict_paddings(std::move(pre_context));

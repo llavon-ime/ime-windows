@@ -28,6 +28,8 @@ add_executable(llavon-ime-service
     src/service/settings_ui_loader.hpp
     src/service/tray_icon.cpp
     src/service/tray_icon.hpp
+    src/service/training_data_writer.cpp
+    src/service/training_data_writer.hpp
     src/service.rc
 )
 
@@ -173,6 +175,35 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     add_test(NAME candidate-pipe-protocol COMMAND candidate-pipe-protocol-tests)
+
+    add_executable(training-data-writer-tests
+        tests/training_data_writer_tests.cpp
+        src/service/training_data_writer.cpp
+        src/service/training_data_writer.hpp
+    )
+    target_compile_features(training-data-writer-tests PRIVATE cxx_std_23)
+    target_compile_definitions(training-data-writer-tests PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        UNICODE
+        _UNICODE
+    )
+    target_compile_options(training-data-writer-tests PRIVATE
+        /W4
+        /WX
+        /utf-8
+        /permissive-
+    )
+    target_include_directories(training-data-writer-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(training-data-writer-tests PRIVATE
+        utf8::cpp
+        utf8cpp::utf8cpp
+        ole32
+        shell32
+    )
+    add_test(NAME training-data-writer COMMAND training-data-writer-tests)
 
 endif()
 

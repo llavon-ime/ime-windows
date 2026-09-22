@@ -263,8 +263,9 @@ struct BopomofoPos {
     char16_t initial = 0, medial = 0, final = 0;
     char16_t tone = 0;
     int choose_index = 0;
-    bool chosen = false;     // user 手動選擇
+    bool chosen = false;     // fixed output supplied to subsequent predictions
     bool predicted = false;  // engine 預測
+    bool manually_selected = false;
     bool compositable = false;
     bool invalid = false;
     std::vector<char32_t> candidates;
@@ -339,6 +340,7 @@ public:
         choose_index = 0;
         chosen = true;
         predicted = true;
+        manually_selected = false;
         compositable = true;
         invalid = false;
         predicted_candidate.reset();
@@ -348,6 +350,7 @@ public:
         choose_index = idx;
         chosen = true;
         predicted = true;
+        manually_selected = true;
     }
     void choose_candidate(char32_t ch) {
         const auto candidate = std::find(candidates.begin(), candidates.end(), ch);
@@ -366,6 +369,9 @@ public:
         }
         return candidates;
     }
+    bool was_manually_selected() const noexcept {
+        return manually_selected;
+    }
     const void set_candaiates(const std::vector<char32_t>& nc) {
         candidates = nc;
     }
@@ -375,6 +381,7 @@ public:
         invalid = false;
         chosen = false;
         predicted = false;
+        manually_selected = false;
         predicted_candidate.reset();
         candidates.clear();
 
