@@ -97,11 +97,13 @@ std::wstring short_commit(std::wstring_view commit) {
     return std::wstring(commit.substr(0, 7));
 }
 
-std::wstring build_identity(std::uint64_t build, std::wstring_view commit) {
+std::wstring build_identity(
+    std::wstring_view version, std::uint64_t build, std::wstring_view commit) {
     if (build == 0) {
-        return L"開發版本（" + short_commit(commit) + L"）";
+        return std::wstring(version) + L"（" + short_commit(commit) + L"）";
     }
-    return L"建置 #" + std::to_wstring(build) + L"（" + short_commit(commit) + L"）";
+    return std::wstring(version) + L"（建置 #" + std::to_wstring(build) + L"、" +
+           short_commit(commit) + L"）";
 }
 
 const char16_t* backend_label(std::int32_t backend) {
@@ -813,7 +815,8 @@ void SettingsWindow::build_page() {
     update_section.Margin(Thickness{0, 0, 0, 24});
 
     const std::wstring build_label =
-        L"目前：" + build_identity(UpdateChecker::installed_build_number(),
+        L"目前：" + build_identity(UpdateChecker::installed_version(),
+                                    UpdateChecker::installed_build_number(),
                                     UpdateChecker::installed_commit());
     update_section.Children().Append(make_text(build_label.c_str(), body_text_size));
 
@@ -1288,13 +1291,12 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
     switch (result.status) {
         case UpdateCheckStatus::update_available: {
             const std::wstring status =
-                L"有新建置：#" + std::to_wstring(result.current_build) + L" → #" +
-                std::to_wstring(result.latest_build) + L"。";
+                L"有新版本：" + result.current_version + L" → " + result.latest_version + L"。";
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::update_available);
 
             const std::wstring download =
-                L"下載 latest（#" + std::to_wstring(result.latest_build) + L"）";
+                L"下載 " + result.latest_version;
             update_download_.Content(winrt::box_value(download));
             update_download_.NavigateUri(winrt::Windows::Foundation::Uri(result.release_url));
             update_download_.Visibility(Visibility::Visible);
@@ -1302,7 +1304,9 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
         }
         case UpdateCheckStatus::up_to_date: {
             const std::wstring status =
-                L"已是最新建置：" + build_identity(result.current_build, result.current_commit) + L"。";
+                L"已是最新版本：" +
+                build_identity(result.current_version, result.current_build, result.current_commit) +
+                L"。";
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::success);
             update_download_.Visibility(Visibility::Collapsed);
@@ -1310,8 +1314,8 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
         }
         case UpdateCheckStatus::local_newer: {
             const std::wstring status =
-                L"目前建置 #" + std::to_wstring(result.current_build) +
-                L" 比 latest #" + std::to_wstring(result.latest_build) + L" 新。";
+                L"目前版本 " + result.current_version + L" 比 latest " +
+                result.latest_version + L" 新。";
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::information);
             update_download_.Visibility(Visibility::Collapsed);
@@ -1319,13 +1323,13 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
         }
         case UpdateCheckStatus::development_build: {
             const std::wstring status =
-                build_identity(result.current_build, result.current_commit) + L" 與 latest #" +
-                std::to_wstring(result.latest_build) + L"（" + short_commit(result.latest_commit) +
-                L"）不同，無法判斷新舊。";
+                build_identity(result.current_version, result.current_build, result.current_commit) +
+                L" 與 latest " + result.latest_version + L"（" +
+                short_commit(result.latest_commit) + L"）不同，無法判斷新舊。";
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::secondary);
             const std::wstring download =
-                L"下載 latest（#" + std::to_wstring(result.latest_build) + L"）";
+                L"下載 " + result.latest_version;
             update_download_.Content(winrt::box_value(download));
             update_download_.NavigateUri(winrt::Windows::Foundation::Uri(result.release_url));
             update_download_.Visibility(Visibility::Visible);

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Bundle
+      Name="Llavon IME"
+      Manufacturer="Llavon IME"
+      Version="@LLAVON_IME_VERSION@"
+      UpgradeCode="7E4C5A19-9882-4E30-8747-3D1649D13257"
+      Compressed="yes">
+
+    <Variable Name="InstallLoraTrainer" Type="numeric" Value="0" />
+    <Variable Name="LoraTargetVersion" Type="string" Value="@LLAVON_LORA_VERSION@" />
+
+    <util:RegistrySearch
+        Id="FindLoraTrainerVersion"
+        Variable="LoraInstalledVersion"
+        Root="HKLM"
+        Key="Software\Llavon IME\LoRA Trainer"
+        Value="Version"
+        Result="value"
+        Bitness="always64" />
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          LicenseUrl=""
+          Theme="hyperlinkLargeLicense"
+          ThemeFile="@CMAKE_CURRENT_SOURCE_DIR@/cmake/wix/BundleTheme.xml"
+          LocalizationFile="@CMAKE_CURRENT_SOURCE_DIR@/cmake/wix/BundleTheme.zh-TW.wxl"
+          ShowVersion="yes"
+          SuppressOptionsUI="yes" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <MsiPackage
+          Id="LlavonImeMsi"
+          SourceFile="@LLAVON_IME_MSI_PATH@"
+          Compressed="yes"
+          Visible="yes" />
+
+      <ExePackage
+          Id="LlavonLoraWebInstaller"
+          DisplayName="Llavon LoRA Trainer @LLAVON_LORA_VERSION@"
+          SourceFile="@LLAVON_LORA_INSTALLER_PATH@"
+          DownloadUrl="@LLAVON_LORA_INSTALLER_URL@"
+          Compressed="no"
+          PerMachine="yes"
+          Permanent="yes"
+          Vital="no"
+          DetectCondition="LoraInstalledVersion = &quot;@LLAVON_LORA_VERSION@&quot;"
+          InstallCondition="InstallLoraTrainer = 1 AND (NOT LoraInstalledVersion OR LoraInstalledVersion &lt;&gt; &quot;@LLAVON_LORA_VERSION@&quot;)"
+          InstallArguments="install --manifest-url &quot;@LLAVON_LORA_MANIFEST_URL@&quot; --install-dir &quot;[ProgramFiles64Folder]Llavon IME\tools\lora&quot; --asset win-x64-cpu" />
+    </Chain>
+  </Bundle>
+</Wix>

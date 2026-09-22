@@ -2,8 +2,9 @@
 
 The top-level CMake project configures every Windows executable and DLL in one
 build graph, obtains the latest packaged model, then creates a Windows MSI with
-CPack and WiX. The cross-platform `ime-core` repository remains a submodule,
-but participates in this build as a normal static-library target.
+CPack and WiX. CI additionally wraps that MSI in a WiX Burn web installer. The
+cross-platform `ime-core` repository remains a submodule, but participates in
+this build as a normal static-library target.
 
 ## Prerequisites
 
@@ -64,8 +65,26 @@ The package target performs these steps:
 The MSI is written under:
 
 ```text
-build/windows/llavon-ime-0.1.0-windows.msi
+build/windows/llavon-ime-0.0.0.0-dev-windows.msi
 ```
+
+GitHub Actions replaces the development version with an Asia/Taipei CalVer in
+the form `YYYY.MM.DD.GITHUB_RUN_NUMBER` and uses it in the MSI filename, the
+installed version display, update comparison, immutable `v<CalVer>` release,
+and `latest.json`. The MSI's internal Windows Installer product version remains
+independent from the public CalVer because Windows Installer applies its own
+version constraints.
+
+The `*-setup.exe` bundle embeds the core MSI but keeps the small LoRA
+web-installer as a remote Burn payload. Before showing its checkbox, Burn reads
+the installed trainer CalVer from `HKLM\Software\Llavon IME\LoRA Trainer` and
+compares it with the trainer release selected by CI. Burn downloads the helper
+only after the user confirms installation. The helper then verifies the
+immutable release manifest, archive size, and SHA-256 before atomically
+replacing `<install-root>/tools/lora`. The standalone MSI remains available for
+offline and managed deployment and never installs the trainer. The bundle
+offers the `win-x64-cpu` trainer asset by default, so this path does not require
+CUDA or a CUDA Toolkit.
 
 CI builds one CPU package using loadable ggml CPU backends. At runtime ggml
 selects the fastest compatible CPU variant, so AVX2 and AVX-512 systems use the

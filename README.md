@@ -20,8 +20,10 @@
 ## 安裝
 
 1. 前往 [最新版本下載頁面](https://github.com/llavon-ime/ime-windows/releases/tag/latest)。
-2. 下載副檔名為 `.msi` 的安裝檔。
-3. 執行安裝檔並依畫面指示完成安裝。這是全系統安裝，Windows 可能會要求系統管理員權限。
+2. 一般使用者下載 `*-setup.exe`；離線或系統管理部署可改用 `.msi`。
+3. 執行安裝程式並依畫面指示完成安裝。安裝器會先顯示本機 LoRA Trainer
+   狀態；只有勾選並確認後才會下載選配的訓練工具。這是全系統安裝，Windows
+   可能會要求系統管理員權限。
 4. 安裝完成後，按 `Windows 鍵 + 空白鍵`，或點選工作列右下角的輸入法選單，切換至「拉風輸入法」。
 
 如果選單中沒有出現拉風輸入法，可前往 Windows 的「設定」→「時間與語言」→「語言與地區」，在繁體中文的鍵盤選項中確認輸入法是否已加入。
@@ -54,7 +56,7 @@
 
 ## 更新
 
-可在設定視窗中檢查更新，或直接前往[最新版本下載頁面](https://github.com/llavon-ime/ime-windows/releases/tag/latest)下載並執行新版 MSI 安裝檔。
+可在設定視窗中檢查更新，或直接前往[最新版本下載頁面](https://github.com/llavon-ime/ime-windows/releases/tag/latest)下載並執行新版 web installer。
 
 > [!IMPORTANT]
 > 現階段更新完成後需要重新啟動 Windows，才能確保新版輸入法與相關系統元件完整套用。
@@ -115,7 +117,8 @@ cmake --build --preset package --parallel
 完成後，安裝檔位於：
 
 ```text
-build/windows/llavon-ime-0.1.0-windows.msi
+build/windows/llavon-ime-0.0.0.0-dev-windows.msi
+build/windows/llavon-ime-0.0.0.0-dev-setup.exe
 ```
 
 本機打包時會檢查 Hugging Face 上的最新模型 revision，revision 更新時會重新下載模型。GitHub Actions 另會使用 SHA-256 管理及驗證模型 cache；首次打包也會從網路下載 vcpkg 相依套件及 WiX 工具。

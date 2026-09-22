@@ -1,10 +1,14 @@
 foreach(_required_var IN ITEMS
     LLAVON_IME_WIX_VERSION
     LLAVON_IME_WIX_UI_EXTENSION_VERSION
+    LLAVON_IME_WIX_BAL_EXTENSION_VERSION
+    LLAVON_IME_WIX_UTIL_EXTENSION_VERSION
     LLAVON_IME_WIX_TOOLS_DIR
     LLAVON_IME_WIX_EXTENSIONS_DIR
     LLAVON_IME_WIX_EXE
     LLAVON_IME_WIX_MARKER
+    LLAVON_IME_WIX_BAL_MARKER
+    LLAVON_IME_WIX_UTIL_MARKER
 )
     if(NOT DEFINED ${_required_var} OR "${${_required_var}}" STREQUAL "")
         message(FATAL_ERROR "${_required_var} is required")
@@ -98,3 +102,27 @@ if(NOT EXISTS "${LLAVON_IME_WIX_MARKER}")
 
     file(WRITE "${LLAVON_IME_WIX_MARKER}" "")
 endif()
+
+foreach(_extension IN ITEMS BAL UTIL)
+    if(_extension STREQUAL "BAL")
+        set(_package_name "Bal")
+    else()
+        set(_package_name "Util")
+    endif()
+    set(_version "${LLAVON_IME_WIX_${_extension}_EXTENSION_VERSION}")
+    set(_marker "${LLAVON_IME_WIX_${_extension}_MARKER}")
+    if(NOT EXISTS "${_marker}")
+        execute_process(
+            COMMAND
+                "${CMAKE_COMMAND}" -E env
+                    "WIX_EXTENSIONS=${LLAVON_IME_WIX_EXTENSIONS_DIR}"
+                    "${LLAVON_IME_WIX_EXE}" extension add --global
+                    "WixToolset.${_package_name}.wixext/${_version}"
+            RESULT_VARIABLE _wix_extension_result
+        )
+        if(NOT _wix_extension_result EQUAL 0)
+            message(FATAL_ERROR "Failed to install WixToolset.${_package_name}.wixext/${_version}")
+        endif()
+        file(WRITE "${_marker}" "")
+    endif()
+endforeach()

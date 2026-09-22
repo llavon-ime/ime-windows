@@ -23,6 +23,8 @@ struct UpdateCheckResult {
     std::uint64_t latest_build = 0;
     std::wstring current_commit;
     std::wstring latest_commit;
+    std::wstring current_version;
+    std::wstring latest_version;
     std::wstring release_url;
     std::wstring error_message;
 };
@@ -38,6 +40,7 @@ public:
 
     static std::uint64_t installed_build_number() noexcept;
     static std::wstring_view installed_commit() noexcept;
+    static std::wstring_view installed_version() noexcept;
     bool check_async(Completion completion);
 
 private:

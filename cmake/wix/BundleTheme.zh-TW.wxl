@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="zh-TW" Language="1028" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="Caption" Value="[WixBundleName] 安裝程式" />
+  <String Id="Title" Value="[WixBundleName]" />
+  <String Id="CheckingForUpdatesLabel" Value="正在檢查安裝狀態" />
+  <String Id="UpdateButton" Value="更新至 [WixStdBAUpdateAvailable]" />
+  <String Id="InstallHeader" Value="安裝拉風輸入法" />
+  <String Id="InstallMessage" Value="輸入法本體會安裝到這台電腦。LoRA 個人化訓練工具是選配元件，只有勾選並確認後才會開始下載。" />
+  <String Id="InstallVersion" Value="輸入法版本 [WixBundleVersion]" />
+  <String Id="LoraMissing" Value="尚未安裝 LoRA Trainer；遠端版本為 [LoraTargetVersion]。" />
+  <String Id="LoraCurrent" Value="LoRA Trainer [LoraInstalledVersion] 已安裝，版本一致，不需下載。" />
+  <String Id="LoraDifferent" Value="本機 LoRA Trainer 為 [LoraInstalledVersion]，遠端版本為 [LoraTargetVersion]。" />
+  <String Id="LoraInstallCheckbox" Value="安裝 LoRA Trainer [LoraTargetVersion]（確認後下載）" />
+  <String Id="LoraUpdateCheckbox" Value="將 LoRA Trainer 同步至 [LoraTargetVersion]（不會降版）" />
+  <String Id="ConfirmCancelMessage" Value="確定要取消安裝嗎？" />
+  <String Id="ExecuteUpgradeRelatedBundleMessage" Value="舊版安裝程式" />
+  <String Id="HelpHeader" Value="安裝說明" />
+  <String Id="HelpText" Value="/install、/repair、/uninstall 或 /layout [目錄]；另可使用 /passive、/quiet、/norestart 與 /log。" />
+  <String Id="HelpCloseButton" Value="關閉" />
+  <String Id="InstallLicenseLinkText" Value="" />
+  <String Id="InstallAcceptCheckbox" Value="" />
+  <String Id="InstallOptionsButton" Value="選項" />
+  <String Id="InstallInstallButton" Value="安裝" />
+  <String Id="InstallCancelButton" Value="取消" />
+  <String Id="OptionsHeader" Value="安裝選項" />
+  <String Id="OptionsLocationLabel" Value="安裝位置：" />
+  <String Id="OptionsBrowseButton" Value="瀏覽" />
+  <String Id="OptionsOkButton" Value="確定" />
+  <String Id="OptionsCancelButton" Value="取消" />
+  <String Id="ProgressHeader" Value="正在安裝" />
+  <String Id="ProgressLabel" Value="處理中：" />
+  <String Id="OverallProgressPackageText" Value="正在初始化…" />
+  <String Id="ProgressCancelButton" Value="取消" />
+  <String Id="ModifyHeader" Value="維護安裝" />
+  <String Id="ModifyRepairButton" Value="修復" />
+  <String Id="ModifyUninstallButton" Value="解除安裝" />
+  <String Id="ModifyCancelButton" Value="取消" />
+  <String Id="SuccessHeader" Value="作業完成" />
+  <String Id="SuccessCacheHeader" Value="快取完成" />
+  <String Id="SuccessInstallHeader" Value="安裝完成" />
+  <String Id="SuccessLayoutHeader" Value="離線配置完成" />
+  <String Id="SuccessModifyHeader" Value="修改完成" />
+  <String Id="SuccessRepairHeader" Value="修復完成" />
+  <String Id="SuccessUninstallHeader" Value="解除安裝完成" />
+  <String Id="SuccessUnsafeUninstallHeader" Value="解除安裝完成" />
+  <String Id="SuccessLaunchButton" Value="啟動" />
+  <String Id="SuccessRestartText" Value="必須重新啟動電腦才能完成安裝。" />
+  <String Id="SuccessUninstallRestartText" Value="必須重新啟動電腦才能完成移除。" />
+  <String Id="SuccessRestartButton" Value="重新啟動" />
+  <String Id="SuccessCloseButton" Value="關閉" />
+  <String Id="FailureHeader" Value="作業失敗" />
+  <String Id="FailureCacheHeader" Value="快取失敗" />
+  <String Id="FailureInstallHeader" Value="安裝失敗" />
+  <String Id="FailureLayoutHeader" Value="離線配置失敗" />
+  <String Id="FailureModifyHeader" Value="修改失敗" />
+  <String Id="FailureRepairHeader" Value="修復失敗" />
+  <String Id="FailureUninstallHeader" Value="解除安裝失敗" />
+  <String Id="FailureUnsafeUninstallHeader" Value="解除安裝失敗" />
+  <String Id="FailureHyperlinkLogText" Value="安裝程式發生問題，請查看&lt;a href=&quot;#&quot;&gt;記錄檔&lt;/a&gt;後重試。" />
+  <String Id="FailureRestartText" Value="必須重新啟動電腦才能完成復原。" />
+  <String Id="FailureRestartButton" Value="重新啟動" />
+  <String Id="FailureCloseButton" Value="關閉" />
+  <String Id="FilesInUseTitle" Value="檔案使用中" />
+  <String Id="FilesInUseLabel" Value="下列應用程式正在使用需要更新的檔案：" />
+  <String Id="FilesInUseNetfxCloseRadioButton" Value="關閉應用程式。" />
+  <String Id="FilesInUseCloseRadioButton" Value="關閉應用程式並嘗試重新啟動。" />
+  <String Id="FilesInUseDontCloseRadioButton" Value="不要關閉；稍後需要重新啟動電腦。" />
+  <String Id="FilesInUseRetryButton" Value="重試" />
+  <String Id="FilesInUseIgnoreButton" Value="忽略" />
+  <String Id="FilesInUseExitButton" Value="結束" />
+</WixLocalization>

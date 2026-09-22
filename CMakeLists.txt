@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
-set(LLAVON_IME_VERSION "0.1.0" CACHE STRING "Package version")
+set(LLAVON_IME_VERSION "0.0.0.0-dev" CACHE STRING "Public CalVer release version")
+set(LLAVON_IME_MSI_VERSION "0.1.0" CACHE STRING "Internal Windows Installer product version")
 option(LLAVON_IME_ENABLE_CUDA "Build ime-core with the CUDA backend" OFF)
 
 # vcpkg's toolchain is loaded by project(). Select optional manifest features
@@ -11,7 +12,7 @@ if(LLAVON_IME_ENABLE_CUDA)
 endif()
 
 project(llavon_ime_windows
-    VERSION "${LLAVON_IME_VERSION}"
+    VERSION "${LLAVON_IME_MSI_VERSION}"
     LANGUAGES CXX RC
 )
 
@@ -89,6 +90,8 @@ set(LLAVON_IME_MODEL_PATH
 
 set(LLAVON_IME_WIX_VERSION "4.0.4" CACHE STRING "WiX .NET tool version used by CPack")
 set(LLAVON_IME_WIX_UI_EXTENSION_VERSION "4.0.4" CACHE STRING "WiX UI extension version used by CPack")
+set(LLAVON_IME_WIX_BAL_EXTENSION_VERSION "4.0.4" CACHE STRING "WiX bootstrapper extension version")
+set(LLAVON_IME_WIX_UTIL_EXTENSION_VERSION "4.0.4" CACHE STRING "WiX utility extension version")
 set(LLAVON_IME_WIX_TOOLS_DIR
     "${CMAKE_CURRENT_BINARY_DIR}/.wix-tools"
     CACHE PATH
@@ -103,6 +106,17 @@ set(LLAVON_IME_WIX_EXE "${LLAVON_IME_WIX_TOOLS_DIR}/wix.cmd")
 set(LLAVON_IME_WIX_MARKER
     "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.UI.wixext-${LLAVON_IME_WIX_UI_EXTENSION_VERSION}.stamp"
 )
+set(LLAVON_IME_WIX_BAL_MARKER
+    "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.Bal.wixext-${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}.stamp"
+)
+set(LLAVON_IME_WIX_UTIL_MARKER
+    "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.Util.wixext-${LLAVON_IME_WIX_UTIL_EXTENSION_VERSION}.stamp"
+)
+
+set(LLAVON_LORA_VERSION "" CACHE STRING "Optional LoRA Trainer CalVer offered by the web installer")
+set(LLAVON_LORA_MANIFEST_URL "" CACHE STRING "Immutable LoRA Trainer release manifest URL")
+set(LLAVON_LORA_INSTALLER_URL "" CACHE STRING "LoRA Trainer web-installer download URL")
+set(LLAVON_LORA_INSTALLER_PATH "" CACHE FILEPATH "Verified local LoRA Trainer web-installer")
 
 set(LLAVON_IME_SERVICE_STARTUP_LAUNCHER
     "${CMAKE_CURRENT_BINARY_DIR}/start-llavon-ime-service.vbs"
@@ -198,14 +212,20 @@ add_custom_command(
     OUTPUT
         "${LLAVON_IME_WIX_EXE}"
         "${LLAVON_IME_WIX_MARKER}"
+        "${LLAVON_IME_WIX_BAL_MARKER}"
+        "${LLAVON_IME_WIX_UTIL_MARKER}"
     COMMAND
         "${CMAKE_COMMAND}"
             "-DLLAVON_IME_WIX_VERSION=${LLAVON_IME_WIX_VERSION}"
             "-DLLAVON_IME_WIX_UI_EXTENSION_VERSION=${LLAVON_IME_WIX_UI_EXTENSION_VERSION}"
+            "-DLLAVON_IME_WIX_BAL_EXTENSION_VERSION=${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}"
+            "-DLLAVON_IME_WIX_UTIL_EXTENSION_VERSION=${LLAVON_IME_WIX_UTIL_EXTENSION_VERSION}"
             "-DLLAVON_IME_WIX_TOOLS_DIR=${LLAVON_IME_WIX_TOOLS_DIR}"
             "-DLLAVON_IME_WIX_EXTENSIONS_DIR=${LLAVON_IME_WIX_EXTENSIONS_DIR}"
             "-DLLAVON_IME_WIX_EXE=${LLAVON_IME_WIX_EXE}"
             "-DLLAVON_IME_WIX_MARKER=${LLAVON_IME_WIX_MARKER}"
+            "-DLLAVON_IME_WIX_BAL_MARKER=${LLAVON_IME_WIX_BAL_MARKER}"
+            "-DLLAVON_IME_WIX_UTIL_MARKER=${LLAVON_IME_WIX_UTIL_MARKER}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EnsureWix.cmake"
     COMMENT "Restoring WiX ${LLAVON_IME_WIX_VERSION} from NuGet"
     VERBATIM
@@ -214,6 +234,8 @@ add_custom_target(llavon-ime-wix
     DEPENDS
         "${LLAVON_IME_WIX_EXE}"
         "${LLAVON_IME_WIX_MARKER}"
+        "${LLAVON_IME_WIX_BAL_MARKER}"
+        "${LLAVON_IME_WIX_UTIL_MARKER}"
 )
 
 add_custom_target(llavon-ime-package-inputs
@@ -235,6 +257,56 @@ add_custom_target(llavon-ime-msi
     DEPENDS llavon-ime-package-inputs
     USES_TERMINAL
 )
+
+if(LLAVON_LORA_VERSION OR LLAVON_LORA_MANIFEST_URL OR LLAVON_LORA_INSTALLER_URL OR
+   LLAVON_LORA_INSTALLER_PATH)
+    if(NOT LLAVON_LORA_VERSION MATCHES "^[0-9][0-9][0-9][0-9]\\.[0-9][0-9]\\.[0-9][0-9]\\.[0-9]+$")
+        message(FATAL_ERROR "LLAVON_LORA_VERSION must use YYYY.MM.DD.REVISION CalVer")
+    endif()
+    foreach(_required_lora_var IN ITEMS
+        LLAVON_LORA_MANIFEST_URL
+        LLAVON_LORA_INSTALLER_URL
+        LLAVON_LORA_INSTALLER_PATH
+    )
+        if(NOT DEFINED ${_required_lora_var} OR "${${_required_lora_var}}" STREQUAL "")
+            message(FATAL_ERROR "${_required_lora_var} is required when enabling the LoRA web installer")
+        endif()
+    endforeach()
+    if(NOT EXISTS "${LLAVON_LORA_INSTALLER_PATH}")
+        message(FATAL_ERROR "Verified LoRA web installer not found: ${LLAVON_LORA_INSTALLER_PATH}")
+    endif()
+
+    set(LLAVON_IME_MSI_PATH
+        "${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-${LLAVON_IME_VERSION}-windows.msi")
+    set(LLAVON_IME_SETUP_PATH
+        "${CMAKE_CURRENT_BINARY_DIR}/llavon-ime-${LLAVON_IME_VERSION}-setup.exe")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/Bundle.wxs.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/Bundle.wxs"
+        @ONLY
+    )
+    add_custom_target(llavon-ime-setup
+        COMMAND
+            "${CMAKE_COMMAND}" -E env
+                "WIX_EXTENSIONS=${LLAVON_IME_WIX_EXTENSIONS_DIR}"
+                "${LLAVON_IME_WIX_EXE}" build
+                -arch x64
+                -ext "WixToolset.Bal.wixext/${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}"
+                -ext "WixToolset.Util.wixext/${LLAVON_IME_WIX_UTIL_EXTENSION_VERSION}"
+                -o "${LLAVON_IME_SETUP_PATH}"
+                "${CMAKE_CURRENT_BINARY_DIR}/Bundle.wxs"
+        DEPENDS
+            llavon-ime-msi
+            "${LLAVON_IME_WIX_EXE}"
+            "${LLAVON_IME_WIX_BAL_MARKER}"
+            "${LLAVON_IME_WIX_UTIL_MARKER}"
+            "${CMAKE_CURRENT_BINARY_DIR}/Bundle.wxs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/BundleTheme.xml"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/BundleTheme.zh-TW.wxl"
+            "${LLAVON_LORA_INSTALLER_PATH}"
+        USES_TERMINAL
+    )
+endif()
 
 # The custom triplet builds llama.cpp and ggml as DLLs, including CPU backend
 # modules loaded dynamically at runtime. Install the complete runtime DLL set.
@@ -286,7 +358,7 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "拉風輸入法 Windows 版")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "Llavon IME")
 set(CPACK_PACKAGING_INSTALL_PREFIX "")
 set(CPACK_RESOURCE_FILE_LICENSE "${LLAVON_IME_PACKAGE_LICENSE}")
-set(CPACK_PACKAGE_FILE_NAME "llavon-ime-${PROJECT_VERSION}-windows")
+set(CPACK_PACKAGE_FILE_NAME "llavon-ime-${LLAVON_IME_VERSION}-windows")
 set(CPACK_WIX_VERSION "4")
 set(CPACK_WIX_EXTENSIONS "WixToolset.UI.wixext")
 set(CPACK_WIX_CULTURES "zh-TW")

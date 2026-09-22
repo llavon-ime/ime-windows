@@ -71,7 +71,7 @@ set_target_properties(llavon-ime-candidate-ui PROPERTIES
     OUTPUT_NAME "llavon-ime-candidate-ui"
 )
 target_compile_definitions(llavon-ime-service PRIVATE
-    LLAVON_IME_VERSION="${PROJECT_VERSION}"
+    LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     UNICODE
@@ -80,6 +80,7 @@ target_compile_definitions(llavon-ime-service PRIVATE
     _WIN32_WINNT=0x0A00
 )
 target_compile_definitions(llavon-ime-settings-ui PRIVATE
+    LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
     LLAVON_IME_BUILD_COMMIT="${IME_WINDOWS_SERVICE_BUILD_COMMIT}"
     LLAVON_IME_BUILD_NUMBER=${IME_WINDOWS_SERVICE_BUILD_NUMBER}
     LLAVON_SETTINGS_UI_EXPORTS

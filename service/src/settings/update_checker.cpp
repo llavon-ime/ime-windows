@@ -9,8 +9,10 @@
 
 #include <chrono>
 #include <cmath>
+#include <compare>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -29,12 +31,77 @@ using winrt::Windows::Web::Http::HttpClient;
 
 constexpr std::uint64_t current_build = LLAVON_IME_BUILD_NUMBER;
 constexpr wchar_t current_commit[] = LLAVON_WIDEN(LLAVON_IME_BUILD_COMMIT);
+constexpr wchar_t current_version[] = LLAVON_WIDEN(LLAVON_IME_VERSION);
 constexpr wchar_t latest_manifest_url[] =
     L"https://github.com/llavon-ime/ime-windows/releases/download/latest/latest.json";
 constexpr wchar_t latest_release_url[] =
     L"https://github.com/llavon-ime/ime-windows/releases/tag/latest";
 constexpr auto update_timeout = std::chrono::seconds(2);
 constexpr double largest_exact_json_integer = 9007199254740991.0;
+
+struct CalVersion {
+    std::uint64_t year;
+    std::uint64_t month;
+    std::uint64_t day;
+    std::uint64_t revision;
+
+    auto operator<=>(const CalVersion&) const = default;
+};
+
+std::optional<std::uint64_t> parse_calver_component(std::wstring_view value) noexcept {
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    std::uint64_t result = 0;
+    for (const wchar_t character : value) {
+        if (character < L'0' || character > L'9') {
+            return std::nullopt;
+        }
+        const auto digit = static_cast<std::uint64_t>(character - L'0');
+        if (result > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
+            return std::nullopt;
+        }
+        result = result * 10 + digit;
+    }
+    return result;
+}
+
+std::optional<CalVersion> parse_calver(std::wstring_view value) noexcept {
+    std::wstring_view components[4];
+    for (std::size_t index = 0; index < 3; ++index) {
+        const auto separator = value.find(L'.');
+        if (separator == std::wstring_view::npos) {
+            return std::nullopt;
+        }
+        components[index] = value.substr(0, separator);
+        value.remove_prefix(separator + 1);
+    }
+    if (value.find(L'.') != std::wstring_view::npos) {
+        return std::nullopt;
+    }
+    components[3] = value;
+
+    if (components[0].size() != 4 || components[1].size() != 2 ||
+        components[2].size() != 2) {
+        return std::nullopt;
+    }
+    const auto year = parse_calver_component(components[0]);
+    const auto month = parse_calver_component(components[1]);
+    const auto day = parse_calver_component(components[2]);
+    const auto revision = parse_calver_component(components[3]);
+    if (!year || !month || !day || !revision || *year < 2000 || *year > 9999) {
+        return std::nullopt;
+    }
+
+    const std::chrono::year_month_day date{
+        std::chrono::year{static_cast<int>(*year)},
+        std::chrono::month{static_cast<unsigned>(*month)},
+        std::chrono::day{static_cast<unsigned>(*day)}};
+    if (!date.ok()) {
+        return std::nullopt;
+    }
+    return CalVersion{*year, *month, *day, *revision};
+}
 
 class WinrtApartment final {
 public:
@@ -78,6 +145,7 @@ UpdateCheckResult base_result() {
     UpdateCheckResult result;
     result.current_build = current_build;
     result.current_commit = current_commit;
+    result.current_version = current_version;
     return result;
 }
 
@@ -103,7 +171,8 @@ UpdateCheckResult perform_check() {
 
     JsonObject manifest{nullptr};
     if (!JsonObject::TryParse(body, manifest) || !manifest.HasKey(L"schema") ||
-        !manifest.HasKey(L"build") || !manifest.HasKey(L"commit")) {
+        !manifest.HasKey(L"build") || !manifest.HasKey(L"commit") ||
+        !manifest.HasKey(L"version")) {
         throw std::runtime_error("latest.json is missing required fields");
     }
     if (json_unsigned(manifest, L"schema") != 1) {
@@ -113,23 +182,28 @@ UpdateCheckResult perform_check() {
     result.latest_build = json_unsigned(manifest, L"build");
     const winrt::hstring remote_commit = manifest.GetNamedString(L"commit");
     result.latest_commit.assign(remote_commit.c_str(), remote_commit.size());
+    const winrt::hstring remote_version = manifest.GetNamedString(L"version");
+    result.latest_version.assign(remote_version.c_str(), remote_version.size());
     result.release_url = latest_release_url;
-    if (!is_commit_id(result.latest_commit) || result.latest_build == 0) {
+    const auto parsed_latest_version = parse_calver(result.latest_version);
+    if (!is_commit_id(result.latest_commit) || result.latest_build == 0 ||
+        !parsed_latest_version) {
         throw std::runtime_error("latest.json contains invalid build identity");
     }
 
-    if (result.current_build == 0) {
+    const auto parsed_current_version = parse_calver(result.current_version);
+    if (result.current_build == 0 || !parsed_current_version) {
         result.status = result.current_commit == result.latest_commit
                             ? UpdateCheckStatus::up_to_date
                             : UpdateCheckStatus::development_build;
-    } else if (result.current_build < result.latest_build) {
+    } else if (*parsed_current_version < *parsed_latest_version) {
         result.status = UpdateCheckStatus::update_available;
-    } else if (result.current_build > result.latest_build) {
+    } else if (*parsed_current_version > *parsed_latest_version) {
         result.status = UpdateCheckStatus::local_newer;
     } else if (result.current_commit == result.latest_commit) {
         result.status = UpdateCheckStatus::up_to_date;
     } else {
-        throw std::runtime_error("build number matches latest but commit id differs");
+        throw std::runtime_error("CalVer matches latest but commit id differs");
     }
     return result;
 }
@@ -153,6 +227,10 @@ std::uint64_t UpdateChecker::installed_build_number() noexcept {
 
 std::wstring_view UpdateChecker::installed_commit() noexcept {
     return current_commit;
+}
+
+std::wstring_view UpdateChecker::installed_version() noexcept {
+    return current_version;
 }
 
 bool UpdateChecker::check_async(Completion completion) {

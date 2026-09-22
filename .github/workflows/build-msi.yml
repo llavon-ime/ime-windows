@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ime-windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CMAKE_BUILD_PARALLEL_LEVEL: 2
   VCPKG_ROOT: ${{ github.workspace }}/vcpkg
@@ -18,6 +22,8 @@ jobs:
   build-msi:
     name: Build Windows MSI
     runs-on: windows-2022
+    outputs:
+      release-version: ${{ steps.release-version.outputs.version }}
 
     steps:
       - name: Checkout
@@ -33,6 +39,15 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+
+      - name: Resolve Asia/Taipei CalVer
+        id: release-version
+        shell: pwsh
+        run: |
+          $date = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8))
+          $version = "$($date.ToString('yyyy.MM.dd')).${{ github.run_number }}"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Release version: $version"
 
       - name: Resolve vcpkg cache identity
         id: vcpkg-cache
@@ -84,6 +99,41 @@ jobs:
           path: build/windows/downloads
           key: ${{ runner.os }}-model-${{ steps.model.outputs.sha256 }}
 
+      - name: Resolve LoRA Trainer release
+        id: lora
+        shell: pwsh
+        run: |
+          $rollingManifestUrl = 'https://github.com/llavon-ime/lora-trainer/releases/download/latest/latest.json'
+          $manifest = Invoke-RestMethod -Uri $rollingManifestUrl
+          if ($manifest.schema -ne 1 -or $manifest.version -notmatch '^\d{4}\.\d{2}\.\d{2}\.\d+$') {
+            throw "LoRA Trainer returned an invalid release manifest"
+          }
+          if ($manifest.trainerApi -ne 1) {
+            throw "Unsupported LoRA Trainer API: $($manifest.trainerApi)"
+          }
+          if ($manifest.installer.sha256 -notmatch '^[0-9a-f]{64}$' -or
+              $manifest.installer.url -notmatch '^https://') {
+            throw "LoRA Trainer manifest has invalid installer metadata"
+          }
+          if ($null -eq $manifest.assets.'win-x64-cpu') {
+            throw "LoRA Trainer manifest has no win-x64-cpu asset"
+          }
+
+          $installerPath = Join-Path $PWD "build/windows/downloads/$($manifest.installer.name)"
+          New-Item -ItemType Directory -Force (Split-Path -Parent $installerPath) | Out-Null
+          Invoke-WebRequest -Uri $manifest.installer.url -OutFile $installerPath
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerPath).Hash.ToLowerInvariant()
+          if ($actualHash -ne $manifest.installer.sha256) {
+            Remove-Item -LiteralPath $installerPath
+            throw "LoRA web-installer SHA-256 mismatch"
+          }
+
+          $immutableManifestUrl = "https://github.com/llavon-ime/lora-trainer/releases/download/v$($manifest.version)/latest.json"
+          "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
+          "manifest-url=$immutableManifestUrl" >> $env:GITHUB_OUTPUT
+          "installer-url=$($manifest.installer.url)" >> $env:GITHUB_OUTPUT
+          "installer-path=$installerPath" >> $env:GITHUB_OUTPUT
+
       - name: Create cache directories
         shell: pwsh
         run: New-Item -ItemType Directory -Force .vcpkg-cache, build/windows/downloads | Out-Null
@@ -134,11 +184,16 @@ jobs:
         run: >-
           cmake --preset windows
           -DVCPKG_TARGET_TRIPLET=x64-windows-cpu-dispatch
+          "-DLLAVON_IME_VERSION=${{ steps.release-version.outputs.version }}"
           "-DLLAVON_IME_MODEL_REVISION=${{ steps.model.outputs.revision }}"
+          "-DLLAVON_LORA_VERSION=${{ steps.lora.outputs.version }}"
+          "-DLLAVON_LORA_MANIFEST_URL=${{ steps.lora.outputs.manifest-url }}"
+          "-DLLAVON_LORA_INSTALLER_URL=${{ steps.lora.outputs.installer-url }}"
+          "-DLLAVON_LORA_INSTALLER_PATH=${{ steps.lora.outputs.installer-path }}"
 
-      - name: Build MSI
+      - name: Build web installer
         shell: pwsh
-        run: cmake --build --preset package --parallel
+        run: cmake --build build/windows --config Release --target llavon-ime-setup --parallel
 
       - name: Verify packaged CPU backends
         shell: pwsh
@@ -205,13 +260,25 @@ jobs:
 
       - name: Show MSI
         shell: pwsh
-        run: Get-Item build/windows/llavon-ime-*-windows.msi | Select-Object FullName, Length, LastWriteTime
+        run: Get-Item build/windows/llavon-ime-${{ steps.release-version.outputs.version }}-windows.msi | Select-Object FullName, Length, LastWriteTime
+
+      - name: Show web installer
+        shell: pwsh
+        run: Get-Item build/windows/llavon-ime-${{ steps.release-version.outputs.version }}-setup.exe | Select-Object FullName, Length, LastWriteTime
 
       - name: Upload MSI
         uses: actions/upload-artifact@v4
         with:
           name: llavon-ime-windows-msi
-          path: build/windows/llavon-ime-*-windows.msi
+          path: build/windows/llavon-ime-${{ steps.release-version.outputs.version }}-windows.msi
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload web installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: llavon-ime-windows-setup
+          path: build/windows/llavon-ime-${{ steps.release-version.outputs.version }}-setup.exe
           if-no-files-found: error
           retention-days: 14
 
@@ -233,6 +300,12 @@ jobs:
           name: llavon-ime-windows-msi
           path: release-assets
 
+      - name: Download web installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: llavon-ime-windows-setup
+          path: release-assets
+
       - name: Publish latest release
         shell: pwsh
         env:
@@ -243,24 +316,49 @@ jobs:
             throw "Expected one MSI, found $($msis.Count)"
           }
           $msi = $msis[0]
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag --force latest "${{ github.sha }}"
-          git push --force origin refs/tags/latest
+          $setups = @(Get-ChildItem release-assets -Filter *-setup.exe | Sort-Object Name)
+          if ($setups.Count -ne 1) {
+            throw "Expected one web installer, found $($setups.Count)"
+          }
+          $setup = $setups[0]
 
           $manifestPath = Join-Path $PWD "latest.json"
+          $releaseVersion = "${{ needs.build-msi.outputs.release-version }}"
+          $releaseTag = "v$releaseVersion"
           $manifest = [ordered]@{
             schema = 1
+            version = $releaseVersion
             build = [long]"${{ github.run_number }}"
             commit = "${{ github.sha }}"
-            published_at = (Get-Date).ToUniversalTime().ToString("o")
+            published_at = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8)).ToString("o")
           } | ConvertTo-Json -Compress
           [System.IO.File]::WriteAllText(
             $manifestPath,
             $manifest,
             [System.Text.UTF8Encoding]::new($false)
           )
+
+          gh release view $releaseTag --json targetCommitish *> $null
+          if ($LASTEXITCODE -eq 0) {
+            $targetCommit = (& gh release view $releaseTag --json targetCommitish --jq .targetCommitish).Trim()
+            if ($targetCommit -ne "${{ github.sha }}") {
+              throw "$releaseTag already exists for another commit: $targetCommit"
+            }
+            gh release upload $releaseTag $setup.FullName $msi.FullName $manifestPath --clobber
+          } else {
+            gh release create $releaseTag $setup.FullName $msi.FullName $manifestPath `
+              --target "${{ github.sha }}" `
+              --title "Llavon IME $releaseVersion" `
+              --notes "Automated Asia/Taipei CalVer release from commit ${{ github.sha }}."
+          }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --force latest "${{ github.sha }}"
+          git push --force origin refs/tags/latest
 
           gh release view latest *> $null
           if ($LASTEXITCODE -eq 0) {
@@ -270,7 +368,7 @@ jobs:
             }
           }
 
-          gh release create latest $msi.FullName $manifestPath `
+          gh release create latest $setup.FullName $msi.FullName $manifestPath `
             --title "Latest Windows build" `
-            --notes "One CPU package automatically selects the fastest compatible ggml backend at runtime. Automatically updated from build #${{ github.run_number }} at commit ${{ github.sha }} on the default branch." `
+            --notes "Download the web installer for optional LoRA Trainer setup, or the standalone MSI for offline deployment. Automatically updated from build #${{ github.run_number }} at commit ${{ github.sha }} on the default branch." `
             --latest
