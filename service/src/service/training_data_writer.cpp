@@ -2,6 +2,7 @@
 
 #include <shlobj.h>
 #include <sqlite3.h>
+#include <jsoncons/json.hpp>
 #include <utf8/cpp20.h>
 #include <windows.h>
 
@@ -236,6 +237,67 @@ bool was_revised(const RawCommitEvent& event) {
     return false;
 }
 
+bool has_bopomofo(std::u16string_view reading) {
+    return std::any_of(reading.begin(), reading.end(), [](char16_t character) {
+        return character >= u'ㄅ' && character <= u'ㄩ';
+    });
+}
+
+bool has_bopomofo_input(const RawCommitEvent& event) {
+    return std::any_of(event.input.begin(), event.input.end(), [](const auto& entry) {
+        return has_bopomofo(entry.reading);
+    });
+}
+
+std::string column_text(sqlite3_stmt* statement, int column);
+
+bool has_bopomofo_annotation(std::string_view padding_json) {
+    try {
+        const auto padding = jsoncons::json::parse(padding_json);
+        if (!padding.is_array()) return true; // Leave malformed data untouched.
+        for (const auto& entry : padding.array_range()) {
+            if (!entry.is_object()) return true;
+            for (const char* key : {"syllable", "rawReading"}) {
+                if (entry.contains(key) && entry.at(key).is_string() &&
+                    has_bopomofo(utf8::utf8to16(entry.at(key).as<std::string>()))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    } catch (...) {
+        return true; // Do not delete data whose format we cannot inspect.
+    }
+}
+
+void discard_existing_non_bopomofo_commits(Database& database) {
+    std::vector<sqlite3_int64> ids;
+    {
+        Statement select(database.get(),
+            "SELECT id, padding_json FROM training_commits WHERE training_state='pending'");
+        while (select.next()) {
+            if (!has_bopomofo_annotation(column_text(select.get(), 1))) {
+                ids.push_back(sqlite3_column_int64(select.get(), 0));
+            }
+        }
+    }
+    if (ids.empty()) return;
+    database.execute("BEGIN IMMEDIATE");
+    try {
+        Statement remove(database.get(),
+            "DELETE FROM training_commits WHERE id=? AND training_state='pending'");
+        for (const auto id : ids) {
+            remove.bind_integer(1, id);
+            remove.execute();
+            remove.reset();
+        }
+        database.execute("COMMIT");
+    } catch (...) {
+        try { database.execute("ROLLBACK"); } catch (...) {}
+        throw;
+    }
+}
+
 void initialize_database(const std::filesystem::path& path) {
     if (!path.parent_path().empty()) {
         std::filesystem::create_directories(path.parent_path());
@@ -279,6 +341,7 @@ TrainingDataWriter::TrainingDataWriter(
     initialize_database(database_path_);
     {
         Database database(database_path_);
+        discard_existing_non_bopomofo_commits(database);
         Statement select(
             database.get(),
             "SELECT COUNT(*) FROM training_commits WHERE training_state='pending'");
@@ -510,6 +573,7 @@ void TrainingDataWriter::worker_main() noexcept {
             }
 
             try {
+                if (!has_bopomofo_input(event)) continue;
                 const std::string event_id =
                     event.session_id + ":" + std::to_string(event.sequence);
                 insert.bind_text(1, event_id);

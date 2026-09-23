@@ -51,8 +51,25 @@ int main() {
     };
     const RawCommitEvent arrived_after_review{
         .answer = u"late",
-        .input = {RawCommitInputEntry{.reading = u"later", .output = u"late"}},
+        .input = {RawCommitInputEntry{.reading = u"\u310c\u311e ", .output = u"late"}},
         .session_id = "late",
+        .sequence = 1,
+        .committed_at_utc = "t",
+    };
+    const RawCommitEvent literal_only{
+        .answer = u"。ㄅ",
+        .input = {
+            RawCommitInputEntry{.output = u"。"},
+            RawCommitInputEntry{.output = u"ㄅ"},
+        },
+        .session_id = "literal",
+        .sequence = 1,
+        .committed_at_utc = "t",
+    };
+    const RawCommitEvent non_bopomofo_reading{
+        .answer = u"x",
+        .input = {RawCommitInputEntry{.reading = u"abc", .output = u"x"}},
+        .session_id = "latin",
         .sequence = 1,
         .committed_at_utc = "t",
     };
@@ -76,8 +93,22 @@ int main() {
         writer.enqueue(trainable);
         writer.enqueue(arrived_after_review);
         writer.enqueue(event); // Duplicate IDs must not increment the count.
+        writer.enqueue(literal_only);
+        writer.enqueue(non_bopomofo_reading);
     }
     if (inserted_counts != std::vector<std::size_t>{0, 1, 2, 3, 4}) return 14;
+
+    // Records created by an older collector must also disappear from the list.
+    sqlite3* legacy_database = nullptr;
+    if (sqlite3_open16(path.c_str(), &legacy_database) != SQLITE_OK) return 18;
+    const char* legacy_insert =
+        "INSERT INTO training_commits(event_id,context,answer,padding_json,reading,"
+        "revice,committed_at_utc) VALUES "
+        "('legacy:1','','ㄅ','[{\"literal\":\"ㄅ\"}]','ㄅ',0,'t')";
+    const int legacy_result = sqlite3_exec(
+        legacy_database, legacy_insert, nullptr, nullptr, nullptr);
+    sqlite3_close(legacy_database);
+    if (legacy_result != SQLITE_OK) return 19;
 
     {
         TrainingDataWriter writer(path);
