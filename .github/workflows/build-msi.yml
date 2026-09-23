@@ -372,11 +372,15 @@ jobs:
               throw "$releaseTag already exists for another commit: $targetCommit"
             }
             gh release upload $releaseTag $setup.FullName $msi.FullName $manifestPath --clobber
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            gh release edit $releaseTag --notes-file .github/release-notes.md
           } else {
             gh release create $releaseTag $setup.FullName $msi.FullName $manifestPath `
               --target "${{ github.sha }}" `
               --title "Llavon IME $releaseVersion" `
-              --notes "Automated Asia/Taipei CalVer release from commit ${{ github.sha }}."
+              --notes-file .github/release-notes.md
           }
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
@@ -397,5 +401,5 @@ jobs:
 
           gh release create latest $setup.FullName $msi.FullName $manifestPath `
             --title "Latest Windows build" `
-            --notes "Download the web installer for optional LoRA Trainer setup, or the standalone MSI for offline deployment. Automatically updated from build #${{ github.run_number }} at commit ${{ github.sha }} on the default branch." `
+            --notes-file .github/release-notes.md `
             --latest
