@@ -13,16 +13,16 @@
         <Shortcut
           Id="UninstallLlavonImeFromInstallDirectory"
           Name="解除安裝拉風輸入法"
-          Description="解除安裝拉風輸入法"
-          Target="[SystemFolder]msiexec.exe"
-          Arguments="/x [ProductCode]" />
+          Description="開啟已安裝的程式，解除安裝 Llavon IME 安裝套件"
+          Target="[SystemFolder]control.exe"
+          Arguments="appwiz.cpl" />
         <Shortcut
           Id="UninstallLlavonImeFromProgramMenu"
           Directory="LlavonImeProgramMenuFolder"
           Name="解除安裝拉風輸入法"
-          Description="解除安裝拉風輸入法"
-          Target="[SystemFolder]msiexec.exe"
-          Arguments="/x [ProductCode]" />
+          Description="開啟已安裝的程式，解除安裝 Llavon IME 安裝套件"
+          Target="[SystemFolder]control.exe"
+          Arguments="appwiz.cpl" />
         <RemoveFolder
           Id="RemoveLlavonImeProgramMenuFolder"
           Directory="LlavonImeProgramMenuFolder"

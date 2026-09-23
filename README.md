@@ -117,9 +117,11 @@ cmake --build --preset package --parallel
 完成後，安裝檔位於：
 
 ```text
-build/windows/llavon-ime-0.0.0.0-dev-windows.msi
-build/windows/llavon-ime-0.0.0.0-dev-setup.exe
+build/windows/llavon-ime-0.0.1-windows.msi
+build/windows/llavon-ime-0.0.1-setup.exe
 ```
+
+安裝器與 MSI 的內部版號固定為 `0.0.1`；CalVer 只用於 GitHub 發布 tag 與其 `latest.json` 發布資訊。從舊的 CalVer 安裝器轉換時，須先從 Windows「已安裝的應用程式」解除安裝舊的安裝套件一次（選顯示 CalVer 的項目，不是舊版另外顯示的 MSI）；否則 WiX 會把 `0.0.1` 視為降版。新安裝套件只會顯示一個解除安裝項目。本機之後只需執行 `cmake --build build/windows --config Release --target llavon-ime-setup --parallel`，不必為版號重新 configure。
 
 本機打包時會檢查 Hugging Face 上的最新模型 revision，revision 更新時會重新下載模型。GitHub Actions 另會使用 SHA-256 管理及驗證模型 cache；首次打包也會從網路下載 vcpkg 相依套件及 WiX 工具。
 

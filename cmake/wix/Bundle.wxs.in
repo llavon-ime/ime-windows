@@ -34,7 +34,7 @@
           Id="LlavonImeMsi"
           SourceFile="@LLAVON_IME_MSI_PATH@"
           Compressed="yes"
-          Visible="yes" />
+          Visible="no" />
 
       <ExePackage
           Id="LlavonLoraWebInstaller"

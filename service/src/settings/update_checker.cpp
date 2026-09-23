@@ -191,19 +191,20 @@ UpdateCheckResult perform_check() {
         throw std::runtime_error("latest.json contains invalid build identity");
     }
 
-    const auto parsed_current_version = parse_calver(result.current_version);
-    if (result.current_build == 0 || !parsed_current_version) {
+    // The installed WiX version is fixed; release tags are display metadata.
+    // GitHub run numbers, not installer versions, order published builds.
+    if (result.current_build == 0) {
         result.status = result.current_commit == result.latest_commit
                             ? UpdateCheckStatus::up_to_date
                             : UpdateCheckStatus::development_build;
-    } else if (*parsed_current_version < *parsed_latest_version) {
+    } else if (result.current_build < result.latest_build) {
         result.status = UpdateCheckStatus::update_available;
-    } else if (*parsed_current_version > *parsed_latest_version) {
+    } else if (result.current_build > result.latest_build) {
         result.status = UpdateCheckStatus::local_newer;
     } else if (result.current_commit == result.latest_commit) {
         result.status = UpdateCheckStatus::up_to_date;
     } else {
-        throw std::runtime_error("CalVer matches latest but commit id differs");
+        throw std::runtime_error("build number matches latest but commit id differs");
     }
     return result;
 }

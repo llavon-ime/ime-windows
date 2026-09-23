@@ -6,40 +6,23 @@
     <Button x:Name="SelectAllButton" Content="全選" MinHeight="32" />
     <Button x:Name="ClearAllButton" Content="全部取消" MinHeight="32" />
   </StackPanel>
-  <Border x:Name="TrainingItemsBorder" BorderBrush="#FFE1E1E1" BorderThickness="1" CornerRadius="4">
+  <Border x:Name="TrainingItemsBorder" BorderBrush="#FFE1E1E1"
+          BorderThickness="1" CornerRadius="4">
     <ListView x:Name="TrainingItems" Height="330"
               SelectionMode="Multiple" IsMultiSelectCheckBoxEnabled="True"
-              HorizontalContentAlignment="Stretch">
-      <ListView.ItemTemplate>
-        <DataTemplate>
-          <Grid Padding="12,10" MinHeight="64">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <TextBlock x:Name="ContextText" Grid.Row="0" Grid.Column="0" FontSize="19"
-                       TextWrapping="WrapWholeWords" VerticalAlignment="Bottom"
-                       Margin="0,0,8,5" MaxWidth="380"/>
-            <Border x:Name="AnswerHighlight" Grid.Row="0" Grid.Column="1"
-                    HorizontalAlignment="Left" CornerRadius="6" BorderThickness="1"
-                    Padding="8,4" MaxWidth="390">
-              <StackPanel>
-                <StackPanel x:Name="AnswerLines" Spacing="2"/>
-                <TextBlock x:Name="AnswerFallback" FontSize="20" TextWrapping="WrapWholeWords"
-                           Visibility="Collapsed"/>
-              </StackPanel>
-            </Border>
-            <TextBlock x:Name="RevisedTag" Grid.Row="1" Grid.ColumnSpan="2"
-                       Text="（曾選字）" FontSize="11"
-                       Margin="0,4,0,0" Visibility="Collapsed"/>
-          </Grid>
-        </DataTemplate>
-      </ListView.ItemTemplate>
-    </ListView>
+              HorizontalContentAlignment="Stretch" />
   </Border>
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto"/>
+      <ColumnDefinition Width="*"/>
+      <ColumnDefinition Width="Auto"/>
+    </Grid.ColumnDefinitions>
+    <Button x:Name="PreviousPageButton" Grid.Column="0" Content="上一頁"
+            MinWidth="84" MinHeight="32" />
+    <TextBlock x:Name="PageSummary" Grid.Column="1" HorizontalAlignment="Center"
+               VerticalAlignment="Center" FontSize="12" />
+    <Button x:Name="NextPageButton" Grid.Column="2" Content="下一頁"
+            MinWidth="84" MinHeight="32" />
+  </Grid>
 </StackPanel>

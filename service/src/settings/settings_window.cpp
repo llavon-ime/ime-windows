@@ -61,6 +61,7 @@ constexpr wchar_t window_class_name[] = L"LlavonImeSettingsWindow";
 constexpr UINT update_result_message = WM_APP + 10;
 constexpr double body_text_size = 14;
 constexpr double caption_text_size = 12;
+constexpr std::size_t training_page_size = 100;
 
 SolidColorBrush solid_brush(std::uint8_t red, std::uint8_t green, std::uint8_t blue) {
     return SolidColorBrush(winrt::Windows::UI::Color{255, red, green, blue});
@@ -323,7 +324,8 @@ void refresh_visible_training_selection(const ListView& list) {
     for (std::int32_t index = first; index <= last; ++index) {
         const auto container = list.ContainerFromIndex(index).try_as<ListViewItem>();
         if (!container) continue;
-        const auto root = container.ContentTemplateRoot().try_as<Grid>();
+        auto root = container.Content().try_as<Grid>();
+        if (!root) root = container.ContentTemplateRoot().try_as<Grid>();
         if (root) root.Opacity(container.IsSelected() ? 1.0 : 0.58);
     }
 }
@@ -824,9 +826,17 @@ void SettingsWindow::show_lora_training_dialog() {
 
     struct DialogState {
         ContentDialog dialog{nullptr};
+        std::vector<TrainingDataOption> items;
         std::vector<std::u16string> item_ids;
+        std::vector<bool> selected_items;
+        std::size_t current_page = 0;
+        bool updating_page = false;
+        std::function<void()> sync_current_page;
         ListView training_items{nullptr};
         TextBlock training_summary{nullptr};
+        TextBlock page_summary{nullptr};
+        Button previous_page{nullptr};
+        Button next_page{nullptr};
         Button training_data_button{nullptr};
         StackPanel training_data_page{nullptr};
         ScrollViewer main_page{nullptr};
@@ -864,9 +874,12 @@ void SettingsWindow::show_lora_training_dialog() {
         std::u16string output_model_path;
         bool model_available = false;
         bool busy = false;
+        bool closed = false;
     };
 
     auto state = std::make_shared<DialogState>();
+    state->items = configuration_.training_items;
+    state->selected_items.assign(state->items.size(), true);
     state->dialog = load_xaml_resource(IDR_LORA_DIALOG_XAML).as<ContentDialog>();
     state->dialog.IsPrimaryButtonEnabled(false);
     const auto dialog_root = state->dialog.as<FrameworkElement>();
@@ -886,7 +899,7 @@ void SettingsWindow::show_lora_training_dialog() {
     state->training_summary = named<TextBlock>(dialog_root, L"TrainingSummary");
     state->training_data_button = named<Button>(dialog_root, L"TrainingDataButton");
 
-    if (configuration_.training_items.empty()) {
+    if (state->items.empty()) {
         named<TextBlock>(dialog_root, L"EmptyTrainingItems").Visibility(Visibility::Visible);
         state->training_data_button.IsEnabled(false);
     } else {
@@ -909,60 +922,109 @@ void SettingsWindow::show_lora_training_dialog() {
         state->training_items.Resources().Insert(
             winrt::box_value(L"ListViewItemBackgroundSelectedPressed"),
             dark_selection ? solid_brush(53, 53, 53) : solid_brush(244, 248, 252));
-        state->item_ids.reserve(configuration_.training_items.size());
-        for (const auto& item : configuration_.training_items) {
-            std::u16string label;
-            if (!item.context.empty()) {
-                label += item.context;
-                label += u"  →  ";
-            }
-            label += item.answer;
-            if (!item.reading.empty()) {
-                label += u"    [";
-                label += item.reading;
-                label += u"]";
-            }
-            if (item.revice) label += u"    （曾選字）";
-            state->training_items.Items().Append(winrt::box_value(to_hstring(label)));
+        state->item_ids.reserve(state->items.size());
+        for (const auto& item : state->items) {
             state->item_ids.push_back(item.event_id);
         }
-        const auto render_item = [this](const ListViewBase&,
-                                        const ContainerContentChangingEventArgs& args) {
-            if (args.InRecycleQueue()) return;
-            const std::int32_t index = args.ItemIndex();
-            if (index < 0 ||
-                static_cast<std::size_t>(index) >= configuration_.training_items.size()) {
-                return;
-            }
-            const auto root = args.ItemContainer().ContentTemplateRoot().try_as<Grid>();
-            if (!root) return;
-            const auto& item = configuration_.training_items[static_cast<std::size_t>(index)];
-            render_training_item(item, root, args.ItemContainer().as<FrameworkElement>(),
-                                 dark_theme_);
-            root.Opacity(args.ItemContainer().IsSelected() ? 1.0 : 0.58);
-            Automation::AutomationProperties::SetName(
-                args.ItemContainer(),
-                winrt::unbox_value<winrt::hstring>(args.Item()));
-        };
-        state->training_items.ContainerContentChanging(
-            [render_item](const ListViewBase& sender,
-                          const ContainerContentChangingEventArgs& args) {
-                if (args.InRecycleQueue()) return;
-                if (args.Phase() == 0) {
-                    args.RegisterUpdateCallback(render_item);
-                } else {
-                    render_item(sender, args);
+        state->page_summary = named<TextBlock>(state->training_data_page, L"PageSummary");
+        state->previous_page =
+            named<Button>(state->training_data_page, L"PreviousPageButton");
+        state->next_page = named<Button>(state->training_data_page, L"NextPageButton");
+
+        state->sync_current_page = [state] {
+            if (state->updating_page) return;
+            const std::size_t begin = state->current_page * training_page_size;
+            const std::size_t end = std::min(
+                begin + training_page_size, state->selected_items.size());
+            std::fill(state->selected_items.begin() + begin,
+                      state->selected_items.begin() + end, false);
+            for (const auto& range : state->training_items.SelectedRanges()) {
+                const std::size_t first = begin + range.FirstIndex();
+                const std::size_t last = std::min(
+                    first + range.Length(), state->selected_items.size());
+                for (std::size_t index = first; index < last; ++index) {
+                    state->selected_items[index] = true;
                 }
+            }
+        };
+        const auto render_page = std::make_shared<std::function<void()>>();
+        *render_page = [state, dark_selection] {
+            state->updating_page = true;
+            state->training_items.Items().Clear();
+            const std::size_t begin = state->current_page * training_page_size;
+            const std::size_t end = std::min(
+                begin + training_page_size, state->items.size());
+            for (std::size_t index = begin; index < end; ++index) {
+                const auto& item = state->items[index];
+                try {
+                    auto root = load_xaml_resource(
+                        IDR_LORA_TRAINING_ITEM_XAML).as<Grid>();
+                    render_training_item(item, root, root, dark_selection);
+                    root.Opacity(state->selected_items[index] ? 1.0 : 0.58);
+                    Automation::AutomationProperties::SetName(
+                        root, to_hstring(item.answer));
+                    state->training_items.Items().Append(root);
+                } catch (...) {
+                    TextBlock fallback;
+                    fallback.Text(to_hstring(item.answer));
+                    fallback.FontSize(18);
+                    fallback.Padding(Thickness{12, 10, 12, 10});
+                    fallback.TextWrapping(TextWrapping::WrapWholeWords);
+                    state->training_items.Items().Append(fallback);
+                }
+            }
+            for (std::size_t local = 0; local < end - begin;) {
+                while (local < end - begin &&
+                       !state->selected_items[begin + local]) ++local;
+                const std::size_t first = local;
+                while (local < end - begin &&
+                       state->selected_items[begin + local]) ++local;
+                if (first != local) {
+                    state->training_items.SelectRange(
+                        winrt::Windows::UI::Xaml::Data::ItemIndexRange(
+                            static_cast<std::int32_t>(first),
+                            static_cast<std::uint32_t>(local - first)));
+                }
+            }
+            const std::size_t page_count =
+                (state->items.size() + training_page_size - 1) /
+                training_page_size;
+            state->page_summary.Text(
+                L"第 " + std::to_wstring(state->current_page + 1) + L" / " +
+                std::to_wstring(page_count) + L" 頁（" +
+                std::to_wstring(begin + 1) + L"–" + std::to_wstring(end) +
+                L"，共 " + std::to_wstring(state->items.size()) + L" 筆）");
+            state->previous_page.IsEnabled(state->current_page != 0);
+            state->next_page.IsEnabled(state->current_page + 1 < page_count);
+            state->updating_page = false;
+            refresh_visible_training_selection(state->training_items);
+        };
+        state->previous_page.Click(
+            [state, render_page](const auto&, const auto&) {
+                state->sync_current_page();
+                if (state->current_page != 0) --state->current_page;
+                (*render_page)();
             });
-        state->training_items.SelectAll();
+        state->next_page.Click(
+            [state, render_page](const auto&, const auto&) {
+                state->sync_current_page();
+                const std::size_t page_count =
+                    (state->items.size() + training_page_size - 1) /
+                    training_page_size;
+                if (state->current_page + 1 < page_count) ++state->current_page;
+                (*render_page)();
+            });
         named<Button>(state->training_data_page, L"SelectAllButton").Click(
-            [state](const auto&, const auto&) { state->training_items.SelectAll(); });
-        named<Button>(state->training_data_page, L"ClearAllButton").Click(
-            [state](const auto&, const auto&) {
-                state->training_items.DeselectRange(
-                    winrt::Windows::UI::Xaml::Data::ItemIndexRange(
-                        0, state->training_items.Items().Size()));
+            [state, render_page](const auto&, const auto&) {
+                std::fill(state->selected_items.begin(), state->selected_items.end(), true);
+                (*render_page)();
             });
+        named<Button>(state->training_data_page, L"ClearAllButton").Click(
+            [state, render_page](const auto&, const auto&) {
+                std::fill(state->selected_items.begin(), state->selected_items.end(), false);
+                (*render_page)();
+            });
+        (*render_page)();
         state->training_data_button.Click([state](const auto&, const auto&) {
             state->selecting_training_data = true;
             state->dialog.Content(state->training_data_page);
@@ -998,9 +1060,8 @@ void SettingsWindow::show_lora_training_dialog() {
     state->reload_model = named<Button>(dialog_root, L"ReloadModelButton");
 
     const auto refresh_training_selection = [state] {
-        const std::uint32_t selected = state->training_items
-            ? state->training_items.SelectedItems().Size()
-            : 0;
+        const std::size_t selected = static_cast<std::size_t>(std::count(
+            state->selected_items.begin(), state->selected_items.end(), true));
         const std::wstring summary = L"已選 " + std::to_wstring(selected) + L" / " +
                                      std::to_wstring(state->item_ids.size()) + L" 筆";
         state->training_summary.Text(summary);
@@ -1011,6 +1072,8 @@ void SettingsWindow::show_lora_training_dialog() {
     if (state->training_items) {
         state->training_items.SelectionChanged(
             [state, refresh_training_selection](const auto&, const auto&) {
+                if (state->updating_page) return;
+                if (state->sync_current_page) state->sync_current_page();
                 refresh_visible_training_selection(state->training_items);
                 refresh_training_selection();
             });
@@ -1146,22 +1209,28 @@ void SettingsWindow::show_lora_training_dialog() {
     state->timer.Tick([refresh_status](const auto&, const auto&) { refresh_status(); });
     refresh_status();
     state->timer.Start();
-    state->dialog.Closed([state](const auto&, const auto&) {
-        if (state->timer) state->timer.Stop();
+    state->dialog.Closed([weak_state = std::weak_ptr<DialogState>(state)](
+                             const auto&, const auto&) {
+        if (const auto current = weak_state.lock()) {
+            current->closed = true;
+            if (current->timer) current->timer.Stop();
+        }
     });
 
     state->dialog.PrimaryButtonClick(
         [this, state](const ContentDialog&, const ContentDialogButtonClickEventArgs& args) {
             args.Cancel(true);
             if (state->selecting_training_data) {
+                if (state->sync_current_page) state->sync_current_page();
+                const bool has_selection = std::ranges::any_of(
+                    state->selected_items, [](bool selected) { return selected; });
                 state->selecting_training_data = false;
                 state->dialog.Content(state->main_page);
                 state->dialog.Title(winrt::box_value(L"訓練個人化模型"));
                 state->dialog.PrimaryButtonText(L"開始訓練");
                 state->dialog.SecondaryButtonText(L"關閉");
                 state->dialog.IsPrimaryButtonEnabled(
-                    !state->busy && state->model_available &&
-                    state->training_items.SelectedItems().Size() != 0);
+                    !state->busy && state->model_available && has_selection);
                 return;
             }
             try {
@@ -1229,18 +1298,10 @@ void SettingsWindow::show_lora_training_dialog() {
                 }
 
                 std::vector<std::u16string> selected;
-                if (state->training_items) {
-                    for (const auto& range : state->training_items.SelectedRanges()) {
-                        const std::int32_t first = range.FirstIndex();
-                        const std::int32_t last = first +
-                            static_cast<std::int32_t>(range.Length());
-                        for (std::int32_t index = first; index < last; ++index) {
-                            if (index >= 0 &&
-                                static_cast<std::size_t>(index) < state->item_ids.size()) {
-                                selected.push_back(
-                                    state->item_ids[static_cast<std::size_t>(index)]);
-                            }
-                        }
+                if (state->sync_current_page) state->sync_current_page();
+                for (std::size_t index = 0; index < state->item_ids.size(); ++index) {
+                    if (state->selected_items[index]) {
+                        selected.push_back(state->item_ids[index]);
                     }
                 }
                 std::vector<const char16_t*> selected_pointers;
@@ -1664,7 +1725,8 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
     switch (result.status) {
         case UpdateCheckStatus::update_available: {
             const std::wstring status =
-                L"有新版本：" + result.current_version + L" → " + result.latest_version + L"。";
+                L"有新版本：Build " + std::to_wstring(result.current_build) +
+                L" → " + result.latest_version + L"。";
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::update_available);
 
@@ -1677,7 +1739,7 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
         }
         case UpdateCheckStatus::up_to_date: {
             const std::wstring status =
-                L"已是最新版本：" +
+                L"已是最新發布：" + result.latest_version + L"；目前安裝 " +
                 build_identity(result.current_version, result.current_build, result.current_commit) +
                 L"。";
             update_status_.Text(status);
@@ -1687,8 +1749,8 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
         }
         case UpdateCheckStatus::local_newer: {
             const std::wstring status =
-                L"目前版本 " + result.current_version + L" 比 latest " +
-                result.latest_version + L" 新。";
+                L"目前 Build " + std::to_wstring(result.current_build) +
+                L" 比 latest Build " + std::to_wstring(result.latest_build) + L" 新。";
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::information);
             update_download_.Visibility(Visibility::Collapsed);

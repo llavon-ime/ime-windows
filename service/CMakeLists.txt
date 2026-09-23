@@ -57,6 +57,7 @@ add_library(llavon-ime-settings-ui SHARED
     src/settings/lora_selection.xaml
     src/settings/lora_ruby_cell.xaml
     src/settings/lora_item_tooltip.xaml
+    src/settings/lora_training_item.xaml
     src/settings/custom_name_row.xaml
     src/settings/custom_name_reading.xaml
     src/settings/custom_name_warning.xaml

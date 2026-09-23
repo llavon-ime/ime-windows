@@ -45,8 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $date = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8))
-          # Earlier test bundles used revision 1000; a raw run number (e.g. 82)
-          # is treated by Burn as a downgrade on the same day.
+          # This version is only for release tags and latest.json, not WiX.
           $revision = 1000 + [long]"${{ github.run_number }}"
           $version = "$($date.ToString('yyyy.MM.dd')).$revision"
           "version=$version" >> $env:GITHUB_OUTPUT
@@ -214,7 +213,6 @@ jobs:
         run: >-
           cmake --preset windows
           -DVCPKG_TARGET_TRIPLET=x64-windows-cpu-dispatch
-          "-DLLAVON_IME_VERSION=${{ steps.release-version.outputs.version }}"
           "-DLLAVON_IME_MODEL_REVISION=${{ steps.model.outputs.revision }}"
           "-DLLAVON_LORA_VERSION=${{ steps.lora.outputs.version }}"
           "-DLLAVON_LORA_MANIFEST_URL=${{ steps.lora.outputs.manifest-url }}"
@@ -290,17 +288,17 @@ jobs:
 
       - name: Show MSI
         shell: pwsh
-        run: Get-Item build/windows/llavon-ime-${{ steps.release-version.outputs.version }}-windows.msi | Select-Object FullName, Length, LastWriteTime
+        run: Get-Item build/windows/llavon-ime-0.0.1-windows.msi | Select-Object FullName, Length, LastWriteTime
 
       - name: Show web installer
         shell: pwsh
-        run: Get-Item build/windows/llavon-ime-${{ steps.release-version.outputs.version }}-setup.exe | Select-Object FullName, Length, LastWriteTime
+        run: Get-Item build/windows/llavon-ime-0.0.1-setup.exe | Select-Object FullName, Length, LastWriteTime
 
       - name: Upload MSI
         uses: actions/upload-artifact@v4
         with:
           name: llavon-ime-windows-msi
-          path: build/windows/llavon-ime-${{ steps.release-version.outputs.version }}-windows.msi
+          path: build/windows/llavon-ime-0.0.1-windows.msi
           if-no-files-found: error
           retention-days: 14
 
@@ -308,7 +306,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llavon-ime-windows-setup
-          path: build/windows/llavon-ime-${{ steps.release-version.outputs.version }}-setup.exe
+          path: build/windows/llavon-ime-0.0.1-setup.exe
           if-no-files-found: error
           retention-days: 14
 
