@@ -4,14 +4,14 @@
   <String Id="Title" Value="[WixBundleName]" />
   <String Id="CheckingForUpdatesLabel" Value="正在檢查安裝狀態" />
   <String Id="UpdateButton" Value="更新至 [WixStdBAUpdateAvailable]" />
-  <String Id="InstallHeader" Value="安裝拉風輸入法" />
-  <String Id="InstallMessage" Value="輸入法本體會安裝到這台電腦。LoRA 個人化訓練工具是選配元件，只有勾選並確認後才會開始下載。" />
-  <String Id="InstallVersion" Value="輸入法版本 [WixBundleVersion]" />
-  <String Id="LoraMissing" Value="尚未安裝 LoRA Trainer；遠端版本為 [LoraTargetDisplayVersion]。" />
-  <String Id="LoraCurrent" Value="LoRA Trainer [LoraTargetDisplayVersion] 已安裝，版本一致，不需下載。" />
-  <String Id="LoraDifferent" Value="本機 LoRA Trainer 為 [LoraInstalledVersion]，遠端版本為 [LoraTargetDisplayVersion]。" />
-  <String Id="LoraInstallCheckbox" Value="安裝 LoRA Trainer [LoraTargetDisplayVersion]（確認後下載）" />
-  <String Id="LoraUpdateCheckbox" Value="將 LoRA Trainer 同步至 [LoraTargetDisplayVersion]（不會降版）" />
+  <String Id="InstallHeader" Value="選擇安裝項目" />
+  <String Id="InstallMessage" Value="拉風輸入法 [WixBundleVersion]" />
+  <String Id="LoraMissing" Value="LoRA Trainer 尚未安裝；可安裝版本 [LoraTargetDisplayVersion]" />
+  <String Id="LoraCurrent" Value="LoRA Trainer [LoraTargetDisplayVersion] 已安裝" />
+  <String Id="LoraOlder" Value="LoRA Trainer [LoraInstalledVersion] 已安裝；可更新至 [LoraTargetDisplayVersion]" />
+  <String Id="LoraNewer" Value="LoRA Trainer [LoraInstalledVersion] 已安裝" />
+  <String Id="LoraInstallCheckbox" Value="安裝 LoRA Trainer（供本地個人化模型使用，建議安裝）" />
+  <String Id="LoraUpdateCheckbox" Value="更新 LoRA Trainer（供本地個人化模型使用，建議更新）" />
   <String Id="ConfirmCancelMessage" Value="確定要取消安裝嗎？" />
   <String Id="ExecuteUpgradeRelatedBundleMessage" Value="舊版安裝程式" />
   <String Id="HelpHeader" Value="安裝說明" />
@@ -56,7 +56,7 @@
   <String Id="FailureRepairHeader" Value="修復失敗" />
   <String Id="FailureUninstallHeader" Value="解除安裝失敗" />
   <String Id="FailureUnsafeUninstallHeader" Value="解除安裝失敗" />
-  <String Id="FailureHyperlinkLogText" Value="安裝程式發生問題，請查看&lt;a href=&quot;#&quot;&gt;記錄檔&lt;/a&gt;後重試。" />
+  <String Id="FailureHyperlinkLogText" Value="&lt;a href=&quot;#&quot;&gt;查看安裝記錄&lt;/a&gt;" />
   <String Id="FailureRestartText" Value="必須重新啟動電腦才能完成復原。" />
   <String Id="FailureRestartButton" Value="重新啟動" />
   <String Id="FailureCloseButton" Value="關閉" />

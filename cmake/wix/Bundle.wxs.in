@@ -9,7 +9,7 @@
       UpgradeCode="7E4C5A19-9882-4E30-8747-3D1649D13257"
       Compressed="yes">
 
-    <Variable Name="InstallLoraTrainer" Type="numeric" Value="0" />
+    <Variable Name="InstallLoraTrainer" Type="numeric" Value="1" />
     <Variable Name="LoraTargetVersion" Type="version" Value="@LLAVON_LORA_VERSION@" />
     <Variable Name="LoraTargetDisplayVersion" Type="string" Value="@LLAVON_LORA_VERSION@" />
 
@@ -46,7 +46,7 @@
           Permanent="yes"
           Vital="no"
           DetectCondition="LoraInstalledVersion = v@LLAVON_LORA_VERSION@"
-          InstallCondition="InstallLoraTrainer = 1 AND (NOT LoraInstalledVersion OR LoraInstalledVersion &lt;&gt; v@LLAVON_LORA_VERSION@)"
+          InstallCondition="InstallLoraTrainer = 1 AND (NOT LoraInstalledVersion OR LoraInstalledVersion &lt; v@LLAVON_LORA_VERSION@)"
           InstallArguments="install --manifest-url &quot;@LLAVON_LORA_MANIFEST_URL@&quot; --install-dir &quot;[ProgramFiles64Folder]Llavon IME\tools\lora&quot; --asset win-x64-cpu" />
     </Chain>
   </Bundle>
