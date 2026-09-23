@@ -870,6 +870,7 @@ void SettingsWindow::show_lora_training_dialog() {
         Button download_model{nullptr};
         Button cancel{nullptr};
         Button reload_model{nullptr};
+        TextBlock estimated_steps{nullptr};
         DispatcherTimer timer{nullptr};
         std::u16string output_model_path;
         bool model_available = false;
@@ -1058,8 +1059,47 @@ void SettingsWindow::show_lora_training_dialog() {
     state->progress = named<ProgressBar>(dialog_root, L"TrainingProgress");
     state->status = named<TextBlock>(dialog_root, L"Status");
     state->reload_model = named<Button>(dialog_root, L"ReloadModelButton");
+    state->estimated_steps = named<TextBlock>(dialog_root, L"EstimatedSteps");
 
-    const auto refresh_training_selection = [state] {
+    const auto refresh_estimated_steps = [state] {
+        const auto parse_integer = [](const TextBox& box) -> std::optional<std::int64_t> {
+            try {
+                const std::wstring value = box.Text().c_str();
+                std::size_t consumed = 0;
+                const auto parsed = std::stoll(value, &consumed);
+                return consumed == value.size()
+                    ? std::optional<std::int64_t>(parsed)
+                    : std::nullopt;
+            } catch (...) {
+                return std::nullopt;
+            }
+        };
+        const auto batch_size = parse_integer(state->batch_size);
+        const auto accumulation = parse_integer(state->gradient_accumulation);
+        const auto epochs = parse_integer(state->epochs);
+        const auto max_steps = parse_integer(state->max_steps);
+        if (!batch_size || !accumulation || !epochs || !max_steps ||
+            *batch_size <= 0 || *accumulation <= 0 || *epochs <= 0 ||
+            (*max_steps < -1 || *max_steps == 0)) {
+            return;
+        }
+
+        const std::uint64_t selected = static_cast<std::uint64_t>(std::count(
+            state->selected_items.begin(), state->selected_items.end(), true));
+        const std::uint64_t batch = static_cast<std::uint64_t>(*batch_size);
+        const std::uint64_t gradient = static_cast<std::uint64_t>(*accumulation);
+        const std::uint64_t batches = (selected + batch - 1) / batch;
+        const std::uint64_t updates = (batches + gradient - 1) / gradient;
+        const std::uint64_t epoch_steps =
+            updates * static_cast<std::uint64_t>(*epochs);
+        const std::uint64_t estimated = *max_steps > 0
+            ? std::min(epoch_steps, static_cast<std::uint64_t>(*max_steps))
+            : epoch_steps;
+        state->estimated_steps.Text(
+            L"預計 steps：" + std::to_wstring(estimated));
+    };
+
+    const auto refresh_training_selection = [state, refresh_estimated_steps] {
         const std::size_t selected = static_cast<std::size_t>(std::count(
             state->selected_items.begin(), state->selected_items.end(), true));
         const std::wstring summary = L"已選 " + std::to_wstring(selected) + L" / " +
@@ -1068,7 +1108,14 @@ void SettingsWindow::show_lora_training_dialog() {
         state->dialog.IsPrimaryButtonEnabled(
             state->selecting_training_data ||
             (!state->busy && state->model_available && selected != 0));
+        refresh_estimated_steps();
     };
+    for (const auto& field : {state->batch_size, state->gradient_accumulation,
+                              state->epochs, state->max_steps}) {
+        field.TextChanged([refresh_estimated_steps](const auto&, const auto&) {
+            refresh_estimated_steps();
+        });
+    }
     if (state->training_items) {
         state->training_items.SelectionChanged(
             [state, refresh_training_selection](const auto&, const auto&) {
@@ -1227,7 +1274,7 @@ void SettingsWindow::show_lora_training_dialog() {
                 state->selecting_training_data = false;
                 state->dialog.Content(state->main_page);
                 state->dialog.Title(winrt::box_value(L"訓練個人化模型"));
-                state->dialog.PrimaryButtonText(L"預覽訓練");
+                state->dialog.PrimaryButtonText(L"開始訓練");
                 state->dialog.SecondaryButtonText(L"關閉");
                 state->dialog.IsPrimaryButtonEnabled(
                     !state->busy && state->model_available && has_selection);
@@ -1290,6 +1337,7 @@ void SettingsWindow::show_lora_training_dialog() {
                     options.dropout < 0 || options.dropout >= 1 ||
                     options.batch_size <= 0 || options.gradient_accumulation <= 0 ||
                     options.epochs <= 0 || options.max_steps == 0 ||
+                    options.max_steps < -1 ||
                     options.learning_rate <= 0 || options.weight_decay < 0 ||
                     options.warmup_steps < 0 || options.max_gradient_norm < 0 ||
                     options.save_every < 0 || options.max_sequence_length <= 1 ||
