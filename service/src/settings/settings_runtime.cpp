@@ -25,6 +25,7 @@ constexpr UINT show_message = WM_APP + 1;
 constexpr UINT hide_message = WM_APP + 2;
 constexpr UINT stop_message = WM_APP + 3;
 constexpr UINT show_context_menu_message = WM_APP + 4;
+constexpr UINT pending_count_message = WM_APP + 5;
 constexpr DWORD shutdown_timeout_ms = 10000;
 
 struct UiThreadState {
@@ -36,6 +37,12 @@ struct UiThreadState {
 
 class Runtime final {
 public:
+    void set_pending_count(std::size_t count) noexcept {
+        pending_count_.store(count, std::memory_order_release);
+        has_pending_count_.store(true, std::memory_order_release);
+        post(settings_thread_, pending_count_message);
+    }
+
     int32_t configure(const llavon_settings_inference_device* devices,
                       std::size_t device_count,
                       std::int32_t selected_backend,
@@ -455,6 +462,13 @@ private:
                 }
                 return 0;
             }
+            if (message == pending_count_message) {
+                if (self->settings_window_) {
+                    self->settings_window_->set_pending_count(
+                        self->pending_count_.load(std::memory_order_acquire));
+                }
+                return 0;
+            }
             if (message == stop_message) {
                 if (self->settings_window_) {
                     self->settings_window_->destroy();
@@ -518,6 +532,10 @@ private:
         if (!settings_window_->create(reinterpret_cast<HINSTANCE>(&__ImageBase))) {
             throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
         }
+        if (has_pending_count_.load(std::memory_order_acquire)) {
+            settings_window_->set_pending_count(
+                pending_count_.load(std::memory_order_acquire));
+        }
         settings_window_->show();
     }
 
@@ -543,6 +561,8 @@ private:
     SettingsMenuWindow* settings_menu_ = nullptr;
     SettingsConfiguration configuration_;
     SettingsConfiguration thread_configuration_;
+    std::atomic<std::size_t> pending_count_{0};
+    std::atomic_bool has_pending_count_{false};
 };
 
 Runtime& runtime() {
@@ -609,6 +629,10 @@ extern "C" void llavon_settings_ui_show(void) {
 
 extern "C" void llavon_settings_ui_hide(void) {
     llavon::settings::runtime().hide();
+}
+
+extern "C" void llavon_settings_ui_set_pending_count(size_t count) {
+    llavon::settings::runtime().set_pending_count(count);
 }
 
 extern "C" void llavon_settings_ui_show_context_menu(int32_t screen_x,

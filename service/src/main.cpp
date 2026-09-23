@@ -311,6 +311,16 @@ int main(int argc, char* argv[]) {
                     : lora_training.check_model_async();
             },
             [&lora_training] { lora_training.cancel(); });
+        struct PendingCountRegistration {
+            std::shared_ptr<llavon::service::TrainingDataWriter> writer;
+            ~PendingCountRegistration() {
+                writer->set_pending_count_callback({});
+            }
+        } pending_count_registration{server.training_data_writer()};
+        pending_count_registration.writer->set_pending_count_callback(
+            [&settings_ui](std::size_t count) {
+                settings_ui.notify_pending_count(count);
+            });
         llavon::service::TrayIcon tray;
         if (!tray.create(GetModuleHandleW(nullptr), [&settings_ui] { settings_ui.show(); },
                          [] { launch_debugger(); },

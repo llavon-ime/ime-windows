@@ -605,6 +605,7 @@ public:
         return training_data_->pending_items();
     }
 
+
     bool exclude_unselected_training_data(
         const std::vector<std::u16string>& selected_event_ids,
         const std::vector<std::u16string>& reviewed_event_ids) noexcept {

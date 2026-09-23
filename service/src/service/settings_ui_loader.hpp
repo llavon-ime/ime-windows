@@ -10,6 +10,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -55,6 +57,7 @@ public:
         CancelLora cancel_lora);
     bool show();
     bool show_context_menu(POINT location);
+    void notify_pending_count(std::size_t count) noexcept;
 
 private:
     struct DeviceStorage {
@@ -97,6 +100,7 @@ private:
     using ShowFunction = void (*)();
     using ShowContextMenuFunction = void (*)(std::int32_t, std::int32_t);
     using StopFunction = std::int32_t (*)();
+    using SetPendingCountFunction = void (*)(std::size_t);
 
     bool load();
     bool start();
@@ -131,6 +135,9 @@ private:
     ShowFunction show_ = nullptr;
     ShowContextMenuFunction show_context_menu_ = nullptr;
     StopFunction stop_ = nullptr;
+    std::mutex pending_count_mutex_;
+    std::optional<std::size_t> latest_pending_count_;
+    SetPendingCountFunction set_pending_count_ = nullptr;
     std::vector<DeviceStorage> devices_;
     DeviceStorage active_device_;
     bool gpu_offload_ = false;

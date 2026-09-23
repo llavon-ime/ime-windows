@@ -160,8 +160,16 @@ SettingsUiLoader::~SettingsUiLoader() {
         can_unload = stop_() == 0;
     }
     if (can_unload) {
+        std::lock_guard lock(pending_count_mutex_);
+        set_pending_count_ = nullptr;
         FreeLibrary(module_);
     }
+}
+
+void SettingsUiLoader::notify_pending_count(std::size_t count) noexcept {
+    std::lock_guard lock(pending_count_mutex_);
+    latest_pending_count_ = count;
+    if (set_pending_count_) set_pending_count_(count);
 }
 
 bool SettingsUiLoader::show() {
@@ -223,7 +231,10 @@ bool SettingsUiLoader::load() {
     show_context_menu_ =
         resolve<ShowContextMenuFunction>(module_, "llavon_settings_ui_show_context_menu");
     stop_ = resolve<StopFunction>(module_, "llavon_settings_ui_stop");
+    const auto set_pending_count = resolve<SetPendingCountFunction>(
+        module_, "llavon_settings_ui_set_pending_count");
     if (!configure_ || !start_ || !show_ || !show_context_menu_ || !stop_ ||
+        !set_pending_count ||
         !configure_module()) {
         FreeLibrary(module_);
         module_ = nullptr;
@@ -233,6 +244,11 @@ bool SettingsUiLoader::load() {
         show_context_menu_ = nullptr;
         stop_ = nullptr;
         return false;
+    }
+    {
+        std::lock_guard lock(pending_count_mutex_);
+        set_pending_count_ = set_pending_count;
+        if (latest_pending_count_) set_pending_count_(*latest_pending_count_);
     }
     return true;
 }

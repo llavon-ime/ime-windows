@@ -174,6 +174,8 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_start(void);
 // immediately. They never execute XAML code on the caller's thread.
 LLAVON_SETTINGS_UI_API void llavon_settings_ui_show(void);
 LLAVON_SETTINGS_UI_API void llavon_settings_ui_hide(void);
+// May be called from the service writer thread; queues the count for the UI.
+LLAVON_SETTINGS_UI_API void llavon_settings_ui_set_pending_count(size_t count);
 
 // Shows the input-mode context menu at a screen-coordinate anchor.
 LLAVON_SETTINGS_UI_API void llavon_settings_ui_show_context_menu(

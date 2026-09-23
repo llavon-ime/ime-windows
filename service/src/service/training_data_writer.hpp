@@ -1,9 +1,12 @@
 #pragma once
 
 #include <condition_variable>
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -53,6 +56,10 @@ public:
     TrainingDataWriter& operator=(const TrainingDataWriter&) = delete;
 
     void enqueue(RawCommitEvent event);
+    std::size_t pending_count() const noexcept {
+        return pending_count_.load(std::memory_order_acquire);
+    }
+    void set_pending_count_callback(std::function<void(std::size_t)> callback);
     std::vector<TrainingDataItem> pending_items() const noexcept;
     std::vector<TrainingDataRecord> pending_records(
         const std::vector<std::u16string>& event_ids) const;
@@ -67,6 +74,7 @@ public:
 
 private:
     void worker_main() noexcept;
+    void publish_pending_delta(std::ptrdiff_t delta) noexcept;
     bool mark_records(const std::vector<std::u16string>& event_ids,
                       const char* state) noexcept;
 
@@ -74,6 +82,9 @@ private:
     std::mutex mutex_;
     std::condition_variable available_;
     std::deque<RawCommitEvent> queue_;
+    std::atomic<std::size_t> pending_count_{0};
+    std::mutex callback_mutex_;
+    std::function<void(std::size_t)> pending_count_callback_;
     bool stopping_ = false;
     std::thread worker_;
 };

@@ -5,6 +5,7 @@
 #include <utf8/cpp20.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -276,6 +277,15 @@ TrainingDataWriter::TrainingDataWriter(
     : database_path_(database_path ? std::move(*database_path)
                                    : default_database_path()) {
     initialize_database(database_path_);
+    {
+        Database database(database_path_);
+        Statement select(
+            database.get(),
+            "SELECT COUNT(*) FROM training_commits WHERE training_state='pending'");
+        if (!select.next()) throw std::runtime_error("unable to count training data");
+        pending_count_.store(static_cast<std::size_t>(
+            sqlite3_column_int64(select.get(), 0)), std::memory_order_release);
+    }
     worker_ = std::thread([this] { worker_main(); });
 }
 
@@ -295,6 +305,34 @@ void TrainingDataWriter::enqueue(RawCommitEvent event) {
         queue_.push_back(std::move(event));
     }
     available_.notify_one();
+}
+
+void TrainingDataWriter::set_pending_count_callback(
+    std::function<void(std::size_t)> callback) {
+    std::lock_guard lock(callback_mutex_);
+    pending_count_callback_ = std::move(callback);
+    try {
+        if (pending_count_callback_) {
+            pending_count_callback_(pending_count_.load(std::memory_order_acquire));
+        }
+    } catch (...) {
+        // Settings UI notifications are optional; database writes continue.
+    }
+}
+
+void TrainingDataWriter::publish_pending_delta(std::ptrdiff_t delta) noexcept {
+    if (delta == 0) return;
+    std::lock_guard lock(callback_mutex_);
+    const std::size_t previous = pending_count_.load(std::memory_order_relaxed);
+    const std::size_t current = delta > 0
+        ? previous + static_cast<std::size_t>(delta)
+        : previous - std::min(previous, static_cast<std::size_t>(-delta));
+    pending_count_.store(current, std::memory_order_release);
+    try {
+        if (pending_count_callback_) pending_count_callback_(current);
+    } catch (...) {
+        // A settings UI failure must not stop commit persistence.
+    }
 }
 
 std::vector<TrainingDataItem> TrainingDataWriter::pending_items() const noexcept {
@@ -382,7 +420,9 @@ bool TrainingDataWriter::exclude_unselected(
                 "WHERE training_state='pending' "
                 "AND event_id IN (SELECT event_id FROM reviewed_training_events) "
                 "AND event_id NOT IN (SELECT event_id FROM selected_training_events)");
+            const auto changed = sqlite3_changes(database.get());
             database.execute("COMMIT");
+            publish_pending_delta(-static_cast<std::ptrdiff_t>(changed));
             return true;
         } catch (...) {
             try {
@@ -428,7 +468,9 @@ bool TrainingDataWriter::mark_records(
                 "(SELECT event_id FROM selected_training_events)");
             update.bind_text(1, state);
             update.execute();
+            const auto changed = sqlite3_changes(database.get());
             database.execute("COMMIT");
+            publish_pending_delta(-static_cast<std::ptrdiff_t>(changed));
             return true;
         } catch (...) {
             try {
@@ -478,7 +520,9 @@ void TrainingDataWriter::worker_main() noexcept {
                 insert.bind_integer(6, was_revised(event) ? 1 : 0);
                 insert.bind_text(7, event.committed_at_utc);
                 insert.execute();
+                const auto changed = sqlite3_changes(database.get());
                 insert.reset();
+                publish_pending_delta(static_cast<std::ptrdiff_t>(changed));
             } catch (const std::exception& error) {
                 try {
                     insert.reset();

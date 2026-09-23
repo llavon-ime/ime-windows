@@ -498,6 +498,14 @@ void SettingsWindow::show() noexcept {
     begin_update_check();
 }
 
+void SettingsWindow::set_pending_count(std::size_t count) {
+    if (!pending_summary_) return;
+    std::wstring text = L"尚未訓練：";
+    text += std::to_wstring(count);
+    text += L" 筆";
+    pending_summary_.Text(text);
+}
+
 void SettingsWindow::hide() const noexcept {
     if (window_) {
         ShowWindow(window_, SW_HIDE);
@@ -768,10 +776,8 @@ void SettingsWindow::build_page() {
         }
     }
 
-    std::wstring pending_summary = L"尚未訓練：";
-    pending_summary += std::to_wstring(configuration_.training_items.size());
-    pending_summary += L" 筆";
-    named<TextBlock>(shell_, L"PendingSummary").Text(pending_summary);
+    pending_summary_ = named<TextBlock>(shell_, L"PendingSummary");
+    set_pending_count(configuration_.training_items.size());
     named<Button>(shell_, L"LoraButton").Click(
         [this](const auto&, const auto&) { show_lora_training_dialog(); });
 
@@ -1840,6 +1846,7 @@ void SettingsWindow::close_xaml() noexcept {
     add_custom_name_button_ = nullptr;
     save_custom_names_button_ = nullptr;
     custom_names_note_ = nullptr;
+    pending_summary_ = nullptr;
     shell_ = nullptr;
     if (xaml_source_) {
         try {

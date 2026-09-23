@@ -27,6 +27,7 @@ public:
 
     bool create(HINSTANCE instance);
     void show() noexcept;
+    void set_pending_count(std::size_t count);
     void hide() const noexcept;
     void destroy() noexcept;
     bool pretranslate(MSG& message) const;
@@ -95,6 +96,7 @@ private:
     winrt::Windows::UI::Xaml::Controls::Button add_custom_name_button_{nullptr};
     winrt::Windows::UI::Xaml::Controls::Button save_custom_names_button_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBlock custom_names_note_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBlock pending_summary_{nullptr};
     UpdateStatusTone update_status_tone_ = UpdateStatusTone::secondary;
     bool dark_theme_ = false;
     SettingsConfiguration configuration_;

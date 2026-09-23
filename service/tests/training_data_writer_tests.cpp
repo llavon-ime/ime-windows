@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 using llavon::service::RawCommitEvent;
 using llavon::service::RawCommitInputEntry;
@@ -64,16 +65,28 @@ int main() {
                        (L"llavon-training-data-writer-test-" +
                        std::to_wstring(GetCurrentProcessId()) + L".sqlite3");
     DeleteFileW(path.c_str());
+    std::vector<std::size_t> inserted_counts;
     {
         TrainingDataWriter writer(path);
+        writer.set_pending_count_callback([&](std::size_t count) {
+            inserted_counts.push_back(count);
+        });
         writer.enqueue(event);
         writer.enqueue(escaped);
         writer.enqueue(trainable);
         writer.enqueue(arrived_after_review);
+        writer.enqueue(event); // Duplicate IDs must not increment the count.
     }
+    if (inserted_counts != std::vector<std::size_t>{0, 1, 2, 3, 4}) return 14;
 
     {
         TrainingDataWriter writer(path);
+        std::vector<std::size_t> changed_counts;
+        writer.set_pending_count_callback([&](std::size_t count) {
+            changed_counts.push_back(count);
+        });
+        if (writer.pending_count() != 4 ||
+            changed_counts != std::vector<std::size_t>{4}) return 15;
         const auto pending = writer.pending_items();
         if (pending.size() != 4 || pending[0].event_id != u"session:7" ||
             pending[0].context != u"sample" || pending[0].answer != u"result" ||
@@ -114,11 +127,15 @@ int main() {
         }
         if (!writer.exclude_unselected(
                 {u"session:7"}, {u"session:7", u"s:1", u"train:1"})) return 8;
+        if (writer.pending_count() != 2 ||
+            changed_counts != std::vector<std::size_t>{4, 2}) return 16;
         const auto remaining = writer.pending_items();
         if (remaining.size() != 2 || remaining[0].event_id != u"session:7" ||
             remaining[1].event_id != u"late:1") return 9;
         if (!writer.mark_trained({u"session:7"}) ||
             writer.pending_items().size() != 1) return 10;
+        if (writer.pending_count() != 1 ||
+            changed_counts != std::vector<std::size_t>{4, 2, 1}) return 17;
     }
     sqlite3* database = nullptr;
     if (sqlite3_open16(path.c_str(), &database) != SQLITE_OK) return 11;
