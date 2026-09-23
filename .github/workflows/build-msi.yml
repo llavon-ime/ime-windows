@@ -45,7 +45,10 @@ jobs:
         shell: pwsh
         run: |
           $date = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8))
-          $version = "$($date.ToString('yyyy.MM.dd')).${{ github.run_number }}"
+          # Earlier test bundles used revision 1000; a raw run number (e.g. 82)
+          # is treated by Burn as a downgrade on the same day.
+          $revision = 1000 + [long]"${{ github.run_number }}"
+          $version = "$($date.ToString('yyyy.MM.dd')).$revision"
           "version=$version" >> $env:GITHUB_OUTPUT
           Write-Host "Release version: $version"
 
