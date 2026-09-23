@@ -35,8 +35,8 @@ struct LoraTrainingOptions {
     double dropout = 0;
     std::int32_t batch_size = 1;
     std::int32_t gradient_accumulation = 1;
-    std::int32_t epochs = 210;
-    std::int32_t max_steps = 210;
+    std::int32_t epochs = 5;
+    std::int32_t max_steps = -1;
     double learning_rate = 1e-4;
     double weight_decay = 0;
     std::int32_t warmup_steps = 0;

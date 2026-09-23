@@ -97,7 +97,7 @@ complete. Records that cannot be converted stay `pending`.
 
 The dialog supplies non-empty defaults derived from
 `lora-trainer/docs/step-search-results.md`: rank/alpha 8/16, dropout 0, batch
-size and gradient accumulation 1, 210 epochs and steps, learning rate `1e-4`,
+size and gradient accumulation 1, 5 epochs, max steps `-1`, learning rate `1e-4`,
 FP32, target modules `q_proj,v_proj`, no warmup or weight decay, max gradient
 norm 1, seed 42, shuffling enabled, and device `auto`. The UI polls service
 status for download/training progress, can cancel an active operation, and can

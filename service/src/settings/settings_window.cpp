@@ -1227,7 +1227,7 @@ void SettingsWindow::show_lora_training_dialog() {
                 state->selecting_training_data = false;
                 state->dialog.Content(state->main_page);
                 state->dialog.Title(winrt::box_value(L"訓練個人化模型"));
-                state->dialog.PrimaryButtonText(L"開始訓練");
+                state->dialog.PrimaryButtonText(L"預覽訓練");
                 state->dialog.SecondaryButtonText(L"關閉");
                 state->dialog.IsPrimaryButtonEnabled(
                     !state->busy && state->model_available && has_selection);
