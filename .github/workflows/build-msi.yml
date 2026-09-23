@@ -74,7 +74,13 @@ jobs:
           path: |
             .vcpkg-cache
             vcpkg/downloads
-          key: v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg-cache.outputs.image }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json') }}
+          # A new runner image gets a new save key; exact cache hits are immutable.
+          # vcpkg's ABI hash decides which packages from older images can be reused.
+          key: v3-${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json') }}-image-${{ steps.vcpkg-cache.outputs.image }}
+          restore-keys: |
+            v3-${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json') }}-image-
+            v3-${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-
+            v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Resolve model metadata
         id: model
