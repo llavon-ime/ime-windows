@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <inputscope.h>
 #include <optional>
 
 #include <jsoncons/json.hpp>
@@ -23,6 +24,46 @@
 using namespace std::literals;
 
 namespace {
+
+// InputScope.h declares this property GUID but does not provide a linked definition.
+inline constexpr GUID kInputScopePropertyGuid = {
+    0x1713dd5a, 0x68e7, 0x4a5b, {0x9a, 0xf6, 0x59, 0x2a, 0x59, 0x5c, 0x77, 0x8d}};
+
+bool has_private_input_scope(ITfContext* context, TfEditCookie cookie,
+                             ITfRange* range) noexcept {
+    if (!context || !range) return false;
+
+    winrt::com_ptr<ITfReadOnlyProperty> property;
+    if (FAILED(context->GetAppProperty(kInputScopePropertyGuid, property.put())) ||
+        !property) {
+        return false;
+    }
+
+    VARIANT value;
+    VariantInit(&value);
+    const HRESULT value_hr = property->GetValue(cookie, range, &value);
+    bool is_private = false;
+    if (SUCCEEDED(value_hr) &&
+        (value.vt == VT_UNKNOWN || value.vt == VT_DISPATCH) && value.punkVal) {
+        winrt::com_ptr<ITfInputScope> input_scope;
+        if (SUCCEEDED(value.punkVal->QueryInterface<ITfInputScope>(
+                input_scope.put())) && input_scope) {
+            InputScope* scopes = nullptr;
+            UINT count = 0;
+            if (SUCCEEDED(input_scope->GetInputScopes(&scopes, &count)) && scopes) {
+                for (UINT index = 0; index < count; ++index) {
+                    if (scopes[index] == IS_PRIVATE) {
+                        is_private = true;
+                        break;
+                    }
+                }
+            }
+            CoTaskMemFree(scopes);
+        }
+    }
+    VariantClear(&value);
+    return is_private;
+}
 
 bool load_width_toggle_setting() noexcept {
     try {
@@ -759,10 +800,11 @@ void TextService::clear_composition_state() {
     compositionBuffer.clear();
     collection_context_.clear();
     commit_reported_ = false;
+    private_input_scope_ = false;
 }
 
-void TextService::record_commit(CommitSample sample) noexcept {
-    if (sample.answer.empty() || sample.input.empty()) {
+void TextService::record_commit(CommitSample sample, bool private_input_scope) noexcept {
+    if (private_input_scope || sample.answer.empty() || sample.input.empty()) {
         return;
     }
     try {
@@ -1268,13 +1310,21 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* /*pContext*/, REFGUID /*rgu
  *
  * Clears local composition state when TSF ends the composition externally.
  */
-STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/, ITfComposition* pComposition) try {
+STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfComposition* pComposition) try {
     if (itfComposition && pComposition && !same_com_object(itfComposition.get(), pComposition)) {
         return S_OK;
     }
     if (!commit_reported_ && !compositionBuffer.empty()) {
         commit_reported_ = true;
-        record_commit(compositionBuffer.commit_sample(collection_context_));
+        if (composition_context_ && pComposition) {
+            winrt::com_ptr<ITfRange> range;
+            if (SUCCEEDED(pComposition->GetRange(range.put()))) {
+                private_input_scope_ |= has_private_input_scope(
+                    composition_context_.get(), ecWrite, range.get());
+            }
+        }
+        record_commit(compositionBuffer.commit_sample(collection_context_),
+                      private_input_scope_);
     }
     clear_composition_state();
     return S_OK;
@@ -1430,6 +1480,7 @@ HRESULT TextService::start_composition(ITfContext* pContext) {
             return;
         }
         composition_context_.copy_from(pContext);
+        private_input_scope_ |= has_private_input_scope(pContext, ec, range.get());
     });
 
     HRESULT hrSession;
@@ -1454,9 +1505,10 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
 
     auto sample = compositionBuffer.commit_sample(get_pre_composit_context(pContext));
     commit_reported_ = true;
+    bool private_input_scope = private_input_scope_;
 
     winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
-    editSession->set_operation([this, pContext](TfEditCookie ec) {
+    editSession->set_operation([this, pContext, &private_input_scope](TfEditCookie ec) {
         before_return cleanup([this]() { clear_composition_state(); });
         if (itfComposition) {
             // The composition range already contains the final text. Rewriting it
@@ -1464,6 +1516,7 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
             // which can delete adjacent text around contenteditable boundaries.
             winrt::com_ptr<ITfRange> range;
             itfComposition->GetRange(range.put()) | win::check();
+            private_input_scope |= has_private_input_scope(pContext, ec, range.get());
 
             winrt::com_ptr<ITfRange> caret_range;
             range->Clone(caret_range.put()) | win::check();
@@ -1493,7 +1546,7 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
         _tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &session_hr);
     const HRESULT result = FAILED(request_hr) ? request_hr : session_hr;
     if (SUCCEEDED(result)) {
-        record_commit(std::move(sample));
+        record_commit(std::move(sample), private_input_scope);
     } else {
         commit_reported_ = false;
     }
@@ -1866,6 +1919,7 @@ std::u16string TextService::get_pre_composit_context(ITfContext* pContext) {
             anchor_range.attach(selection.range);
         }
 
+        private_input_scope_ |= has_private_input_scope(pContext, ec, anchor_range.get());
         anchor_range->Collapse(ec, TF_ANCHOR_START) | win::check();
         if (!read_pre_context_with_acp(ec, anchor_range.get(), context)) {
             read_pre_context_with_shift(ec, anchor_range.get(), context);

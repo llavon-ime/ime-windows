@@ -125,7 +125,7 @@ private:
     bool composition_belongs_to(ITfContext* context) const;
     bool has_composition_state() const;
     void clear_composition_state();
-    void record_commit(CommitSample sample) noexcept;
+    void record_commit(CommitSample sample, bool private_input_scope) noexcept;
     // Multifunctional shortcut handling
     std::optional<std::u16string> multifuntional_shortcut(WPARAM wParam);
 
@@ -150,6 +150,7 @@ private:
     std::uint64_t next_e2e_sequence_ = 1;
     std::u16string collection_context_;
     bool commit_reported_ = false;
+    bool private_input_scope_ = false;
     // Multifunctional shortcut handling
     bool backtick_used_as_modifier_ = false;
 };
