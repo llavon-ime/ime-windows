@@ -1,6 +1,7 @@
 #pragma once
 
 #include "training_data_writer.hpp"
+#include "winrt_http.hpp"
 
 #include <windows.h>
 
@@ -86,6 +87,7 @@ private:
     void set_status(LoraOperationStage stage, double progress,
                     std::u16string message);
     void set_failed(const std::exception& error) noexcept;
+    void set_failed_unknown() noexcept;
     std::string resolve_remote_revision();
     bool installed_model_is_complete(std::string* revision = nullptr) const;
     void download_asset(const std::string& revision, std::string_view filename,
@@ -103,6 +105,7 @@ private:
     std::thread worker_;
     std::atomic_bool busy_{false};
     std::atomic_bool cancelling_{false};
+    WinrtHttpTransfer http_transfer_;
     std::mutex process_mutex_;
     HANDLE active_process_ = nullptr;
     std::vector<std::u16string> pending_event_ids_;

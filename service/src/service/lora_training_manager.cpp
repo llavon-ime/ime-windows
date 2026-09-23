@@ -1,11 +1,11 @@
 #include "lora_training_manager.hpp"
 
 #include "lora_dataset_builder.hpp"
+#include "winrt_http.hpp"
 
 #include <jsoncons/json.hpp>
 #include <shlobj.h>
 #include <utf8/cpp20.h>
-#include <winhttp.h>
 
 #include <algorithm>
 #include <array>
@@ -30,27 +30,6 @@ constexpr wchar_t model_repository_directory[] =
     L"tony65535--llavon-ime-llama-250m";
 constexpr std::array<std::string_view, 3> model_files{
     "config.json", "ime_vocab.json", "model.safetensors"};
-
-class InternetHandle final {
-public:
-    InternetHandle() = default;
-    explicit InternetHandle(HINTERNET handle) : handle_(handle) {}
-    ~InternetHandle() { if (handle_) WinHttpCloseHandle(handle_); }
-    InternetHandle(const InternetHandle&) = delete;
-    InternetHandle& operator=(const InternetHandle&) = delete;
-    InternetHandle(InternetHandle&& other) noexcept
-        : handle_(std::exchange(other.handle_, nullptr)) {}
-    InternetHandle& operator=(InternetHandle&& other) noexcept {
-        if (this == &other) return *this;
-        if (handle_) WinHttpCloseHandle(handle_);
-        handle_ = std::exchange(other.handle_, nullptr);
-        return *this;
-    }
-    HINTERNET get() const noexcept { return handle_; }
-    explicit operator bool() const noexcept { return handle_ != nullptr; }
-private:
-    HINTERNET handle_ = nullptr;
-};
 
 std::optional<std::filesystem::path> environment_path(const wchar_t* name) {
     const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
@@ -179,75 +158,17 @@ std::wstring request_path(std::string_view revision, std::string_view filename) 
                  "?download=true");
 }
 
-struct HttpRequest {
-    InternetHandle session;
-    InternetHandle connection;
-    InternetHandle request;
-};
-
-HttpRequest open_request(const wchar_t* host, const std::wstring& path) {
-    HttpRequest result;
-    result.session = InternetHandle(WinHttpOpen(
-        L"LlavonIME-LoRA/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
-    if (!result.session) throw std::runtime_error("unable to initialize HTTPS client");
-    WinHttpSetTimeouts(result.session.get(), 10000, 10000, 30000, 30000);
-    result.connection = InternetHandle(WinHttpConnect(
-        result.session.get(), host, INTERNET_DEFAULT_HTTPS_PORT, 0));
-    if (!result.connection) throw std::runtime_error("unable to connect to Hugging Face");
-    result.request = InternetHandle(WinHttpOpenRequest(
-        result.connection.get(), L"GET", path.c_str(), nullptr,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
-    if (!result.request ||
-        !WinHttpSendRequest(result.request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(result.request.get(), nullptr)) {
-        throw std::runtime_error("Hugging Face request failed");
-    }
-    DWORD status = 0;
-    DWORD size = sizeof(status);
-    if (!WinHttpQueryHeaders(result.request.get(),
-                             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &size,
-                             WINHTTP_NO_HEADER_INDEX) || status < 200 || status >= 300) {
-        throw std::runtime_error("Hugging Face returned HTTP " +
-                                 std::to_string(status));
-    }
-    return result;
-}
-
-std::uint64_t content_length(HINTERNET request) {
-    wchar_t buffer[64]{};
-    DWORD size = sizeof(buffer);
-    if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_CONTENT_LENGTH,
-                             WINHTTP_HEADER_NAME_BY_INDEX, buffer, &size,
-                             WINHTTP_NO_HEADER_INDEX)) {
-        return 0;
-    }
-    try {
-        return std::stoull(buffer);
-    } catch (...) {
-        return 0;
-    }
-}
-
 std::string http_get_string(const std::wstring& path,
-                            const std::atomic_bool& cancelling) {
-    auto request = open_request(L"huggingface.co", path);
+                            WinrtHttpTransfer& transfer) {
     std::string output;
-    std::array<char, 64 * 1024> buffer{};
-    for (;;) {
-        if (cancelling.load(std::memory_order_acquire)) {
-            throw std::runtime_error("operation cancelled");
-        }
-        DWORD read = 0;
-        if (!WinHttpReadData(request.request.get(), buffer.data(),
-                             static_cast<DWORD>(buffer.size()), &read)) {
-            throw std::runtime_error("unable to read HTTPS response");
-        }
-        if (read == 0) break;
-        output.append(buffer.data(), read);
-    }
+    transfer.get_stream(L"https://huggingface.co" + path,
+        [&](const std::uint8_t* bytes, std::uint32_t count,
+            std::uint64_t, std::uint64_t) {
+            if (output.size() + count > 4 * 1024 * 1024) {
+                throw std::runtime_error("Hugging Face model metadata is too large");
+            }
+            output.append(reinterpret_cast<const char*>(bytes), count);
+        });
     return output;
 }
 
@@ -307,15 +228,23 @@ bool LoraTrainingManager::start_training_async(
         pending_event_ids_ = std::move(event_ids);
         pending_options_ = std::move(options);
         cancelling_.store(false, std::memory_order_release);
+        http_transfer_.reset();
         busy_.store(true, std::memory_order_release);
-        worker_ = std::thread([this] {
-            try {
-                training_worker();
-            } catch (const std::exception& error) {
-                set_failed(error);
-            }
+        try {
+            worker_ = std::thread([this] {
+                try {
+                    training_worker();
+                } catch (const std::exception& error) {
+                    set_failed(error);
+                } catch (...) {
+                    set_failed_unknown();
+                }
+                busy_.store(false, std::memory_order_release);
+            });
+        } catch (...) {
             busy_.store(false, std::memory_order_release);
-        });
+            throw;
+        }
     }
     return true;
 }
@@ -325,20 +254,29 @@ bool LoraTrainingManager::launch(Operation operation) {
     if (busy_.load(std::memory_order_acquire)) return false;
     if (worker_.joinable()) worker_.join();
     cancelling_.store(false, std::memory_order_release);
+    http_transfer_.reset();
     busy_.store(true, std::memory_order_release);
-    worker_ = std::thread([this, operation] {
-        try {
-            (this->*operation)();
-        } catch (const std::exception& error) {
-            set_failed(error);
-        }
+    try {
+        worker_ = std::thread([this, operation] {
+            try {
+                (this->*operation)();
+            } catch (const std::exception& error) {
+                set_failed(error);
+            } catch (...) {
+                set_failed_unknown();
+            }
+            busy_.store(false, std::memory_order_release);
+        });
+    } catch (...) {
         busy_.store(false, std::memory_order_release);
-    });
+        throw;
+    }
     return true;
 }
 
 void LoraTrainingManager::cancel() noexcept {
     cancelling_.store(true, std::memory_order_release);
+    http_transfer_.cancel();
     std::lock_guard lock(process_mutex_);
     if (active_process_) TerminateProcess(active_process_, ERROR_CANCELLED);
 }
@@ -353,19 +291,36 @@ void LoraTrainingManager::set_status(LoraOperationStage stage, double progress,
 }
 
 void LoraTrainingManager::set_failed(const std::exception& error) noexcept {
-    std::lock_guard lock(status_mutex_);
-    status_.stage = cancelling_.load(std::memory_order_acquire)
-        ? LoraOperationStage::cancelled
-        : LoraOperationStage::failed;
-    status_.message = cancelling_.load(std::memory_order_acquire)
-        ? u"操作已取消"
-        : to_utf16(error.what());
+    try {
+        const bool cancelled = cancelling_.load(std::memory_order_acquire);
+        auto message = cancelled ? std::u16string(u"操作已取消")
+                                 : to_utf16(error.what());
+        std::lock_guard lock(status_mutex_);
+        status_.stage = cancelled ? LoraOperationStage::cancelled
+                                  : LoraOperationStage::failed;
+        status_.message = std::move(message);
+    } catch (...) {
+        set_failed_unknown();
+    }
+}
+
+void LoraTrainingManager::set_failed_unknown() noexcept {
+    try {
+        const bool cancelled = cancelling_.load(std::memory_order_acquire);
+        std::lock_guard lock(status_mutex_);
+        status_.stage = cancelled ? LoraOperationStage::cancelled
+                                  : LoraOperationStage::failed;
+        status_.message = cancelled ? u"操作已取消" : u"LoRA 發生未知錯誤";
+    } catch (...) {
+        // This is the final thread boundary. Never terminate the service while
+        // attempting to publish an error to the settings UI.
+    }
 }
 
 std::string LoraTrainingManager::resolve_remote_revision() {
     const std::string body = http_get_string(
         L"/api/models/tony65535/llavon-ime-llama-250m/revision/main",
-        cancelling_);
+        http_transfer_);
     const auto metadata = jsoncons::json::parse(body);
     const std::string revision = metadata.at("sha").as<std::string>();
     if (!valid_revision(revision)) {
@@ -416,34 +371,23 @@ void LoraTrainingManager::download_asset(
     std::error_code error;
     std::filesystem::remove(partial, error);
 
-    auto request = open_request(L"huggingface.co", request_path(revision, filename));
-    const std::uint64_t total = content_length(request.request.get());
     std::ofstream output(partial, std::ios::binary | std::ios::trunc);
     if (!output) throw std::runtime_error("unable to create model download file");
-    std::array<char, 1024 * 1024> buffer{};
-    std::uint64_t received = 0;
     try {
-        for (;;) {
-            if (cancelling_.load(std::memory_order_acquire)) {
-                throw std::runtime_error("operation cancelled");
-            }
-            DWORD read = 0;
-            if (!WinHttpReadData(request.request.get(), buffer.data(),
-                                 static_cast<DWORD>(buffer.size()), &read)) {
-                throw std::runtime_error("unable to read model download");
-            }
-            if (read == 0) break;
-            output.write(buffer.data(), read);
+        http_transfer_.get_stream(
+            L"https://huggingface.co" + request_path(revision, filename),
+            [&](const std::uint8_t* bytes, std::uint32_t count,
+                std::uint64_t received, std::uint64_t total) {
+            output.write(reinterpret_cast<const char*>(bytes), count);
             if (!output) throw std::runtime_error("unable to write model download");
-            received += read;
             const double fraction = total == 0 ? 0 :
                 std::min(1.0, static_cast<double>(received) / static_cast<double>(total));
             set_status(LoraOperationStage::downloading_model,
                        progress_start + (progress_end - progress_start) * fraction,
                        u"正在下載 " + utf8::utf8to16(std::string(filename)));
-        }
+            });
         output.flush();
-        if (!output || total != 0 && received != total) {
+        if (!output) {
             throw std::runtime_error("model download is incomplete");
         }
         output.close();

@@ -123,6 +123,11 @@ optional installer component:
 %ProgramFiles%\Llavon IME\tools\lora\llavon-lora.exe
 ```
 
+Model checks and downloads use WinRT `Windows.Web.Http` with `co_await` for
+network operations. The service's dedicated worker waits only at the outer
+boundary. Downloads read the response in bounded chunks and publish progress
+to the settings UI; canceling also cancels an in-flight HTTP request.
+
 For development and tests, `LLAVON_IME_LORA_ASSETS_DIR` overrides the asset/run
 root and `LLAVON_IME_LORA_CLI_PATH` overrides the trainer executable.
 

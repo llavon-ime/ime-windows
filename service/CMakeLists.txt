@@ -36,6 +36,8 @@ add_executable(llavon-ime-service
     src/service/tray_icon.hpp
     src/service/training_data_writer.cpp
     src/service/training_data_writer.hpp
+    src/service/winrt_http.cpp
+    src/service/winrt_http.hpp
     src/service.rc
 )
 
@@ -135,6 +137,8 @@ target_include_directories(llavon-ime-candidate-ui PUBLIC
 target_link_libraries(llavon-ime-service PRIVATE
     ime-core::ime-core
     llavon::debug-client
+    Microsoft::CppWinRT
+    WindowsApp
     asio::asio
     reflectcpp::reflectcpp
     utf8cpp::utf8cpp
@@ -145,7 +149,6 @@ target_link_libraries(llavon-ime-service PRIVATE
     oleaut32
     shell32
     ws2_32
-    winhttp
 )
 target_link_libraries(llavon-ime-settings-ui PRIVATE
     Microsoft::CppWinRT
@@ -220,6 +223,21 @@ if(BUILD_TESTING)
         shell32
     )
     add_test(NAME training-data-writer COMMAND training-data-writer-tests)
+
+    add_executable(winrt-http-tests
+        tests/winrt_http_tests.cpp
+        src/service/winrt_http.cpp
+        src/service/winrt_http.hpp
+    )
+    target_compile_features(winrt-http-tests PRIVATE cxx_std_23)
+    target_compile_definitions(winrt-http-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(winrt-http-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(winrt-http-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(winrt-http-tests PRIVATE
+        asio::asio Microsoft::CppWinRT WindowsApp ws2_32)
+    add_test(NAME winrt-http COMMAND winrt-http-tests)
+    set_tests_properties(winrt-http PROPERTIES TIMEOUT 20)
 
 endif()
 
