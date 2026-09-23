@@ -1,6 +1,7 @@
 #include "settings_window.hpp"
 
 #include "../resource.h"
+#include "settings_resources.h"
 
 #include <dwmapi.h>
 #include <shobjidl_core.h>
@@ -58,11 +59,8 @@ using namespace winrt::Windows::UI::Xaml::Media;
 
 constexpr wchar_t window_class_name[] = L"LlavonImeSettingsWindow";
 constexpr UINT update_result_message = WM_APP + 10;
-constexpr double section_title_size = 20;
 constexpr double body_text_size = 14;
 constexpr double caption_text_size = 12;
-constexpr double control_height = 32;
-constexpr double settings_content_width = 600;
 
 SolidColorBrush solid_brush(std::uint8_t red, std::uint8_t green, std::uint8_t blue) {
     return SolidColorBrush(winrt::Windows::UI::Color{255, red, green, blue});
@@ -78,10 +76,24 @@ TextBlock make_text(const wchar_t* value, double size, FontWeight weight = FontW
     return block;
 }
 
-TextBlock make_section_title(const wchar_t* value) {
-    auto title = make_text(value, section_title_size, FontWeights::SemiBold());
-    title.Margin(Thickness{0, 6, 0, 18});
-    return title;
+winrt::Windows::Foundation::IInspectable load_xaml_resource(int id) {
+    const auto module = reinterpret_cast<HINSTANCE>(&__ImageBase);
+    const HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(id), RT_RCDATA);
+    if (!resource) winrt::throw_last_error();
+    const HGLOBAL loaded = LoadResource(module, resource);
+    if (!loaded) winrt::throw_last_error();
+    const auto* bytes = static_cast<const char*>(LockResource(loaded));
+    const DWORD length = SizeofResource(module, resource);
+    if (!bytes || length == 0) winrt::throw_hresult(E_FAIL);
+    return winrt::Windows::UI::Xaml::Markup::XamlReader::Load(
+        winrt::to_hstring(std::string_view(bytes, length)));
+}
+
+template <typename T>
+T named(const FrameworkElement& root, const wchar_t* name) {
+    const auto element = root.FindName(name);
+    if (!element) winrt::throw_hresult(E_INVALIDARG);
+    return element.as<T>();
 }
 
 SolidColorBrush transparent_brush() {
@@ -188,6 +200,132 @@ std::optional<std::vector<DisplayCharacter>> split_characters(
         return std::nullopt;
     }
     return result;
+}
+
+std::u16string display_tail(const std::vector<DisplayCharacter>& characters,
+                            std::size_t maximum) {
+    const std::size_t omitted = characters.size() > maximum
+        ? characters.size() - maximum : 0;
+    std::u16string result = omitted ? u"…" : u"";
+    for (std::size_t index = omitted; index < characters.size(); ++index) {
+        result += characters[index].text;
+    }
+    return result;
+}
+
+std::vector<std::u16string> split_reading_tokens(std::u16string_view reading) {
+    std::vector<std::u16string> result;
+    for (std::size_t position = 0; position < reading.size();) {
+        while (position < reading.size() &&
+               std::iswspace(static_cast<wchar_t>(reading[position]))) {
+            ++position;
+        }
+        const std::size_t start = position;
+        while (position < reading.size() &&
+               !std::iswspace(static_cast<wchar_t>(reading[position]))) {
+            ++position;
+        }
+        if (position != start) result.emplace_back(reading.substr(start, position - start));
+    }
+    return result;
+}
+
+void render_training_item(const TrainingDataOption& item, const Grid& root,
+                          const FrameworkElement& owner, bool dark) {
+    constexpr std::size_t maximum_context_characters = 14;
+    constexpr std::size_t maximum_answer_characters = 14;
+    const auto characters = split_characters(item.answer);
+    const auto context_characters = split_characters(item.context);
+    const auto context = named<TextBlock>(root, L"ContextText");
+    context.Text(to_hstring(context_characters
+        ? display_tail(*context_characters, maximum_context_characters)
+        : item.context));
+    context.Visibility(item.context.empty() ? Visibility::Collapsed : Visibility::Visible);
+
+    const bool inline_context = context_characters && characters &&
+        !context_characters->empty() && context_characters->size() <= 6 &&
+        characters->size() <= 7;
+    const bool truncated =
+        (context_characters && context_characters->size() > maximum_context_characters) ||
+        (characters && characters->size() > maximum_answer_characters);
+    if (truncated) {
+        const auto tooltip = load_xaml_resource(IDR_LORA_ITEM_TOOLTIP_XAML).as<ToolTip>();
+        const auto tooltip_root = tooltip.as<FrameworkElement>();
+        const auto full_context = named<TextBlock>(tooltip_root, L"FullContext");
+        full_context.Text(to_hstring(item.context));
+        full_context.Visibility(item.context.empty() ? Visibility::Collapsed : Visibility::Visible);
+        named<TextBlock>(tooltip_root, L"FullAnswer").Text(to_hstring(
+            item.context.empty() ? item.answer : u"→ " + item.answer));
+        const auto full_reading = named<TextBlock>(tooltip_root, L"FullReading");
+        full_reading.Text(item.reading.empty() ? L"" : to_hstring(u"[" + item.reading + u"]"));
+        full_reading.Visibility(item.reading.empty() ? Visibility::Collapsed : Visibility::Visible);
+        ToolTipService::SetToolTip(owner, tooltip);
+    } else {
+        ToolTipService::SetToolTip(owner, nullptr);
+    }
+    const auto highlight = named<Border>(root, L"AnswerHighlight");
+    highlight.Background(dark ? solid_brush(35, 56, 77) : solid_brush(228, 240, 252));
+    highlight.BorderBrush(dark ? solid_brush(67, 106, 140) : solid_brush(193, 221, 247));
+    Grid::SetRow(highlight, item.context.empty() || inline_context ? 0 : 1);
+    Grid::SetColumn(highlight, inline_context ? 1 : 0);
+    Grid::SetColumnSpan(highlight, inline_context ? 1 : 2);
+    Grid::SetRow(named<TextBlock>(root, L"RevisedTag"),
+                 item.context.empty() || inline_context ? 1 : 2);
+    const auto lines = named<StackPanel>(root, L"AnswerLines");
+    const auto fallback_answer = named<TextBlock>(root, L"AnswerFallback");
+    lines.Children().Clear();
+
+    const auto readings = split_reading_tokens(item.reading);
+    if (characters && !characters->empty()) {
+        fallback_answer.Visibility(Visibility::Collapsed);
+        lines.Visibility(Visibility::Visible);
+        const bool aligned = characters->size() == readings.size();
+        const std::size_t omitted = characters->size() > maximum_answer_characters
+            ? characters->size() - maximum_answer_characters : 0;
+        const std::size_t visible_count = characters->size() - omitted + (omitted ? 1 : 0);
+        const std::size_t characters_per_line = inline_context ? 7 : 9;
+        StackPanel line{nullptr};
+        for (std::size_t index = 0; index < visible_count; ++index) {
+            if (index % characters_per_line == 0) {
+                line = StackPanel();
+                line.Orientation(Orientation::Horizontal);
+                lines.Children().Append(line);
+            }
+            auto cell = load_xaml_resource(IDR_LORA_RUBY_CELL_XAML).as<Grid>();
+            const bool ellipsis = omitted && index == 0;
+            if (ellipsis) {
+                named<TextBlock>(cell, L"Character").Text(L"…");
+            } else {
+                const std::size_t source_index = omitted + index - (omitted ? 1 : 0);
+                const auto& character = (*characters)[source_index].text;
+                named<TextBlock>(cell, L"Character").Text(to_hstring(character));
+                named<TextBlock>(cell, L"Reading").Text(
+                    aligned && readings[source_index] != character
+                        ? to_hstring(readings[source_index]) : L"");
+            }
+            line.Children().Append(cell);
+        }
+    } else {
+        lines.Visibility(Visibility::Collapsed);
+        fallback_answer.Text(to_hstring(item.answer));
+        fallback_answer.Visibility(Visibility::Visible);
+    }
+    named<TextBlock>(root, L"RevisedTag").Visibility(
+        item.revice ? Visibility::Visible : Visibility::Collapsed);
+}
+
+void refresh_visible_training_selection(const ListView& list) {
+    const auto panel = list.ItemsPanelRoot().try_as<ItemsStackPanel>();
+    if (!panel) return;
+    const std::int32_t first = panel.FirstVisibleIndex();
+    const std::int32_t last = panel.LastVisibleIndex();
+    if (first < 0 || last < first) return;
+    for (std::int32_t index = first; index <= last; ++index) {
+        const auto container = list.ContainerFromIndex(index).try_as<ListViewItem>();
+        if (!container) continue;
+        const auto root = container.ContentTemplateRoot().try_as<Grid>();
+        if (root) root.Opacity(container.IsSelected() ? 1.0 : 0.58);
+    }
 }
 
 std::filesystem::path module_directory() {
@@ -369,6 +507,7 @@ void SettingsWindow::hide() const noexcept {
 void SettingsWindow::destroy() noexcept {
     deactivate_update_target();
     discard_pending_update_results();
+    hide();
     close_xaml();
     if (window_) {
         const HWND window = window_;
@@ -458,111 +597,30 @@ void SettingsWindow::initialize_xaml_island() {
 }
 
 void SettingsWindow::build_page() {
-    shell_ = Grid();
+    shell_ = load_xaml_resource(IDR_SETTINGS_PAGE_XAML).as<Grid>();
     shell_.Background(transparent_brush());
 
-    ScrollViewer scroll;
-    scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
-    scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
-
-    StackPanel page;
-    page.Width(700);
-    page.HorizontalAlignment(HorizontalAlignment::Left);
-    page.Padding(Thickness{32, 24, 32, 40});
-
-    page.Children().Append(make_section_title(L"模型檔案"));
-
-    StackPanel model_section;
-    model_section.Spacing(8);
-    model_section.Margin(Thickness{0, 0, 0, 24});
-    model_section.Children().Append(
-        make_text(L"指定要載入的 GGUF 模型檔案。", body_text_size));
-
-    Grid model_path_row;
-    model_path_row.Width(settings_content_width);
-    model_path_row.HorizontalAlignment(HorizontalAlignment::Left);
-    ColumnDefinition model_path_column;
-    model_path_column.Width(GridLength{1, GridUnitType::Star});
-    model_path_row.ColumnDefinitions().Append(model_path_column);
-    ColumnDefinition model_path_gap;
-    model_path_gap.Width(GridLength{12, GridUnitType::Pixel});
-    model_path_row.ColumnDefinitions().Append(model_path_gap);
-    ColumnDefinition browse_column;
-    browse_column.Width(GridLength{1, GridUnitType::Auto});
-    model_path_row.ColumnDefinitions().Append(browse_column);
-
-    model_path_ = TextBox();
+    model_path_ = named<TextBox>(shell_, L"ModelPath");
     model_path_.Text(to_hstring(configuration_.model_path));
-    model_path_.PlaceholderText(L"選擇 .gguf 模型檔案");
-    model_path_.MinHeight(control_height);
-    model_path_.FontSize(body_text_size);
     model_path_.TextChanged(
         [this](const auto&, const auto&) { update_model_path_save_state(); });
-    Grid::SetColumn(model_path_, 0);
-    model_path_row.Children().Append(model_path_);
-
-    browse_model_button_ = Button();
-    browse_model_button_.Content(winrt::box_value(L"瀏覽…"));
-    browse_model_button_.MinWidth(88);
-    browse_model_button_.MinHeight(control_height);
-    browse_model_button_.FontSize(body_text_size);
+    browse_model_button_ = named<Button>(shell_, L"BrowseModelButton");
     browse_model_button_.Click([this](const auto&, const auto&) { browse_model_file(); });
-    Grid::SetColumn(browse_model_button_, 2);
-    model_path_row.Children().Append(browse_model_button_);
-    model_section.Children().Append(model_path_row);
-
-    save_model_button_ = Button();
-    save_model_button_.Content(winrt::box_value(L"套用模型"));
-    save_model_button_.MinWidth(112);
-    save_model_button_.MinHeight(control_height);
-    save_model_button_.FontSize(body_text_size);
-    save_model_button_.HorizontalAlignment(HorizontalAlignment::Left);
-    save_model_button_.IsEnabled(false);
+    save_model_button_ = named<Button>(shell_, L"SaveModelButton");
     save_model_button_.Click([this](const auto&, const auto&) { save_model_path(); });
-    model_section.Children().Append(save_model_button_);
+    model_note_ = named<TextBlock>(shell_, L"ModelNote");
 
-    model_note_ = make_text(L"", caption_text_size);
-    model_note_.Visibility(Visibility::Collapsed);
-    model_section.Children().Append(model_note_);
-    page.Children().Append(model_section);
-
-    page.Children().Append(make_section_title(L"推論裝置"));
-
-    StackPanel inference_section;
-    inference_section.Spacing(8);
-    inference_section.Margin(Thickness{0, 0, 0, 24});
-
-    Grid active_row;
-    active_row.Width(540);
-    active_row.HorizontalAlignment(HorizontalAlignment::Left);
-    active_row.Background(transparent_brush());
-
-    ColumnDefinition device_column;
-    device_column.Width(GridLength{1, GridUnitType::Star});
-    active_row.ColumnDefinitions().Append(device_column);
-    ColumnDefinition status_column;
-    status_column.Width(GridLength{1, GridUnitType::Auto});
-    active_row.ColumnDefinitions().Append(status_column);
-
+    const auto active_row = named<Grid>(shell_, L"ActiveDeviceRow");
     const auto& active = configuration_.active_device;
     const std::u16string active_name =
         !active.description.empty() ? active.description
                                     : (!active.name.empty() ? active.name : active.device_id);
     const auto active_name_text = to_hstring(active_name);
-    active_device_status_ = make_text(
-        active_name_text.c_str(), body_text_size, FontWeights::SemiBold());
-    active_device_status_.TextTrimming(TextTrimming::CharacterEllipsis);
-    active_device_status_.TextWrapping(TextWrapping::NoWrap);
-    Grid::SetColumn(active_device_status_, 0);
-    active_row.Children().Append(active_device_status_);
-
+    active_device_status_ = named<TextBlock>(shell_, L"ActiveDeviceStatus");
+    active_device_status_.Text(active_name_text);
     std::u16string active_state = u"使用中 · ";
     active_state += backend_label(active.backend);
-    const auto active_state_text = to_hstring(active_state);
-    TextBlock active_backend = make_text(active_state_text.c_str(), caption_text_size);
-    active_backend.Margin(Thickness{16, 2, 0, 0});
-    Grid::SetColumn(active_backend, 1);
-    active_row.Children().Append(active_backend);
+    named<TextBlock>(shell_, L"ActiveBackend").Text(to_hstring(active_state));
 
     ToolTip active_tooltip;
     StackPanel tooltip_content;
@@ -600,18 +658,14 @@ void SettingsWindow::build_page() {
     active_row.PointerExited([active_tooltip](const auto&, const auto&) {
         active_tooltip.IsOpen(false);
     });
-    inference_section.Children().Append(active_row);
-    inference_section.Children().Append(make_text(L"下次啟動設定", body_text_size));
 
     inference_options_.clear();
     inference_options_.push_back(InferenceDeviceOption{
-        .backend = LLAVON_SETTINGS_BACKEND_AUTO,
-        .name = u"自動選擇",
+        .backend = LLAVON_SETTINGS_BACKEND_AUTO, .name = u"自動選擇",
     });
     inference_options_.push_back(InferenceDeviceOption{
         .backend = LLAVON_SETTINGS_BACKEND_CPU,
-        .device_type = LLAVON_SETTINGS_DEVICE_CPU,
-        .name = u"CPU",
+        .device_type = LLAVON_SETTINGS_DEVICE_CPU, .name = u"CPU",
     });
     for (const auto& device : configuration_.devices) {
         if (device.backend == LLAVON_SETTINGS_BACKEND_CUDA ||
@@ -619,7 +673,6 @@ void SettingsWindow::build_page() {
             inference_options_.push_back(device);
         }
     }
-
     bool selected_device_available =
         configuration_.selected_backend == LLAVON_SETTINGS_BACKEND_AUTO ||
         configuration_.selected_backend == LLAVON_SETTINGS_BACKEND_CPU;
@@ -638,12 +691,7 @@ void SettingsWindow::build_page() {
                     u" / " + configuration_.selected_device_id + u"（目前不可用）",
         });
     }
-
-    inference_device_ = ComboBox();
-    inference_device_.Width(540);
-    inference_device_.MinHeight(control_height);
-    inference_device_.FontSize(body_text_size);
-    inference_device_.HorizontalAlignment(HorizontalAlignment::Left);
+    inference_device_ = named<ComboBox>(shell_, L"InferenceDevice");
     inference_device_.Items().Append(winrt::box_value(L"自動選擇（建議）"));
     inference_device_.Items().Append(winrt::box_value(L"CPU"));
     for (std::size_t index = 2; index < inference_options_.size(); ++index) {
@@ -654,7 +702,6 @@ void SettingsWindow::build_page() {
         inference_device_.Items().Append(winrt::box_value(
             to_hstring(unavailable ? option.name : device_label(option))));
     }
-
     std::int32_t selected_index = 0;
     for (std::size_t index = 0; index < inference_options_.size(); ++index) {
         const auto& option = inference_options_[index];
@@ -667,41 +714,16 @@ void SettingsWindow::build_page() {
     inference_device_.SelectedIndex(selected_index);
     inference_device_.SelectionChanged(
         [this](const auto&, const auto&) { update_inference_save_state(); });
-    inference_section.Children().Append(inference_device_);
-
-    save_inference_button_ = Button();
-    save_inference_button_.Content(winrt::box_value(L"儲存裝置設定"));
-    save_inference_button_.MinWidth(132);
-    save_inference_button_.MinHeight(control_height);
-    save_inference_button_.FontSize(body_text_size);
-    save_inference_button_.HorizontalAlignment(HorizontalAlignment::Left);
-    save_inference_button_.IsEnabled(false);
+    save_inference_button_ = named<Button>(shell_, L"SaveInferenceButton");
     save_inference_button_.Click([this](const auto&, const auto&) { save_inference_setting(); });
-    inference_section.Children().Append(save_inference_button_);
+    note_ = named<TextBlock>(shell_, L"InferenceNote");
 
-    note_ = make_text(L"", caption_text_size);
-    note_.Visibility(Visibility::Collapsed);
-    inference_section.Children().Append(note_);
-    page.Children().Append(inference_section);
-
-    page.Children().Append(make_section_title(L"輸入設定"));
-
-    StackPanel input_section;
-    input_section.Spacing(8);
-    input_section.Margin(Thickness{0, 0, 0, 24});
-
-    ToggleSwitch full_width_toggle;
-    full_width_toggle.Header(
-        winrt::box_value(L"使用 Shift + 空格鍵切換字元寬度"));
-    full_width_toggle.OnContent(winrt::box_value(L"開啟"));
-    full_width_toggle.OffContent(winrt::box_value(L"關閉"));
+    const auto full_width_toggle = named<ToggleSwitch>(shell_, L"FullWidthToggle");
     auto saved_full_width =
         std::make_shared<bool>(configuration_.shift_space_width_toggle_enabled);
     auto updating_full_width = std::make_shared<bool>(false);
     full_width_toggle.IsOn(*saved_full_width);
-
-    TextBlock full_width_note = make_text(L"", caption_text_size);
-    full_width_note.Visibility(Visibility::Collapsed);
+    const auto full_width_note = named<TextBlock>(shell_, L"FullWidthNote");
     full_width_toggle.Toggled(
         [this, full_width_note, saved_full_width, updating_full_width](
             const auto& sender, const auto&) {
@@ -709,7 +731,6 @@ void SettingsWindow::build_page() {
             const auto toggle = sender.template as<ToggleSwitch>();
             const bool enabled = toggle.IsOn();
             if (enabled == *saved_full_width) return;
-
             const std::int32_t result = configuration_.save_width_toggle_callback
                 ? configuration_.save_width_toggle_callback(
                       configuration_.save_width_toggle_context, enabled ? 1 : 0)
@@ -725,83 +746,18 @@ void SettingsWindow::build_page() {
             }
             full_width_note.Visibility(Visibility::Visible);
         });
-    input_section.Children().Append(full_width_toggle);
-    input_section.Children().Append(full_width_note);
-    page.Children().Append(input_section);
 
-    page.Children().Append(make_section_title(L"自訂名字"));
-
-    StackPanel custom_names_section;
-    custom_names_section.Spacing(10);
-    custom_names_section.Margin(Thickness{0, 0, 0, 24});
-
-    Grid custom_names_header;
-    custom_names_header.Width(settings_content_width);
-    custom_names_header.HorizontalAlignment(HorizontalAlignment::Left);
-
-    ColumnDefinition name_header_column;
-    name_header_column.Width(GridLength{180, GridUnitType::Pixel});
-    custom_names_header.ColumnDefinitions().Append(name_header_column);
-    ColumnDefinition name_header_gap;
-    name_header_gap.Width(GridLength{12, GridUnitType::Pixel});
-    custom_names_header.ColumnDefinitions().Append(name_header_gap);
-    ColumnDefinition pronunciation_header_column;
-    pronunciation_header_column.Width(GridLength{1, GridUnitType::Star});
-    custom_names_header.ColumnDefinitions().Append(pronunciation_header_column);
-    ColumnDefinition pronunciation_header_gap;
-    pronunciation_header_gap.Width(GridLength{12, GridUnitType::Pixel});
-    custom_names_header.ColumnDefinitions().Append(pronunciation_header_gap);
-    ColumnDefinition action_header_column;
-    action_header_column.Width(GridLength{84, GridUnitType::Pixel});
-    custom_names_header.ColumnDefinitions().Append(action_header_column);
-
-    TextBlock name_header = make_text(L"名字", caption_text_size, FontWeights::SemiBold());
-    Grid::SetColumn(name_header, 0);
-    custom_names_header.Children().Append(name_header);
-    TextBlock pronunciation_header =
-        make_text(L"注音", caption_text_size, FontWeights::SemiBold());
-    Grid::SetColumn(pronunciation_header, 2);
-    custom_names_header.Children().Append(pronunciation_header);
-    custom_names_section.Children().Append(custom_names_header);
-
-    custom_names_panel_ = StackPanel();
-    custom_names_panel_.Spacing(8);
-    custom_names_panel_.HorizontalAlignment(HorizontalAlignment::Left);
-    custom_names_section.Children().Append(custom_names_panel_);
-
-    StackPanel custom_names_actions;
-    custom_names_actions.Orientation(Orientation::Horizontal);
-    custom_names_actions.Spacing(12);
-
-    add_custom_name_button_ = Button();
-    add_custom_name_button_.Content(winrt::box_value(L"＋ 新增名字"));
-    add_custom_name_button_.MinWidth(120);
-    add_custom_name_button_.MinHeight(control_height);
-    add_custom_name_button_.FontSize(body_text_size);
+    custom_names_panel_ = named<StackPanel>(shell_, L"CustomNamesPanel");
+    add_custom_name_button_ = named<Button>(shell_, L"AddCustomNameButton");
     add_custom_name_button_.Click([this](const auto&, const auto&) { add_custom_name_row(); });
-    custom_names_actions.Children().Append(add_custom_name_button_);
-
-    save_custom_names_button_ = Button();
-    save_custom_names_button_.Content(winrt::box_value(L"儲存自訂名字"));
-    save_custom_names_button_.MinWidth(132);
-    save_custom_names_button_.MinHeight(control_height);
-    save_custom_names_button_.FontSize(body_text_size);
-    save_custom_names_button_.IsEnabled(false);
+    save_custom_names_button_ = named<Button>(shell_, L"SaveCustomNamesButton");
     save_custom_names_button_.Click([this](const auto&, const auto&) { save_custom_names(); });
-    custom_names_actions.Children().Append(save_custom_names_button_);
-    custom_names_section.Children().Append(custom_names_actions);
-
-    custom_names_note_ = make_text(L"", caption_text_size);
-    custom_names_note_.Visibility(Visibility::Collapsed);
-    custom_names_section.Children().Append(custom_names_note_);
-    page.Children().Append(custom_names_section);
-
+    custom_names_note_ = named<TextBlock>(shell_, L"CustomNamesNote");
     saved_custom_names_.clear();
     saved_custom_names_.reserve(configuration_.custom_names.size());
     for (const auto& custom_name : configuration_.custom_names) {
         saved_custom_names_.push_back(CustomNameEntry{
-            .name = custom_name.name,
-            .readings = custom_name.readings,
+            .name = custom_name.name, .readings = custom_name.readings,
         });
     }
     if (configuration_.custom_names.empty()) {
@@ -812,67 +768,22 @@ void SettingsWindow::build_page() {
         }
     }
 
-    page.Children().Append(make_section_title(L"LoRA 個人化模型"));
-
-    StackPanel lora_section;
-    lora_section.Spacing(8);
-    lora_section.Margin(Thickness{0, 0, 0, 24});
-    lora_section.Children().Append(make_text(
-        L"檢查尚未訓練的輸入紀錄，選擇要用於本機微調的資料。取消勾選的紀錄會標記為已排除。",
-        body_text_size));
-
     std::wstring pending_summary = L"尚未訓練：";
     pending_summary += std::to_wstring(configuration_.training_items.size());
     pending_summary += L" 筆";
-    lora_section.Children().Append(make_text(pending_summary.c_str(), caption_text_size));
-
-    Button lora_button;
-    lora_button.Content(winrt::box_value(L"使用我的輸入改進模型"));
-    lora_button.MinWidth(196);
-    lora_button.MinHeight(control_height);
-    lora_button.FontSize(body_text_size);
-    lora_button.HorizontalAlignment(HorizontalAlignment::Left);
-    lora_button.Click([this](const auto&, const auto&) { show_lora_training_dialog(); });
-    lora_section.Children().Append(lora_button);
-    page.Children().Append(lora_section);
-
-    page.Children().Append(make_section_title(L"軟體更新"));
-
-    StackPanel update_section;
-    update_section.Spacing(8);
-    update_section.Margin(Thickness{0, 0, 0, 24});
+    named<TextBlock>(shell_, L"PendingSummary").Text(pending_summary);
+    named<Button>(shell_, L"LoraButton").Click(
+        [this](const auto&, const auto&) { show_lora_training_dialog(); });
 
     const std::wstring build_label =
         L"目前：" + build_identity(UpdateChecker::installed_version(),
                                     UpdateChecker::installed_build_number(),
                                     UpdateChecker::installed_commit());
-    update_section.Children().Append(make_text(build_label.c_str(), body_text_size));
-
-    StackPanel update_row;
-    update_row.Orientation(Orientation::Horizontal);
-    update_row.Spacing(12);
-
-    update_button_ = Button();
-    update_button_.Content(winrt::box_value(L"檢查更新"));
-    update_button_.MinWidth(112);
-    update_button_.MinHeight(control_height);
-    update_button_.FontSize(body_text_size);
+    named<TextBlock>(shell_, L"BuildLabel").Text(build_label);
+    update_button_ = named<Button>(shell_, L"UpdateButton");
     update_button_.Click([this](const auto&, const auto&) { begin_update_check(); });
-    update_row.Children().Append(update_button_);
-
-    update_download_ = HyperlinkButton();
-    update_download_.Visibility(Visibility::Collapsed);
-    update_download_.MinHeight(control_height);
-    update_download_.FontSize(body_text_size);
-    update_row.Children().Append(update_download_);
-    update_section.Children().Append(update_row);
-
-    update_status_ = make_text(L"開啟設定時會自動與 latest 建置比較。", caption_text_size);
-    update_section.Children().Append(update_status_);
-    page.Children().Append(update_section);
-
-    scroll.Content(page);
-    shell_.Children().Append(scroll);
+    update_download_ = named<HyperlinkButton>(shell_, L"UpdateDownload");
+    update_status_ = named<TextBlock>(shell_, L"UpdateStatus");
     xaml_source_.Content(shell_);
 }
 
@@ -911,7 +822,9 @@ void SettingsWindow::show_lora_training_dialog() {
         ListView training_items{nullptr};
         TextBlock training_summary{nullptr};
         Button training_data_button{nullptr};
-        Flyout training_data_flyout{nullptr};
+        StackPanel training_data_page{nullptr};
+        ScrollViewer main_page{nullptr};
+        bool selecting_training_data = false;
         TextBox rank{nullptr};
         TextBox alpha{nullptr};
         TextBox dropout{nullptr};
@@ -934,6 +847,7 @@ void SettingsWindow::show_lora_training_dialog() {
         ProgressBar download_progress{nullptr};
         TextBlock status{nullptr};
         Border model_status_card{nullptr};
+        FontIcon model_status_icon{nullptr};
         TextBlock model_status_title{nullptr};
         TextBlock model_status_detail{nullptr};
         Button check_model{nullptr};
@@ -947,106 +861,48 @@ void SettingsWindow::show_lora_training_dialog() {
     };
 
     auto state = std::make_shared<DialogState>();
-    state->dialog = ContentDialog();
-    state->dialog.Title(winrt::box_value(L"訓練個人化模型"));
-    state->dialog.PrimaryButtonText(L"開始訓練");
-    state->dialog.SecondaryButtonText(L"關閉");
-    state->dialog.DefaultButton(ContentDialogButton::Primary);
+    state->dialog = load_xaml_resource(IDR_LORA_DIALOG_XAML).as<ContentDialog>();
     state->dialog.IsPrimaryButtonEnabled(false);
-
-    StackPanel content;
-    content.Width(500);
-    content.Spacing(12);
-    content.Children().Append(make_text(
-        L"基礎模型\ntony65535/llavon-ime-llama-250m · 約 1 GB · CC-BY-NC-4.0",
-        caption_text_size));
-
-    StackPanel model_status_content;
-    model_status_content.Spacing(4);
-    state->model_status_title = make_text(
-        L"尚未下載", body_text_size, FontWeights::SemiBold());
-    state->model_status_detail = make_text(
-        L"下載模型後才能開始訓練。", caption_text_size);
-    model_status_content.Children().Append(state->model_status_title);
-    model_status_content.Children().Append(state->model_status_detail);
-    state->download_progress = ProgressBar();
-    state->download_progress.Minimum(0);
-    state->download_progress.Maximum(100);
-    state->download_progress.Value(0);
-    state->download_progress.Margin(Thickness{0, 6, 0, 0});
-    state->download_progress.Visibility(Visibility::Collapsed);
-    model_status_content.Children().Append(state->download_progress);
-
-    state->model_status_card = Border();
-    state->model_status_card.Padding(Thickness{12});
-    state->model_status_card.CornerRadius(CornerRadius{8});
-    state->model_status_card.BorderThickness(Thickness{1});
+    const auto dialog_root = state->dialog.as<FrameworkElement>();
+    state->main_page = named<ScrollViewer>(dialog_root, L"MainScroll");
+    state->model_status_card = named<Border>(dialog_root, L"ModelStatusBorder");
     state->model_status_card.BorderBrush(
-        system_uses_dark_theme() ? solid_brush(82, 82, 82) : solid_brush(210, 210, 210));
-    state->model_status_card.Background(
-        system_uses_dark_theme() ? solid_brush(45, 45, 45) : solid_brush(247, 247, 247));
-    state->model_status_card.Child(model_status_content);
-    content.Children().Append(state->model_status_card);
-
-    StackPanel model_actions;
-    model_actions.Orientation(Orientation::Horizontal);
-    model_actions.Spacing(8);
-    state->check_model = Button();
-    state->check_model.Content(winrt::box_value(L"檢查更新"));
-    state->check_model.MinHeight(control_height);
-    model_actions.Children().Append(state->check_model);
-    state->download_model = Button();
-    state->download_model.Content(winrt::box_value(L"下載模型"));
-    state->download_model.MinHeight(control_height);
-    model_actions.Children().Append(state->download_model);
-    state->cancel = Button();
-    state->cancel.Content(winrt::box_value(L"取消下載"));
-    state->cancel.MinHeight(control_height);
-    state->cancel.Visibility(Visibility::Collapsed);
-    model_actions.Children().Append(state->cancel);
-    content.Children().Append(model_actions);
-
-    Grid training_header;
-    ColumnDefinition training_summary_column;
-    training_summary_column.Width(GridLength{1, GridUnitType::Star});
-    training_header.ColumnDefinitions().Append(training_summary_column);
-    ColumnDefinition training_button_column;
-    training_button_column.Width(GridLength{1, GridUnitType::Auto});
-    training_header.ColumnDefinitions().Append(training_button_column);
-
-    StackPanel training_summary_panel;
-    training_summary_panel.Spacing(2);
-    training_summary_panel.VerticalAlignment(VerticalAlignment::Center);
-    training_summary_panel.Children().Append(make_text(
-        L"訓練資料", body_text_size, FontWeights::SemiBold()));
-    state->training_summary = make_text(L"已選 0 / 0 筆", caption_text_size);
-    training_summary_panel.Children().Append(state->training_summary);
-    training_header.Children().Append(training_summary_panel);
-
-    state->training_data_button = Button();
-    state->training_data_button.Content(winrt::box_value(L"檢視與選擇"));
-    state->training_data_button.MinHeight(control_height);
-    state->training_data_button.VerticalAlignment(VerticalAlignment::Center);
-    Grid::SetColumn(state->training_data_button, 1);
-    training_header.Children().Append(state->training_data_button);
-    content.Children().Append(training_header);
+        system_uses_dark_theme() ? solid_brush(64, 64, 64) : solid_brush(225, 225, 225));
+    state->model_status_icon = named<FontIcon>(dialog_root, L"ModelStatusIcon");
+    state->model_status_icon.Foreground(
+        system_uses_dark_theme() ? solid_brush(96, 205, 255) : solid_brush(0, 120, 212));
+    state->model_status_title = named<TextBlock>(dialog_root, L"ModelStatusTitle");
+    state->model_status_detail = named<TextBlock>(dialog_root, L"ModelStatusDetail");
+    state->download_progress = named<ProgressBar>(dialog_root, L"DownloadProgress");
+    state->check_model = named<Button>(dialog_root, L"CheckModelButton");
+    state->download_model = named<Button>(dialog_root, L"DownloadModelButton");
+    state->cancel = named<Button>(dialog_root, L"CancelModelButton");
+    state->training_summary = named<TextBlock>(dialog_root, L"TrainingSummary");
+    state->training_data_button = named<Button>(dialog_root, L"TrainingDataButton");
 
     if (configuration_.training_items.empty()) {
-        content.Children().Append(make_text(
-            L"目前沒有尚未訓練的資料。請先使用輸入法提交一些文字。",
-            body_text_size));
+        named<TextBlock>(dialog_root, L"EmptyTrainingItems").Visibility(Visibility::Visible);
         state->training_data_button.IsEnabled(false);
     } else {
-        state->training_items = ListView();
-        state->training_items.SelectionMode(ListViewSelectionMode::Multiple);
-        state->training_items.IsMultiSelectCheckBoxEnabled(true);
-        state->training_items.Width(468);
-        state->training_items.Height(360);
-        state->training_items.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-        state->training_items.ItemTemplate(
-            winrt::Windows::UI::Xaml::Markup::XamlReader::Load(
-                LR"(<DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"><TextBlock Text="{Binding}" TextWrapping="WrapWholeWords" Margin="4,6" MaxWidth="410" /></DataTemplate>)")
-                .as<DataTemplate>());
+        state->training_data_page =
+            load_xaml_resource(IDR_LORA_SELECTION_XAML).as<StackPanel>();
+        state->training_items =
+            named<ListView>(state->training_data_page, L"TrainingItems");
+        const bool dark_selection = system_uses_dark_theme();
+        named<Border>(state->training_data_page, L"TrainingItemsBorder").BorderBrush(
+            dark_selection ? solid_brush(64, 64, 64) : solid_brush(225, 225, 225));
+        state->training_items.Resources().Insert(
+            winrt::box_value(L"ListViewItemBackground"),
+            dark_selection ? solid_brush(39, 39, 39) : solid_brush(243, 244, 246));
+        state->training_items.Resources().Insert(
+            winrt::box_value(L"ListViewItemBackgroundSelected"),
+            dark_selection ? solid_brush(44, 44, 44) : solid_brush(255, 255, 255));
+        state->training_items.Resources().Insert(
+            winrt::box_value(L"ListViewItemBackgroundSelectedPointerOver"),
+            dark_selection ? solid_brush(49, 49, 49) : solid_brush(249, 251, 253));
+        state->training_items.Resources().Insert(
+            winrt::box_value(L"ListViewItemBackgroundSelectedPressed"),
+            dark_selection ? solid_brush(53, 53, 53) : solid_brush(244, 248, 252));
         state->item_ids.reserve(configuration_.training_items.size());
         for (const auto& item : configuration_.training_items) {
             std::u16string label;
@@ -1064,54 +920,76 @@ void SettingsWindow::show_lora_training_dialog() {
             state->training_items.Items().Append(winrt::box_value(to_hstring(label)));
             state->item_ids.push_back(item.event_id);
         }
+        const auto render_item = [this](const ListViewBase&,
+                                        const ContainerContentChangingEventArgs& args) {
+            if (args.InRecycleQueue()) return;
+            const std::int32_t index = args.ItemIndex();
+            if (index < 0 ||
+                static_cast<std::size_t>(index) >= configuration_.training_items.size()) {
+                return;
+            }
+            const auto root = args.ItemContainer().ContentTemplateRoot().try_as<Grid>();
+            if (!root) return;
+            const auto& item = configuration_.training_items[static_cast<std::size_t>(index)];
+            render_training_item(item, root, args.ItemContainer().as<FrameworkElement>(),
+                                 dark_theme_);
+            root.Opacity(args.ItemContainer().IsSelected() ? 1.0 : 0.58);
+            Automation::AutomationProperties::SetName(
+                args.ItemContainer(),
+                winrt::unbox_value<winrt::hstring>(args.Item()));
+        };
+        state->training_items.ContainerContentChanging(
+            [render_item](const ListViewBase& sender,
+                          const ContainerContentChangingEventArgs& args) {
+                if (args.InRecycleQueue()) return;
+                if (args.Phase() == 0) {
+                    args.RegisterUpdateCallback(render_item);
+                } else {
+                    render_item(sender, args);
+                }
+            });
         state->training_items.SelectAll();
-
-        StackPanel flyout_content;
-        flyout_content.Width(500);
-        flyout_content.Spacing(10);
-        flyout_content.Children().Append(make_text(
-            L"選擇訓練資料", section_title_size, FontWeights::SemiBold()));
-        flyout_content.Children().Append(make_text(
-            L"未選取的資料不會加入這次訓練。", caption_text_size));
-
-        StackPanel selection_actions;
-        selection_actions.Orientation(Orientation::Horizontal);
-        selection_actions.Spacing(8);
-        Button select_all;
-        select_all.Content(winrt::box_value(L"全選"));
-        select_all.MinHeight(control_height);
-        selection_actions.Children().Append(select_all);
-        Button clear_all;
-        clear_all.Content(winrt::box_value(L"全部取消"));
-        clear_all.MinHeight(control_height);
-        selection_actions.Children().Append(clear_all);
-        flyout_content.Children().Append(selection_actions);
-        flyout_content.Children().Append(state->training_items);
-
-        Button finish_selection;
-        finish_selection.Content(winrt::box_value(L"完成"));
-        finish_selection.MinWidth(96);
-        finish_selection.MinHeight(control_height);
-        finish_selection.HorizontalAlignment(HorizontalAlignment::Right);
-        flyout_content.Children().Append(finish_selection);
-
-        state->training_data_flyout = Flyout();
-        state->training_data_flyout.Content(flyout_content);
-        select_all.Click([state](const auto&, const auto&) {
-            state->training_items.SelectAll();
-        });
-        clear_all.Click([state](const auto&, const auto&) {
-            state->training_items.DeselectRange(
-                winrt::Windows::UI::Xaml::Data::ItemIndexRange(
-                    0, state->training_items.Items().Size()));
-        });
-        finish_selection.Click([state](const auto&, const auto&) {
-            state->training_data_flyout.Hide();
-        });
+        named<Button>(state->training_data_page, L"SelectAllButton").Click(
+            [state](const auto&, const auto&) { state->training_items.SelectAll(); });
+        named<Button>(state->training_data_page, L"ClearAllButton").Click(
+            [state](const auto&, const auto&) {
+                state->training_items.DeselectRange(
+                    winrt::Windows::UI::Xaml::Data::ItemIndexRange(
+                        0, state->training_items.Items().Size()));
+            });
         state->training_data_button.Click([state](const auto&, const auto&) {
-            state->training_data_flyout.ShowAt(state->training_data_button);
+            state->selecting_training_data = true;
+            state->dialog.Content(state->training_data_page);
+            state->dialog.Title(winrt::box_value(L"選擇訓練資料"));
+            state->dialog.PrimaryButtonText(L"完成");
+            state->dialog.SecondaryButtonText(L"");
+            state->dialog.IsPrimaryButtonEnabled(true);
         });
     }
+
+    state->rank = named<TextBox>(dialog_root, L"Rank");
+    state->alpha = named<TextBox>(dialog_root, L"Alpha");
+    state->dropout = named<TextBox>(dialog_root, L"Dropout");
+    state->batch_size = named<TextBox>(dialog_root, L"BatchSize");
+    state->gradient_accumulation = named<TextBox>(dialog_root, L"GradientAccumulation");
+    state->epochs = named<TextBox>(dialog_root, L"Epochs");
+    state->max_steps = named<TextBox>(dialog_root, L"MaxSteps");
+    state->learning_rate = named<TextBox>(dialog_root, L"LearningRate");
+    state->weight_decay = named<TextBox>(dialog_root, L"WeightDecay");
+    state->warmup_steps = named<TextBox>(dialog_root, L"WarmupSteps");
+    state->max_gradient_norm = named<TextBox>(dialog_root, L"MaxGradientNorm");
+    state->save_every = named<TextBox>(dialog_root, L"SaveEvery");
+    state->seed = named<TextBox>(dialog_root, L"Seed");
+    state->max_sequence_length = named<TextBox>(dialog_root, L"MaxSequenceLength");
+    state->target_modules = named<TextBox>(dialog_root, L"TargetModules");
+    state->device = named<ComboBox>(dialog_root, L"Device");
+    state->device.SelectedIndex(0);
+    state->dtype = named<ComboBox>(dialog_root, L"DType");
+    state->dtype.SelectedIndex(0);
+    state->shuffle = named<ToggleSwitch>(dialog_root, L"Shuffle");
+    state->progress = named<ProgressBar>(dialog_root, L"TrainingProgress");
+    state->status = named<TextBlock>(dialog_root, L"Status");
+    state->reload_model = named<Button>(dialog_root, L"ReloadModelButton");
 
     const auto refresh_training_selection = [state] {
         const std::uint32_t selected = state->training_items
@@ -1121,122 +999,18 @@ void SettingsWindow::show_lora_training_dialog() {
                                      std::to_wstring(state->item_ids.size()) + L" 筆";
         state->training_summary.Text(summary);
         state->dialog.IsPrimaryButtonEnabled(
-            !state->busy && state->model_available && selected != 0);
+            state->selecting_training_data ||
+            (!state->busy && state->model_available && selected != 0));
     };
     if (state->training_items) {
         state->training_items.SelectionChanged(
-            [refresh_training_selection](const auto&, const auto&) {
+            [state, refresh_training_selection](const auto&, const auto&) {
+                refresh_visible_training_selection(state->training_items);
                 refresh_training_selection();
             });
     }
     refresh_training_selection();
 
-    content.Children().Append(make_text(
-        L"訓練設定", body_text_size, FontWeights::SemiBold()));
-    Grid parameters;
-    parameters.ColumnSpacing(12);
-    ColumnDefinition label_column;
-    label_column.Width(GridLength{210, GridUnitType::Pixel});
-    parameters.ColumnDefinitions().Append(label_column);
-    ColumnDefinition value_column;
-    value_column.Width(GridLength{1, GridUnitType::Star});
-    parameters.ColumnDefinitions().Append(value_column);
-
-    int parameter_row = 0;
-    const auto add_text_parameter = [&](const wchar_t* label, const wchar_t* value,
-                                        TextBox& box) {
-        RowDefinition row;
-        row.Height(GridLength{1, GridUnitType::Auto});
-        parameters.RowDefinitions().Append(row);
-        auto label_block = make_text(label, caption_text_size);
-        label_block.VerticalAlignment(VerticalAlignment::Center);
-        label_block.Margin(Thickness{0, 4, 0, 4});
-        Grid::SetRow(label_block, parameter_row);
-        parameters.Children().Append(label_block);
-        box = TextBox();
-        box.Text(value);
-        box.MinHeight(control_height);
-        box.Margin(Thickness{0, 2, 0, 2});
-        Grid::SetColumn(box, 1);
-        Grid::SetRow(box, parameter_row);
-        parameters.Children().Append(box);
-        ++parameter_row;
-    };
-
-    add_text_parameter(L"LoRA rank", L"8", state->rank);
-    add_text_parameter(L"LoRA alpha", L"16", state->alpha);
-    add_text_parameter(L"LoRA dropout", L"0", state->dropout);
-    add_text_parameter(L"Batch size", L"1", state->batch_size);
-    add_text_parameter(L"Gradient accumulation", L"1", state->gradient_accumulation);
-    add_text_parameter(L"Epochs", L"210", state->epochs);
-    add_text_parameter(L"Max steps", L"210", state->max_steps);
-    add_text_parameter(L"Learning rate", L"0.0001", state->learning_rate);
-    add_text_parameter(L"Weight decay", L"0", state->weight_decay);
-    add_text_parameter(L"Warmup steps", L"0", state->warmup_steps);
-    add_text_parameter(L"Max gradient norm", L"1", state->max_gradient_norm);
-    add_text_parameter(L"Save every", L"0", state->save_every);
-    add_text_parameter(L"Seed", L"42", state->seed);
-    add_text_parameter(L"Max sequence length", L"384", state->max_sequence_length);
-    add_text_parameter(L"Target modules", L"q_proj,v_proj", state->target_modules);
-
-    const auto add_combo_parameter = [&](const wchar_t* label, ComboBox& combo) {
-        RowDefinition row;
-        row.Height(GridLength{1, GridUnitType::Auto});
-        parameters.RowDefinitions().Append(row);
-        auto label_block = make_text(label, caption_text_size);
-        label_block.VerticalAlignment(VerticalAlignment::Center);
-        Grid::SetRow(label_block, parameter_row);
-        parameters.Children().Append(label_block);
-        combo = ComboBox();
-        combo.MinHeight(control_height);
-        combo.Margin(Thickness{0, 2, 0, 2});
-        combo.HorizontalAlignment(HorizontalAlignment::Stretch);
-        Grid::SetColumn(combo, 1);
-        Grid::SetRow(combo, parameter_row);
-        parameters.Children().Append(combo);
-        ++parameter_row;
-    };
-
-    add_combo_parameter(L"Device", state->device);
-    state->device.Items().Append(winrt::box_value(L"auto"));
-    state->device.Items().Append(winrt::box_value(L"cuda"));
-    state->device.Items().Append(winrt::box_value(L"cpu"));
-    // "auto" selects CUDA when the installed trainer supports it and safely
-    // falls back to CPU for the standard CPU trainer package.
-    state->device.SelectedIndex(0);
-
-    add_combo_parameter(L"DType", state->dtype);
-    state->dtype.Items().Append(winrt::box_value(L"float32"));
-    state->dtype.Items().Append(winrt::box_value(L"bfloat16"));
-    state->dtype.SelectedIndex(0);
-    content.Children().Append(parameters);
-
-    state->shuffle = ToggleSwitch();
-    state->shuffle.Header(winrt::box_value(L"Shuffle training data"));
-    state->shuffle.IsOn(true);
-    content.Children().Append(state->shuffle);
-
-    state->progress = ProgressBar();
-    state->progress.Minimum(0);
-    state->progress.Maximum(100);
-    state->progress.Value(0);
-    state->progress.Visibility(Visibility::Collapsed);
-    content.Children().Append(state->progress);
-    state->status = make_text(L"所有欄位都已填入建議預設值。", caption_text_size);
-    content.Children().Append(state->status);
-
-    state->reload_model = Button();
-    state->reload_model.Content(winrt::box_value(L"重新載入完成的模型"));
-    state->reload_model.MinHeight(control_height);
-    state->reload_model.HorizontalAlignment(HorizontalAlignment::Left);
-    state->reload_model.Visibility(Visibility::Collapsed);
-    content.Children().Append(state->reload_model);
-
-    ScrollViewer dialog_scroll;
-    dialog_scroll.MaxHeight(650);
-    dialog_scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
-    dialog_scroll.Content(content);
-    state->dialog.Content(dialog_scroll);
 
     const auto request_model_action = [this, state](bool download) {
         const std::int32_t result = configuration_.lora_model_action_callback
@@ -1336,28 +1110,9 @@ void SettingsWindow::show_lora_training_dialog() {
             state->model_status_detail.Visibility(Visibility::Visible);
         }
 
-        const bool dark = system_uses_dark_theme();
-        if (downloading_model || checking_model) {
-            state->model_status_card.BorderBrush(
-                dark ? solid_brush(76, 134, 196) : solid_brush(0, 120, 212));
-            state->model_status_card.Background(
-                dark ? solid_brush(30, 48, 66) : solid_brush(235, 246, 255));
-        } else if (status.model_available && !status.model_update_available) {
-            state->model_status_card.BorderBrush(
-                dark ? solid_brush(76, 164, 91) : solid_brush(16, 124, 16));
-            state->model_status_card.Background(
-                dark ? solid_brush(29, 53, 34) : solid_brush(236, 249, 238));
-        } else if (status.model_available) {
-            state->model_status_card.BorderBrush(
-                dark ? solid_brush(204, 154, 52) : solid_brush(160, 96, 0));
-            state->model_status_card.Background(
-                dark ? solid_brush(61, 49, 25) : solid_brush(255, 247, 224));
-        } else {
-            state->model_status_card.BorderBrush(
-                dark ? solid_brush(82, 82, 82) : solid_brush(210, 210, 210));
-            state->model_status_card.Background(
-                dark ? solid_brush(45, 45, 45) : solid_brush(247, 247, 247));
-        }
+        state->model_status_icon.Glyph(
+            status.model_available ? L"\uE73E" :
+            (downloading_model || checking_model ? L"\uE896" : L"\uE118"));
 
         state->check_model.IsEnabled(!busy);
         state->download_model.IsEnabled(!busy);
@@ -1392,6 +1147,17 @@ void SettingsWindow::show_lora_training_dialog() {
     state->dialog.PrimaryButtonClick(
         [this, state](const ContentDialog&, const ContentDialogButtonClickEventArgs& args) {
             args.Cancel(true);
+            if (state->selecting_training_data) {
+                state->selecting_training_data = false;
+                state->dialog.Content(state->main_page);
+                state->dialog.Title(winrt::box_value(L"訓練個人化模型"));
+                state->dialog.PrimaryButtonText(L"開始訓練");
+                state->dialog.SecondaryButtonText(L"關閉");
+                state->dialog.IsPrimaryButtonEnabled(
+                    !state->busy && state->model_available &&
+                    state->training_items.SelectedItems().Size() != 0);
+                return;
+            }
             try {
                 const auto parse_integer = [](const TextBox& box) {
                     const std::wstring value = box.Text().c_str();
@@ -1509,58 +1275,11 @@ void SettingsWindow::add_custom_name_row(
     }
 
     CustomNameRow row;
-    row.container = Grid();
-    row.container.Width(settings_content_width);
-    row.container.MinHeight(64);
-    row.container.HorizontalAlignment(HorizontalAlignment::Left);
-
-    ColumnDefinition name_column;
-    name_column.Width(GridLength{180, GridUnitType::Pixel});
-    row.container.ColumnDefinitions().Append(name_column);
-    ColumnDefinition name_gap;
-    name_gap.Width(GridLength{12, GridUnitType::Pixel});
-    row.container.ColumnDefinitions().Append(name_gap);
-    ColumnDefinition pronunciation_column;
-    pronunciation_column.Width(GridLength{1, GridUnitType::Star});
-    row.container.ColumnDefinitions().Append(pronunciation_column);
-    ColumnDefinition pronunciation_gap;
-    pronunciation_gap.Width(GridLength{12, GridUnitType::Pixel});
-    row.container.ColumnDefinitions().Append(pronunciation_gap);
-    ColumnDefinition action_column;
-    action_column.Width(GridLength{84, GridUnitType::Pixel});
-    row.container.ColumnDefinitions().Append(action_column);
-
-    row.name = TextBox();
-    row.name.PlaceholderText(L"例如：王小明");
+    row.container = load_xaml_resource(IDR_CUSTOM_NAME_ROW_XAML).as<Grid>();
+    row.name = named<TextBox>(row.container, L"Name");
     row.name.Text(to_hstring(name));
-    row.name.MinHeight(control_height);
-    row.name.FontSize(body_text_size);
-    row.name.VerticalAlignment(VerticalAlignment::Bottom);
-    Automation::AutomationProperties::SetName(row.name, L"自訂名字");
-    Grid::SetColumn(row.name, 0);
-    row.container.Children().Append(row.name);
-
-    row.pronunciations = StackPanel();
-    row.pronunciations.Orientation(Orientation::Horizontal);
-    row.pronunciations.Spacing(8);
-
-    ScrollViewer pronunciation_scroll;
-    pronunciation_scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Auto);
-    pronunciation_scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
-    pronunciation_scroll.Content(row.pronunciations);
-    Automation::AutomationProperties::SetName(pronunciation_scroll, L"名字對應注音");
-    Grid::SetColumn(pronunciation_scroll, 2);
-    row.container.Children().Append(pronunciation_scroll);
-
-    row.remove_button = Button();
-    row.remove_button.Content(winrt::box_value(L"移除"));
-    row.remove_button.MinWidth(84);
-    row.remove_button.MinHeight(control_height);
-    row.remove_button.FontSize(body_text_size);
-    row.remove_button.VerticalAlignment(VerticalAlignment::Bottom);
-    Automation::AutomationProperties::SetName(row.remove_button, L"移除這個自訂名字");
-    Grid::SetColumn(row.remove_button, 4);
-    row.container.Children().Append(row.remove_button);
+    row.pronunciations = named<StackPanel>(row.container, L"Pronunciations");
+    row.remove_button = named<Button>(row.container, L"RemoveButton");
 
     const Button remove_button = row.remove_button;
     const TextBox name_box = row.name;
@@ -1629,9 +1348,8 @@ void SettingsWindow::refresh_custom_name_pronunciations(const TextBox& name_box)
     const auto characters = split_characters(name);
     if (!characters) {
         row->missing_pronunciation = true;
-        auto warning = make_text(L"名字含有無效字元。", caption_text_size);
-        warning.VerticalAlignment(VerticalAlignment::Bottom);
-        warning.Margin(Thickness{0, 0, 0, 8});
+        auto warning = load_xaml_resource(IDR_CUSTOM_NAME_WARNING_XAML).as<TextBlock>();
+        warning.Text(L"名字含有無效字元。");
         row->pronunciations.Children().Append(warning);
         update_custom_names_save_state();
         return;
@@ -1644,19 +1362,14 @@ void SettingsWindow::refresh_custom_name_pronunciations(const TextBox& name_box)
             row->missing_pronunciation = true;
             const std::u16string missing = u"「" + character_text + u"」查無注音";
             const auto missing_text = to_hstring(missing);
-            auto warning = make_text(missing_text.c_str(), caption_text_size);
-            warning.VerticalAlignment(VerticalAlignment::Bottom);
-            warning.Margin(Thickness{0, 0, 0, 8});
+            auto warning = load_xaml_resource(IDR_CUSTOM_NAME_WARNING_XAML).as<TextBlock>();
+            warning.Text(missing_text);
             row->pronunciations.Children().Append(warning);
             continue;
         }
 
-        ComboBox choice;
+        ComboBox choice = load_xaml_resource(IDR_CUSTOM_NAME_READING_XAML).as<ComboBox>();
         choice.Header(winrt::box_value(to_hstring(character_text)));
-        choice.MinWidth(92);
-        choice.MaxWidth(132);
-        choice.MinHeight(control_height);
-        choice.FontSize(body_text_size);
         for (const auto& reading : readings) {
             choice.Items().Append(winrt::box_value(to_hstring(reading)));
         }
@@ -2101,6 +1814,14 @@ void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
 }
 
 void SettingsWindow::close_xaml() noexcept {
+    // Detach the visual tree while both the source and its manager are alive.
+    // The host closes this method again from WM_DESTROY, so keep it idempotent.
+    if (xaml_source_) {
+        try {
+            xaml_source_.Content(nullptr);
+        } catch (...) {
+        }
+    }
     island_window_ = nullptr;
     island_native_ = nullptr;
     model_path_ = nullptr;
@@ -2120,16 +1841,19 @@ void SettingsWindow::close_xaml() noexcept {
     save_custom_names_button_ = nullptr;
     custom_names_note_ = nullptr;
     shell_ = nullptr;
-    try {
-        if (xaml_source_) {
+    if (xaml_source_) {
+        try {
             xaml_source_.Close();
-            xaml_source_ = nullptr;
+        } catch (...) {
         }
-        if (xaml_manager_) {
+        xaml_source_ = nullptr;
+    }
+    if (xaml_manager_) {
+        try {
             xaml_manager_.Close();
-            xaml_manager_ = nullptr;
+        } catch (...) {
         }
-    } catch (...) {
+        xaml_manager_ = nullptr;
     }
 }
 

@@ -208,9 +208,11 @@ public:
             return 0;
         }
 
+        // Each thread owns a XAML island. Finish tearing down one island
+        // before asking the other thread to close its XAML manager.
         post(menu_thread_, stop_message);
-        post(settings_thread_, stop_message);
         const int32_t menu_result = join_thread(menu_thread_);
+        post(settings_thread_, stop_message);
         const int32_t settings_result = join_thread(settings_thread_);
         return menu_result != 0 ? menu_result : settings_result;
     }

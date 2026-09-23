@@ -55,6 +55,7 @@ bool TrayIcon::create(HINSTANCE instance, OpenSettingsCallback open_settings,
     open_settings_message_ = RegisterWindowMessageW(L"LlavonIme.OpenSettings");
     show_input_mode_menu_message_ = RegisterWindowMessageW(L"LlavonIme.ShowInputModeMenu");
     shutdown_message_ = RegisterWindowMessageW(L"LlavonIme.Shutdown");
+    safe_shutdown_message_ = RegisterWindowMessageW(L"LlavonIme.SafeShutdownV2");
     window_ = CreateWindowExW(WS_EX_TOOLWINDOW, tray_window_class, L"Llavon IME Service",
                               WS_OVERLAPPED, 0, 0, 0, 0, nullptr, nullptr, instance_, this);
     notification_window_.store(window_, std::memory_order_release);
@@ -102,7 +103,8 @@ LRESULT CALLBACK TrayIcon::window_proc(HWND window, UINT message, WPARAM wparam,
 }
 
 LRESULT TrayIcon::handle_message(UINT message, WPARAM wparam, LPARAM lparam) {
-    if (shutdown_message_ != 0 && message == shutdown_message_) {
+    if ((shutdown_message_ != 0 && message == shutdown_message_) ||
+        (safe_shutdown_message_ != 0 && message == safe_shutdown_message_)) {
         if (shutdown_) {
             auto shutdown = std::move(shutdown_);
             shutdown();

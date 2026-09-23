@@ -50,6 +50,16 @@ add_library(llavon-ime-candidate-ui SHARED
 )
 
 add_library(llavon-ime-settings-ui SHARED
+    src/settings/settings_ui.rc
+    src/settings/settings_resources.h
+    src/settings/settings_page.xaml
+    src/settings/lora_dialog.xaml
+    src/settings/lora_selection.xaml
+    src/settings/lora_ruby_cell.xaml
+    src/settings/lora_item_tooltip.xaml
+    src/settings/custom_name_row.xaml
+    src/settings/custom_name_reading.xaml
+    src/settings/custom_name_warning.xaml
     src/settings/settings_configuration.hpp
     src/settings/settings_menu_window.cpp
     src/settings/settings_menu_window.hpp

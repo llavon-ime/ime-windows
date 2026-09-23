@@ -120,6 +120,7 @@ void SettingsMenuWindow::hide() const noexcept {
 }
 
 void SettingsMenuWindow::destroy() noexcept {
+    hide();
     close_xaml();
     if (window_) {
         const HWND window = window_;
@@ -332,7 +333,13 @@ void SettingsMenuWindow::close_xaml() noexcept {
     }
     island_native_ = nullptr;
     xaml_source_ = nullptr;
-    xaml_manager_ = nullptr;
+    if (xaml_manager_) {
+        try {
+            xaml_manager_.Close();
+        } catch (...) {
+        }
+        xaml_manager_ = nullptr;
+    }
     island_window_ = nullptr;
 }
 

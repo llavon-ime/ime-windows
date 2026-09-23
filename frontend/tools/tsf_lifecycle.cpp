@@ -15,7 +15,7 @@
 namespace {
 
 constexpr wchar_t service_window_class[] = L"LlavonImeServiceTrayWindow";
-constexpr wchar_t service_shutdown_message[] = L"LlavonIme.Shutdown";
+constexpr wchar_t service_shutdown_message[] = L"LlavonIme.SafeShutdownV2";
 constexpr LRESULT shutdown_acknowledged = 0x4c4c4156;
 constexpr DWORD graceful_shutdown_timeout_ms = 30000;
 constexpr DWORD forced_shutdown_timeout_ms = 5000;
@@ -216,9 +216,9 @@ HRESULT stop_service(std::wstring_view service_path) noexcept {
                 return HRESULT_FROM_WIN32(GetLastError());
             }
 
-            // Older installed versions do not understand LlavonIme.Shutdown.
-            // They have no mutable in-memory state, so use a bounded fallback
-            // to make the first upgrade capable of replacing service binaries.
+            // Older installed versions do not understand SafeShutdownV2 and
+            // can fault in Windows.UI.Xaml while closing their settings UI.
+            // End those processes without invoking their broken UI teardown.
             if (!TerminateProcess(process.handle.get(), ERROR_PROCESS_ABORTED)) {
                 const DWORD terminate_error = GetLastError();
                 if (WaitForSingleObject(process.handle.get(), 0) == WAIT_OBJECT_0) {

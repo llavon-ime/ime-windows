@@ -16,6 +16,46 @@ CMake restores WiX from NuGet into `build/windows/.wix-tools` before
 packaging. It also installs the WiX UI extension into a build-local extension
 cache, so no global WiX installation is required.
 
+## Choose the Correct Build Command
+
+The build targets produce different artifacts. In particular, the `package`
+preset only rebuilds the standalone MSI; it does **not** rebuild an existing
+`*-setup.exe` left in the build directory.
+
+Build the binaries without packaging:
+
+```powershell
+cmake --preset windows
+cmake --build --preset windows --parallel
+```
+
+Build the standalone MSI:
+
+```powershell
+cmake --preset windows
+cmake --build --preset package --parallel
+```
+
+Build the web setup that contains the MSI and offers the optional LoRA Trainer:
+
+```powershell
+cmake --preset windows
+cmake --build build/windows --config Release --target llavon-ime-setup --parallel
+```
+
+The `llavon-ime-setup` target is available when the build was configured with
+`LLAVON_LORA_VERSION`, `LLAVON_LORA_MANIFEST_URL`,
+`LLAVON_LORA_INSTALLER_URL`, and `LLAVON_LORA_INSTALLER_PATH`. CI supplies
+these values. A local build directory that has already been configured with
+them can use the setup command above directly.
+
+> [!WARNING]
+> If a setup build fails, CMake may leave the previously generated
+> `*-setup.exe` in `build/windows`. Do not assume that file was refreshed.
+> Check its modification time before installing it. Not selecting the LoRA
+> Trainer checkbox only skips installing or updating the trainer; it does not
+> remove the fine-tuning UI from the core MSI.
+
 ## Build MSI
 
 For local packaging, CMake resolves the current Hugging Face `main` revision

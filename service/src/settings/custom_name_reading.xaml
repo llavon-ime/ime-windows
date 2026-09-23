@@ -1,0 +1,2 @@
+<ComboBox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+          MinWidth="92" MaxWidth="132" MinHeight="32" FontSize="14"/>

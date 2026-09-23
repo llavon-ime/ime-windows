@@ -44,6 +44,7 @@ private:
     UINT open_settings_message_ = 0;
     UINT show_input_mode_menu_message_ = 0;
     UINT shutdown_message_ = 0;
+    UINT safe_shutdown_message_ = 0;
     NOTIFYICONDATAW icon_data_{};
     OpenSettingsCallback open_settings_;
     OpenDebuggerCallback open_debugger_;

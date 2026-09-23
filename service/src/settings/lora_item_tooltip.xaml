@@ -1,0 +1,13 @@
+<ToolTip xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ScrollViewer MaxWidth="460" MaxHeight="320"
+                HorizontalScrollBarVisibility="Disabled"
+                VerticalScrollBarVisibility="Auto">
+    <StackPanel Padding="12,8" Spacing="8">
+      <TextBlock x:Name="FullContext" FontSize="15" TextWrapping="WrapWholeWords"/>
+      <TextBlock x:Name="FullAnswer" FontSize="17" FontWeight="SemiBold"
+                 TextWrapping="WrapWholeWords"/>
+      <TextBlock x:Name="FullReading" FontSize="12" TextWrapping="WrapWholeWords"/>
+    </StackPanel>
+  </ScrollViewer>
+</ToolTip>

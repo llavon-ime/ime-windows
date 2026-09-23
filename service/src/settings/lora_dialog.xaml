@@ -1,0 +1,87 @@
+<ContentDialog xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+               Title="訓練個人化模型" PrimaryButtonText="開始訓練"
+               SecondaryButtonText="關閉" DefaultButton="Primary" Width="560">
+  <ScrollViewer x:Name="MainScroll" MaxHeight="620" VerticalScrollBarVisibility="Auto">
+    <StackPanel Width="480" Spacing="16">
+      <TextBlock Text="基礎模型&#10;tony65535/llavon-ime-llama-250m · 約 1 GB · CC-BY-NC-4.0"
+                 FontSize="12" TextWrapping="Wrap" />
+      <Border x:Name="ModelStatusBorder" Padding="0,0,0,12" BorderThickness="0,0,0,1" BorderBrush="#FFE1E1E1">
+        <Grid>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+          <FontIcon x:Name="ModelStatusIcon" Grid.Column="0" FontFamily="Segoe Fluent Icons"
+                    Glyph="&#xE896;" FontSize="18" Foreground="#FF0078D4"
+                    VerticalAlignment="Top" Margin="0,3,0,0"/>
+          <StackPanel Grid.Column="1" Spacing="2">
+            <TextBlock x:Name="ModelStatusTitle" Text="尚未下載" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"/>
+            <TextBlock x:Name="ModelStatusDetail" Text="下載模型後才能開始訓練。" FontSize="12" TextWrapping="Wrap"/>
+            <ProgressBar x:Name="DownloadProgress" Minimum="0" Maximum="100" Margin="0,8,0,0" Visibility="Collapsed"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button x:Name="CheckModelButton" Content="檢查更新" MinHeight="32"/>
+        <Button x:Name="DownloadModelButton" Content="下載模型" MinHeight="32"/>
+        <Button x:Name="CancelModelButton" Content="取消下載" MinHeight="32" Visibility="Collapsed"/>
+      </StackPanel>
+      <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="訓練資料" FontSize="14" FontWeight="SemiBold"/>
+          <TextBlock x:Name="TrainingSummary" Text="已選 0 / 0 筆" FontSize="12"/>
+        </StackPanel>
+        <Button x:Name="TrainingDataButton" Grid.Column="1" Content="檢視與選擇" MinHeight="32" VerticalAlignment="Center"/>
+      </Grid>
+      <TextBlock x:Name="EmptyTrainingItems" Text="目前沒有尚未訓練的資料。請先使用輸入法提交一些文字。"
+                 FontSize="14" TextWrapping="Wrap" Visibility="Collapsed"/>
+      <TextBlock Text="訓練設定" FontSize="14" FontWeight="SemiBold"/>
+      <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="LoRA rank" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="Rank" Grid.Row="0" Grid.Column="1" Text="8" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="LoRA alpha" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="Alpha" Grid.Row="1" Grid.Column="1" Text="16" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="LoRA dropout" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="Dropout" Grid.Row="2" Grid.Column="1" Text="0" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="3" Grid.Column="0" Text="Batch size" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="BatchSize" Grid.Row="3" Grid.Column="1" Text="1" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="4" Grid.Column="0" Text="Gradient accumulation" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="GradientAccumulation" Grid.Row="4" Grid.Column="1" Text="1" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="5" Grid.Column="0" Text="Epochs" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="Epochs" Grid.Row="5" Grid.Column="1" Text="210" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="6" Grid.Column="0" Text="Max steps" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="MaxSteps" Grid.Row="6" Grid.Column="1" Text="210" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="7" Grid.Column="0" Text="Learning rate" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="LearningRate" Grid.Row="7" Grid.Column="1" Text="0.0001" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="8" Grid.Column="0" Text="Weight decay" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="WeightDecay" Grid.Row="8" Grid.Column="1" Text="0" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="9" Grid.Column="0" Text="Warmup steps" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="WarmupSteps" Grid.Row="9" Grid.Column="1" Text="0" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="10" Grid.Column="0" Text="Max gradient norm" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="MaxGradientNorm" Grid.Row="10" Grid.Column="1" Text="1" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="11" Grid.Column="0" Text="Save every" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="SaveEvery" Grid.Row="11" Grid.Column="1" Text="0" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="12" Grid.Column="0" Text="Seed" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="Seed" Grid.Row="12" Grid.Column="1" Text="42" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="13" Grid.Column="0" Text="Max sequence length" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="MaxSequenceLength" Grid.Row="13" Grid.Column="1" Text="384" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+      <TextBlock Grid.Row="14" Grid.Column="0" Text="Target modules" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4" />
+      <TextBox x:Name="TargetModules" Grid.Row="14" Grid.Column="1" Text="q_proj,v_proj" Width="220" MinHeight="32" HorizontalAlignment="Left" Margin="0,2,0,2" />
+        <TextBlock Grid.Row="15" Grid.Column="0" Text="Device" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4"/>
+        <ComboBox x:Name="Device" Grid.Row="15" Grid.Column="1" MinHeight="32" Width="220" HorizontalAlignment="Left" Margin="0,2,0,2">
+          <ComboBoxItem Content="auto"/><ComboBoxItem Content="cuda"/><ComboBoxItem Content="cpu"/>
+        </ComboBox>
+        <TextBlock Grid.Row="16" Grid.Column="0" Text="DType" FontSize="12" VerticalAlignment="Center" Margin="0,4,0,4"/>
+        <ComboBox x:Name="DType" Grid.Row="16" Grid.Column="1" MinHeight="32" Width="220" HorizontalAlignment="Left" Margin="0,2,0,2">
+          <ComboBoxItem Content="float32"/><ComboBoxItem Content="bfloat16"/>
+        </ComboBox>
+      </Grid>
+      <ToggleSwitch x:Name="Shuffle" Header="Shuffle training data" IsOn="True"/>
+      <ProgressBar x:Name="TrainingProgress" Minimum="0" Maximum="100" Visibility="Collapsed"/>
+      <TextBlock x:Name="Status" Text="所有欄位都已填入建議預設值。" FontSize="12" TextWrapping="Wrap"/>
+      <Button x:Name="ReloadModelButton" Content="重新載入完成的模型" MinHeight="32"
+              HorizontalAlignment="Left" Visibility="Collapsed"/>
+    </StackPanel>
+  </ScrollViewer>
+</ContentDialog>
