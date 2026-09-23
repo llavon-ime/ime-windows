@@ -24,7 +24,7 @@
         <MajorUpgrade
             Schedule="afterInstallInitialize"
             AllowSameVersionUpgrades="yes"
-            DowngradeErrorMessage="已安裝較新版本的 [ProductName]。安裝程式即將結束。"/>
+            DowngradeErrorMessage="已安裝較新版本的 [ProductName]，無法安裝此版本。"/>
 
         <WixVariable Id="WixUILicenseRtf" Value="$(var.CPACK_WIX_LICENSE_RTF)"/>
         <Property Id="WIXUI_INSTALLDIR" Value="INSTALL_ROOT"/>
