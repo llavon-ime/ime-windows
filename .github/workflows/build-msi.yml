@@ -104,7 +104,34 @@ jobs:
         shell: pwsh
         run: |
           $rollingManifestUrl = 'https://github.com/llavon-ime/lora-trainer/releases/download/latest/latest.json'
-          $manifest = Invoke-RestMethod -Uri $rollingManifestUrl
+          $expectedCommit = (& git -C lora-trainer rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $expectedCommit -notmatch '^[0-9a-f]{40}$') {
+            throw "Could not resolve the lora-trainer submodule revision: $expectedCommit"
+          }
+
+          $manifest = $null
+          $attemptCount = 30
+          for ($attempt = 1; $attempt -le $attemptCount; $attempt++) {
+            try {
+              $candidateUrl = "${rollingManifestUrl}?commit=$expectedCommit&attempt=$attempt"
+              $candidate = Invoke-RestMethod -Uri $candidateUrl -Headers @{ 'Cache-Control' = 'no-cache' }
+              if ($candidate.commit -eq $expectedCommit) {
+                $manifest = $candidate
+                break
+              }
+              Write-Host "Waiting for LoRA Trainer release of $expectedCommit; latest is $($candidate.commit)."
+            } catch {
+              Write-Host "Waiting for the first LoRA Trainer release: $($_.Exception.Message)"
+            }
+
+            if ($attempt -lt $attemptCount) {
+              Start-Sleep -Seconds 30
+            }
+          }
+
+          if ($null -eq $manifest) {
+            throw "No LoRA Trainer release appeared for pinned commit $expectedCommit within 15 minutes"
+          }
           if ($manifest.schema -ne 1 -or $manifest.version -notmatch '^\d{4}\.\d{2}\.\d{2}\.\d+$') {
             throw "LoRA Trainer returned an invalid release manifest"
           }
