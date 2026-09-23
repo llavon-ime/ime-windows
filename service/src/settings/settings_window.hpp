@@ -52,6 +52,7 @@ private:
         const winrt::Windows::UI::Xaml::Controls::TextBox& name_box);
     void save_custom_names();
     void update_custom_names_save_state();
+    void show_lora_training_dialog();
     bool collect_custom_names(std::vector<CustomNameEntry>& entries) const;
     const std::vector<std::u16string>& lookup_bopomofo(char32_t character) const;
     void begin_update_check();

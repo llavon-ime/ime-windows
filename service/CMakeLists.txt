@@ -4,7 +4,9 @@ endif()
 
 find_package(asio CONFIG REQUIRED)
 find_package(cppwinrt CONFIG REQUIRED)
+find_package(jsoncons CONFIG REQUIRED)
 find_package(reflectcpp CONFIG REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(utf8cpp CONFIG REQUIRED)
 
 add_executable(llavon-ime-service
@@ -18,6 +20,10 @@ add_executable(llavon-ime-service
     src/service/candidate_ui_loader.hpp
     src/service/custom_name_matcher.cpp
     src/service/custom_name_matcher.hpp
+    src/service/lora_dataset_builder.cpp
+    src/service/lora_dataset_builder.hpp
+    src/service/lora_training_manager.cpp
+    src/service/lora_training_manager.hpp
     src/service/debug/core_logger_adapter.hpp
     src/service/user_settings.cpp
     src/service/user_settings.hpp
@@ -132,11 +138,14 @@ target_link_libraries(llavon-ime-service PRIVATE
     asio::asio
     reflectcpp::reflectcpp
     utf8cpp::utf8cpp
+    jsoncons
+    unofficial::sqlite3::sqlite3
     advapi32
     ole32
     oleaut32
     shell32
     ws2_32
+    winhttp
 )
 target_link_libraries(llavon-ime-settings-ui PRIVATE
     Microsoft::CppWinRT
@@ -179,6 +188,8 @@ if(BUILD_TESTING)
 
     add_executable(training-data-writer-tests
         tests/training_data_writer_tests.cpp
+        src/service/lora_dataset_builder.cpp
+        src/service/lora_dataset_builder.hpp
         src/service/training_data_writer.cpp
         src/service/training_data_writer.hpp
     )
@@ -188,6 +199,7 @@ if(BUILD_TESTING)
         NOMINMAX
         UNICODE
         _UNICODE
+        LLAVON_TEST_TABLES_DIR=L"${CMAKE_SOURCE_DIR}/ime-core/table"
     )
     target_compile_options(training-data-writer-tests PRIVATE
         /W4
@@ -201,6 +213,9 @@ if(BUILD_TESTING)
     target_link_libraries(training-data-writer-tests PRIVATE
         utf8::cpp
         utf8cpp::utf8cpp
+        jsoncons
+        reflectcpp::reflectcpp
+        unofficial::sqlite3::sqlite3
         ole32
         shell32
     )

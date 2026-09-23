@@ -54,7 +54,21 @@ public:
                       void* save_custom_names_context,
                       std::int32_t shift_space_width_toggle_enabled,
                       llavon_settings_save_width_toggle_callback save_width_toggle_callback,
-                      void* save_width_toggle_context) {
+                      void* save_width_toggle_context,
+                      const llavon_settings_training_item* training_items,
+                      std::size_t training_item_count,
+                      llavon_settings_refresh_training_items_callback
+                          refresh_training_items_callback,
+                      void* refresh_training_items_context,
+                      llavon_settings_start_lora_training_callback
+                          start_lora_training_callback,
+                      void* start_lora_training_context,
+                      llavon_settings_get_lora_status_callback get_lora_status_callback,
+                      void* get_lora_status_context,
+                      llavon_settings_lora_model_action_callback lora_model_action_callback,
+                      void* lora_model_action_context,
+                      llavon_settings_cancel_lora_callback cancel_lora_callback,
+                      void* cancel_lora_context) {
         std::lock_guard lock(mutex_);
         if (settings_thread_.thread || menu_thread_.thread) {
             return ERROR_BUSY;
@@ -62,7 +76,11 @@ public:
         if ((device_count != 0 && !devices) || !active_device || !save_callback ||
             !model_path || !save_model_path_callback ||
             (custom_name_count != 0 && !custom_names) || !save_custom_names_callback ||
-            !save_width_toggle_callback) {
+            !save_width_toggle_callback ||
+            (training_item_count != 0 && !training_items) ||
+            !refresh_training_items_callback || !start_lora_training_callback ||
+            !get_lora_status_callback ||
+            !lora_model_action_callback || !cancel_lora_callback) {
             return ERROR_INVALID_PARAMETER;
         }
 
@@ -90,6 +108,30 @@ public:
             shift_space_width_toggle_enabled != 0;
         configuration.save_width_toggle_callback = save_width_toggle_callback;
         configuration.save_width_toggle_context = save_width_toggle_context;
+        configuration.start_lora_training_callback = start_lora_training_callback;
+        configuration.start_lora_training_context = start_lora_training_context;
+        configuration.refresh_training_items_callback = refresh_training_items_callback;
+        configuration.refresh_training_items_context = refresh_training_items_context;
+        configuration.get_lora_status_callback = get_lora_status_callback;
+        configuration.get_lora_status_context = get_lora_status_context;
+        configuration.lora_model_action_callback = lora_model_action_callback;
+        configuration.lora_model_action_context = lora_model_action_context;
+        configuration.cancel_lora_callback = cancel_lora_callback;
+        configuration.cancel_lora_context = cancel_lora_context;
+        configuration.training_items.reserve(training_item_count);
+        for (std::size_t index = 0; index < training_item_count; ++index) {
+            const auto& source = training_items[index];
+            if (!source.event_id || !source.context || !source.answer || !source.reading) {
+                return ERROR_INVALID_PARAMETER;
+            }
+            configuration.training_items.push_back(TrainingDataOption{
+                .event_id = source.event_id,
+                .context = source.context,
+                .answer = source.answer,
+                .reading = source.reading,
+                .revice = source.revice != 0,
+            });
+        }
         configuration.custom_names.reserve(custom_name_count);
         for (std::size_t index = 0; index < custom_name_count; ++index) {
             const auto& source = custom_names[index];
@@ -528,14 +570,31 @@ extern "C" int32_t llavon_settings_ui_configure(
     void* save_custom_names_context,
     int32_t shift_space_width_toggle_enabled,
     llavon_settings_save_width_toggle_callback save_width_toggle_callback,
-    void* save_width_toggle_context) {
+    void* save_width_toggle_context,
+    const struct llavon_settings_training_item* training_items,
+    size_t training_item_count,
+    llavon_settings_refresh_training_items_callback refresh_training_items_callback,
+    void* refresh_training_items_context,
+    llavon_settings_start_lora_training_callback start_lora_training_callback,
+    void* start_lora_training_context,
+    llavon_settings_get_lora_status_callback get_lora_status_callback,
+    void* get_lora_status_context,
+    llavon_settings_lora_model_action_callback lora_model_action_callback,
+    void* lora_model_action_context,
+    llavon_settings_cancel_lora_callback cancel_lora_callback,
+    void* cancel_lora_context) {
     return llavon::settings::runtime().configure(
         devices, device_count, selected_backend, selected_device_id, active_device,
         gpu_offload, fell_back_to_cpu, save_callback, save_context,
         model_path, save_model_path_callback, save_model_path_context,
         custom_names, custom_name_count, save_custom_names_callback,
         save_custom_names_context, shift_space_width_toggle_enabled,
-        save_width_toggle_callback, save_width_toggle_context);
+        save_width_toggle_callback, save_width_toggle_context,
+        training_items, training_item_count, refresh_training_items_callback,
+        refresh_training_items_context, start_lora_training_callback,
+        start_lora_training_context, get_lora_status_callback,
+        get_lora_status_context, lora_model_action_callback,
+        lora_model_action_context, cancel_lora_callback, cancel_lora_context);
 }
 
 extern "C" int32_t llavon_settings_ui_start(void) {

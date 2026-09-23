@@ -26,9 +26,9 @@ The service also owns the interactive per-user process shell:
   prediction pipe's connection or protocol.
 - Every completed IME composition is sent to the service as raw context,
   committed text, and raw Bopomofo readings. The service converts readings to
-  the validation-like `syllable`/`tone` schema and appends UTF-8 JSONL on a
-  below-normal-priority writer thread. The prediction `io_context` never opens,
-  writes, or flushes the dataset file.
+  the validation-like `syllable`/`tone` schema and inserts them into SQLite on
+  a below-normal-priority writer thread. The prediction `io_context` never
+  opens, writes, or flushes the training database.
 - The separately built `llavon-ime-debugger.exe` owns the multi-client
   `\\.\pipe\llavon-ime-debugger` server. The tray menu launches the packaged
   executable on demand.
@@ -68,19 +68,63 @@ The service keeps the existing executable and IPC compatibility names:
 - default model path override: `LLAVON_IME_MODEL_PATH` (the saved setting takes
   precedence during normal startup)
 - tables path: `LLAVON_IME_TABLES_DIR`
-- collected training data: `%LOCALAPPDATA%\Llavon IME\training-data\commits.jsonl`
-- collected training data path override: `LLAVON_IME_TRAINING_DATA_PATH`
+- collected training database: `%LOCALAPPDATA%\Llavon IME\training-data\commits.sqlite3`
+- collected training database path override: `LLAVON_IME_TRAINING_DATABASE_PATH`
 
-Ordinary Bopomofo commits use the same `schemaVersion`, `context`, `answer`,
-and `padding: [{"syllable": ..., "tone": ...}]` shape as the public validation
-set. The top-level `revice` boolean is true when any position in the commit was
-manually selected; the original Bopomofo reading remains unchanged. Literal
-punctuation and incomplete input are retained as `literal` or
-`rawReading` entries so the collector does not silently lose commits; dataset
-preparation may filter those rows. Each append-only event also has an
-`eventId`, `eventType`, and nullable `revisionOf`. The latter is reserved for a
-future correction detector that can append a replacement event when a user
-commits a typo, backspaces to it, and retypes, without mutating prior lines.
+Ordinary Bopomofo commits are stored in the SQLite `training_commits` table.
+`context`, `answer`, and `padding_json` preserve the same shape as the public
+validation set. The `revice` boolean is true when any position in the commit
+was manually selected; the original Bopomofo reading remains unchanged.
+Literal punctuation and incomplete input are retained as `literal` or
+`rawReading` entries so the collector does not silently lose commits. The
+`training_state` column is constrained to `pending`, `excluded`, or `trained`.
+`event_id`, `event_type`, and nullable `revision_of` are also stored; the last
+column reserves space for future typo/backspace/retype correction detection.
+
+Commits are inserted by a below-normal-priority writer thread. SQLite uses WAL
+mode, and selection/state changes run in transactions, so training-data I/O
+does not run on the inference path. This pre-release schema intentionally does
+not import the former JSONL prototype.
+
+## Local LoRA training
+
+The settings window's LoRA action lists the current `pending` records whenever
+the dialog is opened. All records start checked. Starting a run changes every
+unchecked pending record to `excluded`; records successfully written into the
+trainer dataset change to `trained` only after both training and GGUF export
+complete. Records that cannot be converted stay `pending`.
+
+The dialog supplies non-empty defaults derived from
+`lora-trainer/docs/step-search-results.md`: rank/alpha 8/16, dropout 0, batch
+size and gradient accumulation 1, 210 epochs and steps, learning rate `1e-4`,
+FP32, target modules `q_proj,v_proj`, no warmup or weight decay, max gradient
+norm 1, seed 42, shuffling enabled, and device `auto`. The UI polls service
+status for download/training progress, can cancel an active operation, and can
+reload the completed `personalized-Q4_K_M.gguf` through the existing model
+reload callback.
+
+The base model is fixed to `tony65535/llavon-ime-llama-250m` (CC-BY-NC-4.0).
+It is never downloaded implicitly: the user must press the download/update
+button. The service pins each download to the repository revision returned by
+Hugging Face and stores `config.json`, `ime_vocab.json`, and
+`model.safetensors` below:
+
+```text
+%LOCALAPPDATA%\Llavon IME\training-assets\tony65535--llavon-ime-llama-250m\<revision>
+```
+
+Each run gets its own directory under `training-assets\runs`. The service—not
+the settings DLL—converts the selected SQLite rows into the numeric JSONL
+accepted by the CLI, starts the hidden trainer process, exports the adapter,
+and performs every related file operation. The default CLI path matches the
+optional installer component:
+
+```text
+%ProgramFiles%\Llavon IME\tools\lora\llavon-lora.exe
+```
+
+For development and tests, `LLAVON_IME_LORA_ASSETS_DIR` overrides the asset/run
+root and `LLAVON_IME_LORA_CLI_PATH` overrides the trainer executable.
 
 ## Build
 

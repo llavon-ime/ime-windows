@@ -48,6 +48,66 @@ struct llavon_settings_custom_name {
     size_t reading_count;
 };
 
+enum llavon_settings_lora_device {
+    LLAVON_SETTINGS_LORA_DEVICE_AUTO = 0,
+    LLAVON_SETTINGS_LORA_DEVICE_CPU = 1,
+    LLAVON_SETTINGS_LORA_DEVICE_CUDA = 2,
+};
+
+enum llavon_settings_lora_stage {
+    LLAVON_SETTINGS_LORA_IDLE = 0,
+    LLAVON_SETTINGS_LORA_CHECKING_MODEL = 1,
+    LLAVON_SETTINGS_LORA_DOWNLOADING_MODEL = 2,
+    LLAVON_SETTINGS_LORA_MODEL_READY = 3,
+    LLAVON_SETTINGS_LORA_PREPARING_DATA = 4,
+    LLAVON_SETTINGS_LORA_TRAINING = 5,
+    LLAVON_SETTINGS_LORA_EXPORTING_MODEL = 6,
+    LLAVON_SETTINGS_LORA_COMPLETED = 7,
+    LLAVON_SETTINGS_LORA_FAILED = 8,
+    LLAVON_SETTINGS_LORA_CANCELLED = 9,
+};
+
+struct llavon_settings_lora_status {
+    int32_t stage;
+    double progress;
+    int32_t model_available;
+    int32_t model_update_available;
+    const llavon_char16_t* message;
+    const llavon_char16_t* model_revision;
+    const llavon_char16_t* output_model_path;
+};
+
+struct llavon_settings_training_item {
+    const llavon_char16_t* event_id;
+    const llavon_char16_t* context;
+    const llavon_char16_t* answer;
+    const llavon_char16_t* reading;
+    int32_t revice;
+};
+
+// Defaults are derived from lora-trainer/docs/step-search-results.md. Keeping
+// the values in the ABI lets the service remain the authority for training.
+struct llavon_settings_lora_options {
+    int32_t rank;
+    double alpha;
+    double dropout;
+    int32_t batch_size;
+    int32_t gradient_accumulation;
+    int32_t epochs;
+    int32_t max_steps;
+    double learning_rate;
+    double weight_decay;
+    int32_t warmup_steps;
+    double max_gradient_norm;
+    int32_t save_every;
+    int32_t device;
+    int32_t seed;
+    int32_t shuffle;
+    int32_t max_sequence_length;
+    const llavon_char16_t* dtype;
+    const llavon_char16_t* target_modules;
+};
+
 typedef int32_t (*llavon_settings_save_inference_callback)(
     void* context, int32_t backend, const llavon_char16_t* device_id);
 typedef int32_t (*llavon_settings_save_model_path_callback)(
@@ -57,6 +117,18 @@ typedef int32_t (*llavon_settings_save_custom_names_callback)(
     size_t custom_name_count);
 typedef int32_t (*llavon_settings_save_width_toggle_callback)(
     void* context, int32_t enabled);
+typedef int32_t (*llavon_settings_start_lora_training_callback)(
+    void* context, const llavon_char16_t* const* selected_event_ids,
+    size_t selected_event_id_count,
+    const struct llavon_settings_lora_options* options);
+typedef int32_t (*llavon_settings_refresh_training_items_callback)(
+    void* context, struct llavon_settings_training_item* items,
+    size_t item_capacity, size_t* item_count);
+typedef int32_t (*llavon_settings_get_lora_status_callback)(
+    void* context, struct llavon_settings_lora_status* status);
+typedef int32_t (*llavon_settings_lora_model_action_callback)(
+    void* context, int32_t download_or_update);
+typedef void (*llavon_settings_cancel_lora_callback)(void* context);
 
 // Supplies a snapshot of devices and the setting used for the current service
 // process. Strings and the device array are copied before this call returns.
@@ -80,7 +152,19 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure(
     void* save_custom_names_context,
     int32_t shift_space_width_toggle_enabled,
     llavon_settings_save_width_toggle_callback save_width_toggle_callback,
-    void* save_width_toggle_context);
+    void* save_width_toggle_context,
+    const struct llavon_settings_training_item* training_items,
+    size_t training_item_count,
+    llavon_settings_refresh_training_items_callback refresh_training_items_callback,
+    void* refresh_training_items_context,
+    llavon_settings_start_lora_training_callback start_lora_training_callback,
+    void* start_lora_training_context,
+    llavon_settings_get_lora_status_callback get_lora_status_callback,
+    void* get_lora_status_context,
+    llavon_settings_lora_model_action_callback lora_model_action_callback,
+    void* lora_model_action_context,
+    llavon_settings_cancel_lora_callback cancel_lora_callback,
+    void* cancel_lora_context);
 
 // Starts the settings UI's dedicated STA thread. Calling this function more
 // than once is safe. Returns zero on success.

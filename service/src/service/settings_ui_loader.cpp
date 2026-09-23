@@ -96,7 +96,12 @@ void SettingsUiLoader::configure(
     std::vector<CustomNameSetting> custom_names,
     SaveCustomNames save_custom_names,
     bool shift_space_width_toggle_enabled,
-    SaveWidthToggleSetting save_width_toggle) {
+    SaveWidthToggleSetting save_width_toggle,
+    LoadTrainingData load_training_data,
+    StartLoraTraining start_lora_training,
+    GetLoraStatus get_lora_status,
+    LoraModelAction lora_model_action,
+    CancelLora cancel_lora) {
     devices_.clear();
     devices_.reserve(devices.size());
     for (const auto& device : devices) {
@@ -138,6 +143,11 @@ void SettingsUiLoader::configure(
     save_custom_names_ = std::move(save_custom_names);
     shift_space_width_toggle_enabled_ = shift_space_width_toggle_enabled;
     save_width_toggle_ = std::move(save_width_toggle);
+    load_training_data_ = std::move(load_training_data);
+    start_lora_training_ = std::move(start_lora_training);
+    get_lora_status_ = std::move(get_lora_status);
+    lora_model_action_ = std::move(lora_model_action);
+    cancel_lora_ = std::move(cancel_lora);
 }
 
 SettingsUiLoader::~SettingsUiLoader() {
@@ -155,6 +165,9 @@ SettingsUiLoader::~SettingsUiLoader() {
 }
 
 bool SettingsUiLoader::show() {
+    if (!started_ && load_training_data_) {
+        refresh_training_items();
+    }
     if (!start()) {
         return false;
     }
@@ -263,6 +276,18 @@ bool SettingsUiLoader::configure_module() {
             .reading_count = readings.size(),
         });
     }
+
+    std::vector<llavon_settings_training_item> training_items;
+    training_items.reserve(training_items_.size());
+    for (const auto& item : training_items_) {
+        training_items.push_back(llavon_settings_training_item{
+            .event_id = item.event_id.c_str(),
+            .context = item.context.c_str(),
+            .answer = item.answer.c_str(),
+            .reading = item.reading.c_str(),
+            .revice = item.revice ? 1 : 0,
+        });
+    }
     return configure_(
                devices.data(), devices.size(), backend_value(selected_.backend),
                selected_device_id.c_str(), &active_device, gpu_offload_ ? 1 : 0,
@@ -271,7 +296,130 @@ bool SettingsUiLoader::configure_module() {
                custom_names.data(), custom_names.size(),
                save_custom_names_trampoline, this,
                shift_space_width_toggle_enabled_ ? 1 : 0,
-               save_width_toggle_trampoline, this) == 0;
+               save_width_toggle_trampoline, this,
+               training_items.data(), training_items.size(),
+               refresh_training_items_trampoline, this,
+               start_lora_training_trampoline, this,
+               get_lora_status_trampoline, this,
+               lora_model_action_trampoline, this,
+               cancel_lora_trampoline, this) == 0;
+}
+
+void SettingsUiLoader::refresh_training_items() {
+    training_items_.clear();
+    if (!load_training_data_) return;
+    for (auto& item : load_training_data_()) {
+        training_items_.push_back(TrainingDataStorage{
+            .event_id = std::move(item.event_id),
+            .context = std::move(item.context),
+            .answer = std::move(item.answer),
+            .reading = std::move(item.reading),
+            .revice = item.revice,
+        });
+    }
+}
+
+std::int32_t SettingsUiLoader::refresh_training_items_trampoline(
+    void* context, llavon_settings_training_item* items,
+    std::size_t item_capacity, std::size_t* item_count) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !item_count || (item_capacity != 0 && !items)) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    try {
+        self->refresh_training_items();
+        *item_count = self->training_items_.size();
+        if (!items) return ERROR_SUCCESS;
+        if (item_capacity < self->training_items_.size()) return ERROR_INSUFFICIENT_BUFFER;
+        for (std::size_t index = 0; index < self->training_items_.size(); ++index) {
+            const auto& source = self->training_items_[index];
+            items[index] = llavon_settings_training_item{
+                .event_id = source.event_id.c_str(),
+                .context = source.context.c_str(),
+                .answer = source.answer.c_str(),
+                .reading = source.reading.c_str(),
+                .revice = source.revice ? 1 : 0,
+            };
+        }
+        return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_GEN_FAILURE;
+    }
+}
+
+std::int32_t SettingsUiLoader::start_lora_training_trampoline(
+    void* context, const char16_t* const* selected_event_ids,
+    std::size_t selected_event_id_count,
+    const llavon_settings_lora_options* options) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->start_lora_training_ || !options ||
+        (selected_event_id_count != 0 && !selected_event_ids)) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    try {
+        std::vector<std::u16string> selected;
+        selected.reserve(selected_event_id_count);
+        for (std::size_t index = 0; index < selected_event_id_count; ++index) {
+            if (!selected_event_ids[index]) return ERROR_INVALID_PARAMETER;
+            selected.emplace_back(selected_event_ids[index]);
+        }
+        std::vector<std::u16string> reviewed;
+        reviewed.reserve(self->training_items_.size());
+        for (const auto& item : self->training_items_) {
+            reviewed.push_back(item.event_id);
+        }
+        return self->start_lora_training_(selected, reviewed, *options)
+            ? ERROR_SUCCESS
+            : ERROR_WRITE_FAULT;
+    } catch (...) {
+        return ERROR_WRITE_FAULT;
+    }
+}
+
+std::int32_t SettingsUiLoader::get_lora_status_trampoline(
+    void* context, llavon_settings_lora_status* status) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->get_lora_status_ || !status) return ERROR_INVALID_PARAMETER;
+    try {
+        const auto current = self->get_lora_status_();
+        self->lora_status_message_ = current.message;
+        self->lora_status_revision_ = current.model_revision;
+        self->lora_status_output_path_ = current.output_model_path;
+        *status = llavon_settings_lora_status{
+            .stage = static_cast<std::int32_t>(current.stage),
+            .progress = current.progress,
+            .model_available = current.model_available ? 1 : 0,
+            .model_update_available = current.model_update_available ? 1 : 0,
+            .message = self->lora_status_message_.c_str(),
+            .model_revision = self->lora_status_revision_.c_str(),
+            .output_model_path = self->lora_status_output_path_.c_str(),
+        };
+        return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_GEN_FAILURE;
+    }
+}
+
+std::int32_t SettingsUiLoader::lora_model_action_trampoline(
+    void* context, std::int32_t download_or_update) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->lora_model_action_) return ERROR_INVALID_FUNCTION;
+    try {
+        return self->lora_model_action_(download_or_update != 0)
+            ? ERROR_SUCCESS
+            : ERROR_BUSY;
+    } catch (...) {
+        return ERROR_GEN_FAILURE;
+    }
+}
+
+void SettingsUiLoader::cancel_lora_trampoline(void* context) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->cancel_lora_) return;
+    try {
+        self->cancel_lora_();
+    } catch (...) {
+    }
 }
 
 std::int32_t SettingsUiLoader::save_model_path_trampoline(

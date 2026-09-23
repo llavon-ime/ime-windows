@@ -4,6 +4,8 @@
 #include <windows.h>
 
 #include "user_settings.hpp"
+#include "training_data_writer.hpp"
+#include "lora_training_manager.hpp"
 #include "../settings/settings_ui_api.h"
 
 #include <cstdint>
@@ -26,6 +28,14 @@ public:
     using SaveCustomNames =
         std::function<bool(const std::vector<CustomNameSetting>&)>;
     using SaveWidthToggleSetting = std::function<bool(bool)>;
+    using LoadTrainingData = std::function<std::vector<TrainingDataItem>()>;
+    using StartLoraTraining = std::function<bool(
+        const std::vector<std::u16string>&,
+        const std::vector<std::u16string>&,
+        const llavon_settings_lora_options&)>;
+    using GetLoraStatus = std::function<LoraOperationStatus()>;
+    using LoraModelAction = std::function<bool(bool)>;
+    using CancelLora = std::function<void()>;
 
     void configure(
         const std::vector<llavon::ime::core::InferenceDeviceInfo>& devices,
@@ -37,7 +47,12 @@ public:
         std::vector<CustomNameSetting> custom_names,
         SaveCustomNames save_custom_names,
         bool shift_space_width_toggle_enabled,
-        SaveWidthToggleSetting save_width_toggle);
+        SaveWidthToggleSetting save_width_toggle,
+        LoadTrainingData load_training_data,
+        StartLoraTraining start_lora_training,
+        GetLoraStatus get_lora_status,
+        LoraModelAction lora_model_action,
+        CancelLora cancel_lora);
     bool show();
     bool show_context_menu(POINT location);
 
@@ -56,6 +71,14 @@ private:
         std::vector<std::u16string> readings;
     };
 
+    struct TrainingDataStorage {
+        std::u16string event_id;
+        std::u16string context;
+        std::u16string answer;
+        std::u16string reading;
+        bool revice = false;
+    };
+
     using ConfigureFunction = std::int32_t (*)(
         const llavon_settings_inference_device*, std::size_t, std::int32_t,
         const char16_t*, const llavon_settings_inference_device*, std::int32_t,
@@ -63,7 +86,13 @@ private:
         const char16_t*, llavon_settings_save_model_path_callback, void*,
         const llavon_settings_custom_name*, std::size_t,
         llavon_settings_save_custom_names_callback, void*, std::int32_t,
-        llavon_settings_save_width_toggle_callback, void*);
+        llavon_settings_save_width_toggle_callback, void*,
+        const llavon_settings_training_item*, std::size_t,
+        llavon_settings_refresh_training_items_callback, void*,
+        llavon_settings_start_lora_training_callback, void*,
+        llavon_settings_get_lora_status_callback, void*,
+        llavon_settings_lora_model_action_callback, void*,
+        llavon_settings_cancel_lora_callback, void*);
     using StartFunction = std::int32_t (*)();
     using ShowFunction = void (*)();
     using ShowContextMenuFunction = void (*)(std::int32_t, std::int32_t);
@@ -72,6 +101,7 @@ private:
     bool load();
     bool start();
     bool configure_module();
+    void refresh_training_items();
     static std::int32_t save_trampoline(
         void* context, std::int32_t backend, const char16_t* device_id) noexcept;
     static std::int32_t save_custom_names_trampoline(
@@ -81,6 +111,18 @@ private:
         void* context, const char16_t* model_path) noexcept;
     static std::int32_t save_width_toggle_trampoline(
         void* context, std::int32_t enabled) noexcept;
+    static std::int32_t start_lora_training_trampoline(
+        void* context, const char16_t* const* selected_event_ids,
+        std::size_t selected_event_id_count,
+        const llavon_settings_lora_options* options) noexcept;
+    static std::int32_t refresh_training_items_trampoline(
+        void* context, llavon_settings_training_item* items,
+        std::size_t item_capacity, std::size_t* item_count) noexcept;
+    static std::int32_t get_lora_status_trampoline(
+        void* context, llavon_settings_lora_status* status) noexcept;
+    static std::int32_t lora_model_action_trampoline(
+        void* context, std::int32_t download_or_update) noexcept;
+    static void cancel_lora_trampoline(void* context) noexcept;
     void report_error(const wchar_t* detail) const noexcept;
 
     HMODULE module_ = nullptr;
@@ -101,6 +143,15 @@ private:
     SaveCustomNames save_custom_names_;
     bool shift_space_width_toggle_enabled_ = false;
     SaveWidthToggleSetting save_width_toggle_;
+    LoadTrainingData load_training_data_;
+    StartLoraTraining start_lora_training_;
+    GetLoraStatus get_lora_status_;
+    LoraModelAction lora_model_action_;
+    CancelLora cancel_lora_;
+    std::u16string lora_status_message_;
+    std::u16string lora_status_revision_;
+    std::u16string lora_status_output_path_;
+    std::vector<TrainingDataStorage> training_items_;
     bool started_ = false;
 };
 

@@ -6,6 +6,7 @@
 #include "service/candidate_ui_loader.hpp"
 #include "service/custom_name_matcher.hpp"
 #include "service/debug/core_logger_adapter.hpp"
+#include "service/lora_training_manager.hpp"
 #include "service/user_settings.hpp"
 #include "service/settings_ui_loader.hpp"
 #include "service/tray_icon.hpp"
@@ -203,6 +204,8 @@ int main(int argc, char* argv[]) {
             std::make_shared<llavon::service::CustomNameMatcher>(user_settings.custom_names);
         llavon::service::PredictionPipeServer server(
             std::move(core), candidate_ui, custom_names);
+        llavon::service::LoraTrainingManager lora_training(
+            server.training_data_writer(), config.tables_dir);
         auto custom_names_update_mutex = std::make_shared<std::mutex>();
         llavon::service::SettingsUiLoader settings_ui;
         auto active_config = std::make_shared<llavon::ime::core::CoreConfig>(config);
@@ -269,7 +272,45 @@ int main(int argc, char* argv[]) {
             user_settings.shift_space_width_toggle_enabled,
             [](bool enabled) {
                 return llavon::service::save_shift_space_width_toggle_setting(enabled);
-            });
+            },
+            [&server] {
+                return server.pending_training_data();
+            },
+            [&lora_training](const std::vector<std::u16string>& selected_event_ids,
+                             const std::vector<std::u16string>& reviewed_event_ids,
+                             const llavon_settings_lora_options& source) {
+                llavon::service::LoraTrainingOptions options{
+                    .rank = source.rank,
+                    .alpha = source.alpha,
+                    .dropout = source.dropout,
+                    .batch_size = source.batch_size,
+                    .gradient_accumulation = source.gradient_accumulation,
+                    .epochs = source.epochs,
+                    .max_steps = source.max_steps,
+                    .learning_rate = source.learning_rate,
+                    .weight_decay = source.weight_decay,
+                    .warmup_steps = source.warmup_steps,
+                    .max_gradient_norm = source.max_gradient_norm,
+                    .save_every = source.save_every,
+                    .device = source.device,
+                    .seed = source.seed,
+                    .shuffle = source.shuffle != 0,
+                    .max_sequence_length = source.max_sequence_length,
+                    .dtype = source.dtype ? source.dtype : u"float32",
+                    .target_modules = source.target_modules
+                        ? source.target_modules
+                        : u"q_proj,v_proj",
+                };
+                return lora_training.start_training_async(
+                    selected_event_ids, reviewed_event_ids, std::move(options));
+            },
+            [&lora_training] { return lora_training.status(); },
+            [&lora_training](bool download_or_update) {
+                return download_or_update
+                    ? lora_training.download_model_async()
+                    : lora_training.check_model_async();
+            },
+            [&lora_training] { lora_training.cancel(); });
         llavon::service::TrayIcon tray;
         if (!tray.create(GetModuleHandleW(nullptr), [&settings_ui] { settings_ui.show(); },
                          [] { launch_debugger(); },

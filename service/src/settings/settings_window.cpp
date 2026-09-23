@@ -8,6 +8,8 @@
 #include <utf8/cpp20.h>
 
 #include <algorithm>
+#include <cmath>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cwctype>
@@ -808,6 +810,30 @@ void SettingsWindow::build_page() {
         }
     }
 
+    page.Children().Append(make_section_title(L"LoRA 個人化模型"));
+
+    StackPanel lora_section;
+    lora_section.Spacing(8);
+    lora_section.Margin(Thickness{0, 0, 0, 24});
+    lora_section.Children().Append(make_text(
+        L"檢查尚未訓練的輸入紀錄，選擇要用於本機微調的資料。取消勾選的紀錄會標記為已排除。",
+        body_text_size));
+
+    std::wstring pending_summary = L"尚未訓練：";
+    pending_summary += std::to_wstring(configuration_.training_items.size());
+    pending_summary += L" 筆";
+    lora_section.Children().Append(make_text(pending_summary.c_str(), caption_text_size));
+
+    Button lora_button;
+    lora_button.Content(winrt::box_value(L"使用我的輸入改進模型"));
+    lora_button.MinWidth(196);
+    lora_button.MinHeight(control_height);
+    lora_button.FontSize(body_text_size);
+    lora_button.HorizontalAlignment(HorizontalAlignment::Left);
+    lora_button.Click([this](const auto&, const auto&) { show_lora_training_dialog(); });
+    lora_section.Children().Append(lora_button);
+    page.Children().Append(lora_section);
+
     page.Children().Append(make_section_title(L"軟體更新"));
 
     StackPanel update_section;
@@ -846,6 +872,429 @@ void SettingsWindow::build_page() {
     scroll.Content(page);
     shell_.Children().Append(scroll);
     xaml_source_.Content(shell_);
+}
+
+void SettingsWindow::show_lora_training_dialog() {
+    if (configuration_.refresh_training_items_callback) {
+        std::size_t count = 0;
+        if (configuration_.refresh_training_items_callback(
+                configuration_.refresh_training_items_context,
+                nullptr, 0, &count) == ERROR_SUCCESS) {
+            std::vector<llavon_settings_training_item> refreshed(count);
+            if (configuration_.refresh_training_items_callback(
+                    configuration_.refresh_training_items_context,
+                    refreshed.data(), refreshed.size(), &count) == ERROR_SUCCESS) {
+                configuration_.training_items.clear();
+                configuration_.training_items.reserve(count);
+                for (std::size_t index = 0; index < count; ++index) {
+                    const auto& item = refreshed[index];
+                    if (!item.event_id || !item.context || !item.answer || !item.reading) {
+                        continue;
+                    }
+                    configuration_.training_items.push_back(TrainingDataOption{
+                        .event_id = item.event_id,
+                        .context = item.context,
+                        .answer = item.answer,
+                        .reading = item.reading,
+                        .revice = item.revice != 0,
+                    });
+                }
+            }
+        }
+    }
+
+    struct DialogState {
+        ContentDialog dialog{nullptr};
+        std::vector<std::pair<CheckBox, std::u16string>> items;
+        TextBox rank{nullptr};
+        TextBox alpha{nullptr};
+        TextBox dropout{nullptr};
+        TextBox batch_size{nullptr};
+        TextBox gradient_accumulation{nullptr};
+        TextBox epochs{nullptr};
+        TextBox max_steps{nullptr};
+        TextBox learning_rate{nullptr};
+        TextBox weight_decay{nullptr};
+        TextBox warmup_steps{nullptr};
+        TextBox max_gradient_norm{nullptr};
+        TextBox save_every{nullptr};
+        TextBox seed{nullptr};
+        TextBox max_sequence_length{nullptr};
+        TextBox target_modules{nullptr};
+        ComboBox device{nullptr};
+        ComboBox dtype{nullptr};
+        ToggleSwitch shuffle{nullptr};
+        ProgressBar progress{nullptr};
+        TextBlock status{nullptr};
+        Button check_model{nullptr};
+        Button download_model{nullptr};
+        Button cancel{nullptr};
+        Button reload_model{nullptr};
+        DispatcherTimer timer{nullptr};
+        std::u16string output_model_path;
+        bool has_training_items = false;
+    };
+
+    auto state = std::make_shared<DialogState>();
+    state->dialog = ContentDialog();
+    state->dialog.Title(winrt::box_value(L"使用我的輸入改進模型"));
+    state->dialog.PrimaryButtonText(L"套用並準備訓練");
+    state->dialog.SecondaryButtonText(L"關閉");
+    state->dialog.DefaultButton(ContentDialogButton::Primary);
+
+    StackPanel content;
+    content.Width(620);
+    content.Spacing(10);
+    content.Children().Append(make_text(
+        L"基礎模型固定使用 tony65535/llavon-ime-llama-250m（約 1 GB，CC-BY-NC-4.0）。只有按下下載時才會取得模型；預設參數來自 step-search-results.md。",
+        caption_text_size));
+
+    StackPanel model_actions;
+    model_actions.Orientation(Orientation::Horizontal);
+    model_actions.Spacing(8);
+    state->check_model = Button();
+    state->check_model.Content(winrt::box_value(L"檢查模型更新"));
+    state->check_model.MinHeight(control_height);
+    model_actions.Children().Append(state->check_model);
+    state->download_model = Button();
+    state->download_model.Content(winrt::box_value(L"下載基礎模型（約 1 GB）"));
+    state->download_model.MinHeight(control_height);
+    model_actions.Children().Append(state->download_model);
+    state->cancel = Button();
+    state->cancel.Content(winrt::box_value(L"取消目前操作"));
+    state->cancel.MinHeight(control_height);
+    state->cancel.Visibility(Visibility::Collapsed);
+    model_actions.Children().Append(state->cancel);
+    content.Children().Append(model_actions);
+
+    content.Children().Append(make_text(
+        L"訓練資料（預設全選）", body_text_size, FontWeights::SemiBold()));
+    if (configuration_.training_items.empty()) {
+        content.Children().Append(make_text(
+            L"目前沒有尚未訓練的資料。請先使用輸入法提交一些文字。",
+            body_text_size));
+        state->dialog.IsPrimaryButtonEnabled(false);
+    } else {
+        state->has_training_items = true;
+        StackPanel item_panel;
+        item_panel.Spacing(4);
+        for (const auto& item : configuration_.training_items) {
+            CheckBox check;
+            check.IsChecked(true);
+            check.HorizontalAlignment(HorizontalAlignment::Stretch);
+            std::u16string label;
+            if (!item.context.empty()) {
+                label += item.context;
+                label += u"  →  ";
+            }
+            label += item.answer;
+            if (!item.reading.empty()) {
+                label += u"    [";
+                label += item.reading;
+                label += u"]";
+            }
+            if (item.revice) label += u"    （曾選字）";
+            check.Content(winrt::box_value(to_hstring(label)));
+            item_panel.Children().Append(check);
+            state->items.emplace_back(check, item.event_id);
+        }
+        ScrollViewer item_scroll;
+        item_scroll.MaxHeight(220);
+        item_scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
+        item_scroll.Content(item_panel);
+        content.Children().Append(item_scroll);
+        content.Children().Append(make_text(
+            L"未勾選的資料會設為 excluded；曾選字只作標記，注音仍維持原始輸入。",
+            caption_text_size));
+    }
+
+    content.Children().Append(make_text(
+        L"微調參數", body_text_size, FontWeights::SemiBold()));
+    Grid parameters;
+    parameters.ColumnSpacing(12);
+    ColumnDefinition label_column;
+    label_column.Width(GridLength{210, GridUnitType::Pixel});
+    parameters.ColumnDefinitions().Append(label_column);
+    ColumnDefinition value_column;
+    value_column.Width(GridLength{1, GridUnitType::Star});
+    parameters.ColumnDefinitions().Append(value_column);
+
+    int parameter_row = 0;
+    const auto add_text_parameter = [&](const wchar_t* label, const wchar_t* value,
+                                        TextBox& box) {
+        RowDefinition row;
+        row.Height(GridLength{1, GridUnitType::Auto});
+        parameters.RowDefinitions().Append(row);
+        auto label_block = make_text(label, caption_text_size);
+        label_block.VerticalAlignment(VerticalAlignment::Center);
+        label_block.Margin(Thickness{0, 4, 0, 4});
+        Grid::SetRow(label_block, parameter_row);
+        parameters.Children().Append(label_block);
+        box = TextBox();
+        box.Text(value);
+        box.MinHeight(control_height);
+        box.Margin(Thickness{0, 2, 0, 2});
+        Grid::SetColumn(box, 1);
+        Grid::SetRow(box, parameter_row);
+        parameters.Children().Append(box);
+        ++parameter_row;
+    };
+
+    add_text_parameter(L"LoRA rank", L"8", state->rank);
+    add_text_parameter(L"LoRA alpha", L"16", state->alpha);
+    add_text_parameter(L"LoRA dropout", L"0", state->dropout);
+    add_text_parameter(L"Batch size", L"1", state->batch_size);
+    add_text_parameter(L"Gradient accumulation", L"1", state->gradient_accumulation);
+    add_text_parameter(L"Epochs", L"210", state->epochs);
+    add_text_parameter(L"Max steps", L"210", state->max_steps);
+    add_text_parameter(L"Learning rate", L"0.0001", state->learning_rate);
+    add_text_parameter(L"Weight decay", L"0", state->weight_decay);
+    add_text_parameter(L"Warmup steps", L"0", state->warmup_steps);
+    add_text_parameter(L"Max gradient norm", L"1", state->max_gradient_norm);
+    add_text_parameter(L"Save every", L"0", state->save_every);
+    add_text_parameter(L"Seed", L"42", state->seed);
+    add_text_parameter(L"Max sequence length", L"384", state->max_sequence_length);
+    add_text_parameter(L"Target modules", L"q_proj,v_proj", state->target_modules);
+
+    const auto add_combo_parameter = [&](const wchar_t* label, ComboBox& combo) {
+        RowDefinition row;
+        row.Height(GridLength{1, GridUnitType::Auto});
+        parameters.RowDefinitions().Append(row);
+        auto label_block = make_text(label, caption_text_size);
+        label_block.VerticalAlignment(VerticalAlignment::Center);
+        Grid::SetRow(label_block, parameter_row);
+        parameters.Children().Append(label_block);
+        combo = ComboBox();
+        combo.MinHeight(control_height);
+        combo.Margin(Thickness{0, 2, 0, 2});
+        combo.HorizontalAlignment(HorizontalAlignment::Stretch);
+        Grid::SetColumn(combo, 1);
+        Grid::SetRow(combo, parameter_row);
+        parameters.Children().Append(combo);
+        ++parameter_row;
+    };
+
+    add_combo_parameter(L"Device", state->device);
+    state->device.Items().Append(winrt::box_value(L"auto"));
+    state->device.Items().Append(winrt::box_value(L"cuda"));
+    state->device.Items().Append(winrt::box_value(L"cpu"));
+    // "auto" selects CUDA when the installed trainer supports it and safely
+    // falls back to CPU for the standard CPU trainer package.
+    state->device.SelectedIndex(0);
+
+    add_combo_parameter(L"DType", state->dtype);
+    state->dtype.Items().Append(winrt::box_value(L"float32"));
+    state->dtype.Items().Append(winrt::box_value(L"bfloat16"));
+    state->dtype.SelectedIndex(0);
+    content.Children().Append(parameters);
+
+    state->shuffle = ToggleSwitch();
+    state->shuffle.Header(winrt::box_value(L"Shuffle training data"));
+    state->shuffle.IsOn(true);
+    content.Children().Append(state->shuffle);
+
+    state->progress = ProgressBar();
+    state->progress.Minimum(0);
+    state->progress.Maximum(100);
+    state->progress.Value(0);
+    state->progress.Visibility(Visibility::Collapsed);
+    content.Children().Append(state->progress);
+    state->status = make_text(L"所有欄位都已填入建議預設值。", caption_text_size);
+    content.Children().Append(state->status);
+
+    state->reload_model = Button();
+    state->reload_model.Content(winrt::box_value(L"重新載入完成的模型"));
+    state->reload_model.MinHeight(control_height);
+    state->reload_model.HorizontalAlignment(HorizontalAlignment::Left);
+    state->reload_model.Visibility(Visibility::Collapsed);
+    content.Children().Append(state->reload_model);
+
+    ScrollViewer dialog_scroll;
+    dialog_scroll.MaxHeight(650);
+    dialog_scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
+    dialog_scroll.Content(content);
+    state->dialog.Content(dialog_scroll);
+
+    const auto request_model_action = [this, state](bool download) {
+        const std::int32_t result = configuration_.lora_model_action_callback
+            ? configuration_.lora_model_action_callback(
+                  configuration_.lora_model_action_context, download ? 1 : 0)
+            : ERROR_INVALID_FUNCTION;
+        if (result != ERROR_SUCCESS) {
+            state->status.Text(result == ERROR_BUSY
+                ? L"另一個 LoRA 操作正在執行。"
+                : L"無法啟動模型操作。");
+        }
+    };
+    state->check_model.Click(
+        [request_model_action](const auto&, const auto&) { request_model_action(false); });
+    state->download_model.Click(
+        [request_model_action](const auto&, const auto&) { request_model_action(true); });
+    state->cancel.Click([this](const auto&, const auto&) {
+        if (configuration_.cancel_lora_callback) {
+            configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
+        }
+    });
+    state->reload_model.Click([this, state](const auto&, const auto&) {
+        if (state->output_model_path.empty()) return;
+        const std::int32_t result = configuration_.save_model_path_callback
+            ? configuration_.save_model_path_callback(
+                  configuration_.save_model_path_context,
+                  state->output_model_path.c_str())
+            : ERROR_INVALID_FUNCTION;
+        state->status.Text(result == ERROR_SUCCESS
+            ? L"個人化模型已重新載入並設為目前模型。"
+            : L"模型已完成，但重新載入失敗。");
+    });
+
+    const auto refresh_status = [this, state] {
+        llavon_settings_lora_status status{};
+        const std::int32_t result = configuration_.get_lora_status_callback
+            ? configuration_.get_lora_status_callback(
+                  configuration_.get_lora_status_context, &status)
+            : ERROR_INVALID_FUNCTION;
+        if (result != ERROR_SUCCESS) {
+            state->status.Text(L"無法取得 LoRA 狀態。");
+            return;
+        }
+        if (status.message && *status.message) {
+            state->status.Text(to_hstring(std::u16string_view(status.message)));
+        }
+        const bool busy = status.stage == LLAVON_SETTINGS_LORA_CHECKING_MODEL ||
+                          status.stage == LLAVON_SETTINGS_LORA_DOWNLOADING_MODEL ||
+                          status.stage == LLAVON_SETTINGS_LORA_PREPARING_DATA ||
+                          status.stage == LLAVON_SETTINGS_LORA_TRAINING ||
+                          status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL;
+        state->progress.Visibility(busy ? Visibility::Visible : Visibility::Collapsed);
+        state->progress.IsIndeterminate(
+            busy && status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL);
+        if (!state->progress.IsIndeterminate()) {
+            state->progress.Value(std::clamp(status.progress, 0.0, 1.0) * 100.0);
+        }
+        state->check_model.IsEnabled(!busy);
+        state->download_model.IsEnabled(!busy);
+        state->download_model.Content(winrt::box_value(
+            status.model_update_available ? L"下載模型更新（約 1 GB）"
+                                          : L"下載基礎模型（約 1 GB）"));
+        state->cancel.Visibility(busy ? Visibility::Visible : Visibility::Collapsed);
+        state->dialog.IsPrimaryButtonEnabled(
+            !busy && status.model_available && state->has_training_items);
+        if (status.stage == LLAVON_SETTINGS_LORA_COMPLETED &&
+            status.output_model_path && *status.output_model_path) {
+            state->output_model_path = status.output_model_path;
+            state->reload_model.Visibility(Visibility::Visible);
+        }
+    };
+
+    state->timer = DispatcherTimer();
+    state->timer.Interval(std::chrono::milliseconds(500));
+    state->timer.Tick([refresh_status](const auto&, const auto&) { refresh_status(); });
+    refresh_status();
+    state->timer.Start();
+    state->dialog.Closed([state](const auto&, const auto&) {
+        if (state->timer) state->timer.Stop();
+    });
+
+    state->dialog.PrimaryButtonClick(
+        [this, state](const ContentDialog&, const ContentDialogButtonClickEventArgs& args) {
+            args.Cancel(true);
+            try {
+                const auto parse_integer = [](const TextBox& box) {
+                    const std::wstring value = box.Text().c_str();
+                    std::size_t consumed = 0;
+                    const long long parsed = std::stoll(value, &consumed);
+                    if (consumed != value.size() ||
+                        parsed < std::numeric_limits<std::int32_t>::min() ||
+                        parsed > std::numeric_limits<std::int32_t>::max()) {
+                        throw std::invalid_argument("integer");
+                    }
+                    return static_cast<std::int32_t>(parsed);
+                };
+                const auto parse_real = [](const TextBox& box) {
+                    const std::wstring value = box.Text().c_str();
+                    std::size_t consumed = 0;
+                    const double parsed = std::stod(value, &consumed);
+                    if (consumed != value.size() || !std::isfinite(parsed)) {
+                        throw std::invalid_argument("number");
+                    }
+                    return parsed;
+                };
+
+                llavon_settings_lora_options options{
+                    .rank = parse_integer(state->rank),
+                    .alpha = parse_real(state->alpha),
+                    .dropout = parse_real(state->dropout),
+                    .batch_size = parse_integer(state->batch_size),
+                    .gradient_accumulation = parse_integer(state->gradient_accumulation),
+                    .epochs = parse_integer(state->epochs),
+                    .max_steps = parse_integer(state->max_steps),
+                    .learning_rate = parse_real(state->learning_rate),
+                    .weight_decay = parse_real(state->weight_decay),
+                    .warmup_steps = parse_integer(state->warmup_steps),
+                    .max_gradient_norm = parse_real(state->max_gradient_norm),
+                    .save_every = parse_integer(state->save_every),
+                    .device = state->device.SelectedIndex() == 1
+                        ? LLAVON_SETTINGS_LORA_DEVICE_CUDA
+                        : (state->device.SelectedIndex() == 2
+                               ? LLAVON_SETTINGS_LORA_DEVICE_CPU
+                               : LLAVON_SETTINGS_LORA_DEVICE_AUTO),
+                    .seed = parse_integer(state->seed),
+                    .shuffle = state->shuffle.IsOn() ? 1 : 0,
+                    .max_sequence_length = parse_integer(state->max_sequence_length),
+                    .dtype = nullptr,
+                    .target_modules = nullptr,
+                };
+                const std::u16string dtype = state->dtype.SelectedIndex() == 1
+                    ? u"bfloat16"
+                    : u"float32";
+                const std::u16string target_modules = to_utf16(state->target_modules.Text());
+                options.dtype = dtype.c_str();
+                options.target_modules = target_modules.c_str();
+
+                if (options.rank <= 0 || options.alpha <= 0 ||
+                    options.dropout < 0 || options.dropout >= 1 ||
+                    options.batch_size <= 0 || options.gradient_accumulation <= 0 ||
+                    options.epochs <= 0 || options.max_steps == 0 ||
+                    options.learning_rate <= 0 || options.weight_decay < 0 ||
+                    options.warmup_steps < 0 || options.max_gradient_norm < 0 ||
+                    options.save_every < 0 || options.max_sequence_length <= 1 ||
+                    target_modules.empty()) {
+                    throw std::invalid_argument("range");
+                }
+
+                std::vector<std::u16string> selected;
+                for (const auto& [check, event_id] : state->items) {
+                    if (check.IsChecked().GetBoolean()) selected.push_back(event_id);
+                }
+                std::vector<const char16_t*> selected_pointers;
+                selected_pointers.reserve(selected.size());
+                for (const auto& event_id : selected) {
+                    selected_pointers.push_back(event_id.c_str());
+                }
+
+                state->progress.IsIndeterminate(true);
+                state->progress.Visibility(Visibility::Visible);
+                state->status.Text(L"正在由 service 儲存資料選擇…");
+                const std::int32_t result = configuration_.start_lora_training_callback
+                    ? configuration_.start_lora_training_callback(
+                          configuration_.start_lora_training_context,
+                          selected_pointers.data(), selected_pointers.size(), &options)
+                    : ERROR_INVALID_FUNCTION;
+                if (result == ERROR_SUCCESS) {
+                    state->dialog.IsPrimaryButtonEnabled(false);
+                    state->status.Text(L"訓練已啟動，關閉視窗後仍會在背景繼續。");
+                } else {
+                    state->progress.Visibility(Visibility::Collapsed);
+                    state->status.Text(L"無法儲存訓練資料選擇，請稍後再試。");
+                }
+            } catch (...) {
+                state->progress.Visibility(Visibility::Collapsed);
+                state->status.Text(L"參數格式或範圍不正確，請檢查所有欄位。");
+            }
+        });
+
+    if (shell_.XamlRoot()) state->dialog.XamlRoot(shell_.XamlRoot());
+    state->dialog.ShowAsync();
 }
 
 void SettingsWindow::add_custom_name_row(

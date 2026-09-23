@@ -17,6 +17,10 @@
     "llama-cpp",
     "reflectcpp",
     {
+      "name": "sqlite3",
+      "platform": "windows"
+    },
+    {
       "name": "utfcpp",
       "platform": "windows"
     }

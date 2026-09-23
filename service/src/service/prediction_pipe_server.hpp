@@ -601,6 +601,26 @@ public:
         return result.get();
     }
 
+    std::vector<TrainingDataItem> pending_training_data() const noexcept {
+        return training_data_->pending_items();
+    }
+
+    bool exclude_unselected_training_data(
+        const std::vector<std::u16string>& selected_event_ids,
+        const std::vector<std::u16string>& reviewed_event_ids) noexcept {
+        return training_data_->exclude_unselected(
+            selected_event_ids, reviewed_event_ids);
+    }
+
+    bool mark_training_data_trained(
+        const std::vector<std::u16string>& trained_event_ids) noexcept {
+        return training_data_->mark_trained(trained_event_ids);
+    }
+
+    std::shared_ptr<TrainingDataWriter> training_data_writer() const noexcept {
+        return training_data_;
+    }
+
     void stop() noexcept {
         accepting_reloads_.store(false, std::memory_order_release);
         io_ctx_.stop();

@@ -22,6 +22,14 @@ struct CustomNameOption {
     std::vector<std::u16string> readings;
 };
 
+struct TrainingDataOption {
+    std::u16string event_id;
+    std::u16string context;
+    std::u16string answer;
+    std::u16string reading;
+    bool revice = false;
+};
+
 struct SettingsConfiguration {
     std::vector<InferenceDeviceOption> devices;
     std::int32_t selected_backend = LLAVON_SETTINGS_BACKEND_AUTO;
@@ -40,6 +48,17 @@ struct SettingsConfiguration {
     bool shift_space_width_toggle_enabled = false;
     llavon_settings_save_width_toggle_callback save_width_toggle_callback = nullptr;
     void* save_width_toggle_context = nullptr;
+    std::vector<TrainingDataOption> training_items;
+    llavon_settings_refresh_training_items_callback refresh_training_items_callback = nullptr;
+    void* refresh_training_items_context = nullptr;
+    llavon_settings_start_lora_training_callback start_lora_training_callback = nullptr;
+    void* start_lora_training_context = nullptr;
+    llavon_settings_get_lora_status_callback get_lora_status_callback = nullptr;
+    void* get_lora_status_context = nullptr;
+    llavon_settings_lora_model_action_callback lora_model_action_callback = nullptr;
+    void* lora_model_action_context = nullptr;
+    llavon_settings_cancel_lora_callback cancel_lora_callback = nullptr;
+    void* cancel_lora_context = nullptr;
 };
 
 }  // namespace llavon::settings

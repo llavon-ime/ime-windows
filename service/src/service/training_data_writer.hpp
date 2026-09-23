@@ -27,26 +27,50 @@ struct RawCommitEvent {
     std::string committed_at_utc;
 };
 
-// Converts the raw frontend event to the validation-like JSONL schema. Keeping
-// this function in the service is deliberate: the TSF DLL does not know about
-// training-data versions, tone numbers, or correction metadata.
-std::string serialize_training_data_event(const RawCommitEvent& event);
+struct TrainingDataItem {
+    std::u16string event_id;
+    std::u16string context;
+    std::u16string answer;
+    std::u16string reading;
+    bool revice = false;
+};
+
+struct TrainingDataRecord {
+    std::u16string event_id;
+    std::u16string context;
+    std::u16string answer;
+    std::string padding_json;
+    bool revice = false;
+};
 
 class TrainingDataWriter final {
 public:
     explicit TrainingDataWriter(
-        std::optional<std::filesystem::path> output_path = std::nullopt);
+        std::optional<std::filesystem::path> database_path = std::nullopt);
     ~TrainingDataWriter();
 
     TrainingDataWriter(const TrainingDataWriter&) = delete;
     TrainingDataWriter& operator=(const TrainingDataWriter&) = delete;
 
     void enqueue(RawCommitEvent event);
+    std::vector<TrainingDataItem> pending_items() const noexcept;
+    std::vector<TrainingDataRecord> pending_records(
+        const std::vector<std::u16string>& event_ids) const;
+    bool exclude_unselected(
+        const std::vector<std::u16string>& selected_event_ids,
+        const std::vector<std::u16string>& reviewed_event_ids) noexcept;
+    bool mark_trained(
+        const std::vector<std::u16string>& trained_event_ids) noexcept;
+    const std::filesystem::path& database_path() const noexcept {
+        return database_path_;
+    }
 
 private:
     void worker_main() noexcept;
+    bool mark_records(const std::vector<std::u16string>& event_ids,
+                      const char* state) noexcept;
 
-    std::optional<std::filesystem::path> output_path_;
+    std::filesystem::path database_path_;
     std::mutex mutex_;
     std::condition_variable available_;
     std::deque<RawCommitEvent> queue_;
