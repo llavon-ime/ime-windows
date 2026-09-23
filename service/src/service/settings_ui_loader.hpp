@@ -31,6 +31,7 @@ public:
         std::function<bool(const std::vector<CustomNameSetting>&)>;
     using SaveWidthToggleSetting = std::function<bool(bool)>;
     using LoadTrainingData = std::function<std::vector<TrainingDataItem>()>;
+    using LoadLoraHistory = std::function<std::vector<LoraTrainingRun>()>;
     using StartLoraTraining = std::function<bool(
         const std::vector<std::u16string>&,
         const std::vector<std::u16string>&,
@@ -51,6 +52,7 @@ public:
         bool shift_space_width_toggle_enabled,
         SaveWidthToggleSetting save_width_toggle,
         LoadTrainingData load_training_data,
+        LoadLoraHistory load_lora_history,
         StartLoraTraining start_lora_training,
         GetLoraStatus get_lora_status,
         LoraModelAction lora_model_action,
@@ -82,6 +84,13 @@ private:
         bool revice = false;
     };
 
+    struct LoraHistoryStorage {
+        std::u16string completed_at_utc;
+        std::size_t record_count = 0;
+        std::size_t cumulative_record_count = 0;
+        std::int64_t optimizer_steps = 0;
+    };
+
     using ConfigureFunction = std::int32_t (*)(
         const llavon_settings_inference_device*, std::size_t, std::int32_t,
         const char16_t*, const llavon_settings_inference_device*, std::int32_t,
@@ -92,6 +101,7 @@ private:
         llavon_settings_save_width_toggle_callback, void*,
         const llavon_settings_training_item*, std::size_t,
         llavon_settings_refresh_training_items_callback, void*,
+        llavon_settings_get_lora_history_callback, void*,
         llavon_settings_start_lora_training_callback, void*,
         llavon_settings_get_lora_status_callback, void*,
         llavon_settings_lora_model_action_callback, void*,
@@ -122,6 +132,9 @@ private:
     static std::int32_t refresh_training_items_trampoline(
         void* context, llavon_settings_training_item* items,
         std::size_t item_capacity, std::size_t* item_count) noexcept;
+    static std::int32_t get_lora_history_trampoline(
+        void* context, llavon_settings_lora_history_item* items,
+        std::size_t item_capacity, std::size_t* item_count) noexcept;
     static std::int32_t get_lora_status_trampoline(
         void* context, llavon_settings_lora_status* status) noexcept;
     static std::int32_t lora_model_action_trampoline(
@@ -151,6 +164,7 @@ private:
     bool shift_space_width_toggle_enabled_ = false;
     SaveWidthToggleSetting save_width_toggle_;
     LoadTrainingData load_training_data_;
+    LoadLoraHistory load_lora_history_;
     StartLoraTraining start_lora_training_;
     GetLoraStatus get_lora_status_;
     LoraModelAction lora_model_action_;
@@ -159,6 +173,7 @@ private:
     std::u16string lora_status_revision_;
     std::u16string lora_status_output_path_;
     std::vector<TrainingDataStorage> training_items_;
+    std::vector<LoraHistoryStorage> lora_history_;
     bool started_ = false;
 };
 

@@ -46,6 +46,22 @@ struct TrainingDataRecord {
     bool revice = false;
 };
 
+struct LoraTrainingRun {
+    std::int64_t id = 0;
+    std::int64_t parent_id = 0;
+    std::string base_model_revision;
+    std::filesystem::path adapter_path;
+    std::filesystem::path output_model_path;
+    std::string completed_at_utc;
+    std::size_t record_count = 0;
+    std::size_t cumulative_record_count = 0;
+    std::int64_t optimizer_steps = 0;
+    std::int32_t rank = 0;
+    double alpha = 0;
+    double dropout = 0;
+    std::u16string target_modules;
+};
+
 class TrainingDataWriter final {
 public:
     explicit TrainingDataWriter(
@@ -67,6 +83,11 @@ public:
         const std::vector<std::u16string>& selected_event_ids,
         const std::vector<std::u16string>& reviewed_event_ids) noexcept;
     bool mark_trained(
+        const std::vector<std::u16string>& trained_event_ids) noexcept;
+    std::optional<LoraTrainingRun> latest_lora_training_run() const;
+    std::vector<LoraTrainingRun> lora_training_history() const noexcept;
+    bool complete_lora_training(
+        const LoraTrainingRun& run,
         const std::vector<std::u16string>& trained_event_ids) noexcept;
     const std::filesystem::path& database_path() const noexcept {
         return database_path_;

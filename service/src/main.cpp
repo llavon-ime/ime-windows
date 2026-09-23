@@ -276,6 +276,9 @@ int main(int argc, char* argv[]) {
             [&server] {
                 return server.pending_training_data();
             },
+            [&server] {
+                return server.training_data_writer()->lora_training_history();
+            },
             [&lora_training](const std::vector<std::u16string>& selected_event_ids,
                              const std::vector<std::u16string>& reviewed_event_ids,
                              const llavon_settings_lora_options& source) {

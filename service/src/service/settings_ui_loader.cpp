@@ -98,6 +98,7 @@ void SettingsUiLoader::configure(
     bool shift_space_width_toggle_enabled,
     SaveWidthToggleSetting save_width_toggle,
     LoadTrainingData load_training_data,
+    LoadLoraHistory load_lora_history,
     StartLoraTraining start_lora_training,
     GetLoraStatus get_lora_status,
     LoraModelAction lora_model_action,
@@ -144,6 +145,7 @@ void SettingsUiLoader::configure(
     shift_space_width_toggle_enabled_ = shift_space_width_toggle_enabled;
     save_width_toggle_ = std::move(save_width_toggle);
     load_training_data_ = std::move(load_training_data);
+    load_lora_history_ = std::move(load_lora_history);
     start_lora_training_ = std::move(start_lora_training);
     get_lora_status_ = std::move(get_lora_status);
     lora_model_action_ = std::move(lora_model_action);
@@ -315,10 +317,48 @@ bool SettingsUiLoader::configure_module() {
                save_width_toggle_trampoline, this,
                training_items.data(), training_items.size(),
                refresh_training_items_trampoline, this,
+               get_lora_history_trampoline, this,
                start_lora_training_trampoline, this,
                get_lora_status_trampoline, this,
                lora_model_action_trampoline, this,
                cancel_lora_trampoline, this) == 0;
+}
+
+std::int32_t SettingsUiLoader::get_lora_history_trampoline(
+    void* context, llavon_settings_lora_history_item* items,
+    std::size_t item_capacity, std::size_t* item_count) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !item_count || (item_capacity != 0 && !items)) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    try {
+        self->lora_history_.clear();
+        if (self->load_lora_history_) {
+            for (const auto& run : self->load_lora_history_()) {
+                self->lora_history_.push_back(LoraHistoryStorage{
+                    .completed_at_utc = utf8::utf8to16(run.completed_at_utc),
+                    .record_count = run.record_count,
+                    .cumulative_record_count = run.cumulative_record_count,
+                    .optimizer_steps = run.optimizer_steps,
+                });
+            }
+        }
+        *item_count = self->lora_history_.size();
+        if (!items) return ERROR_SUCCESS;
+        if (item_capacity < self->lora_history_.size()) return ERROR_INSUFFICIENT_BUFFER;
+        for (std::size_t index = 0; index < self->lora_history_.size(); ++index) {
+            const auto& source = self->lora_history_[index];
+            items[index] = llavon_settings_lora_history_item{
+                .completed_at_utc = source.completed_at_utc.c_str(),
+                .record_count = source.record_count,
+                .cumulative_record_count = source.cumulative_record_count,
+                .optimizer_steps = source.optimizer_steps,
+            };
+        }
+        return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_GEN_FAILURE;
+    }
 }
 
 void SettingsUiLoader::refresh_training_items() {

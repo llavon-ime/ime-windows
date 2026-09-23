@@ -85,6 +85,13 @@ struct llavon_settings_training_item {
     int32_t revice;
 };
 
+struct llavon_settings_lora_history_item {
+    const llavon_char16_t* completed_at_utc;
+    size_t record_count;
+    size_t cumulative_record_count;
+    int64_t optimizer_steps;
+};
+
 // Defaults are derived from lora-trainer/docs/step-search-results.md. Keeping
 // the values in the ABI lets the service remain the authority for training.
 struct llavon_settings_lora_options {
@@ -124,6 +131,9 @@ typedef int32_t (*llavon_settings_start_lora_training_callback)(
 typedef int32_t (*llavon_settings_refresh_training_items_callback)(
     void* context, struct llavon_settings_training_item* items,
     size_t item_capacity, size_t* item_count);
+typedef int32_t (*llavon_settings_get_lora_history_callback)(
+    void* context, struct llavon_settings_lora_history_item* items,
+    size_t item_capacity, size_t* item_count);
 typedef int32_t (*llavon_settings_get_lora_status_callback)(
     void* context, struct llavon_settings_lora_status* status);
 typedef int32_t (*llavon_settings_lora_model_action_callback)(
@@ -157,6 +167,8 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure(
     size_t training_item_count,
     llavon_settings_refresh_training_items_callback refresh_training_items_callback,
     void* refresh_training_items_context,
+    llavon_settings_get_lora_history_callback get_lora_history_callback,
+    void* get_lora_history_context,
     llavon_settings_start_lora_training_callback start_lora_training_callback,
     void* start_lora_training_context,
     llavon_settings_get_lora_status_callback get_lora_status_callback,

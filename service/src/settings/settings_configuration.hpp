@@ -30,6 +30,13 @@ struct TrainingDataOption {
     bool revice = false;
 };
 
+struct LoraHistoryOption {
+    std::u16string completed_at_utc;
+    std::size_t record_count = 0;
+    std::size_t cumulative_record_count = 0;
+    std::int64_t optimizer_steps = 0;
+};
+
 struct SettingsConfiguration {
     std::vector<InferenceDeviceOption> devices;
     std::int32_t selected_backend = LLAVON_SETTINGS_BACKEND_AUTO;
@@ -51,6 +58,8 @@ struct SettingsConfiguration {
     std::vector<TrainingDataOption> training_items;
     llavon_settings_refresh_training_items_callback refresh_training_items_callback = nullptr;
     void* refresh_training_items_context = nullptr;
+    llavon_settings_get_lora_history_callback get_lora_history_callback = nullptr;
+    void* get_lora_history_context = nullptr;
     llavon_settings_start_lora_training_callback start_lora_training_callback = nullptr;
     void* start_lora_training_context = nullptr;
     llavon_settings_get_lora_status_callback get_lora_status_callback = nullptr;

@@ -12,6 +12,7 @@
 #include <charconv>
 #include <chrono>
 #include <fstream>
+#include <format>
 #include <iomanip>
 #include <iterator>
 #include <optional>
@@ -176,6 +177,17 @@ std::string run_name() {
     const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     return std::to_string(milliseconds);
+}
+
+std::string utc_now() {
+    return std::format("{:%FT%T}Z", std::chrono::floor<std::chrono::milliseconds>(
+        std::chrono::system_clock::now()));
+}
+
+std::int64_t training_steps(const std::filesystem::path& adapter_directory) {
+    const auto state = jsoncons::json::parse(
+        read_text(adapter_directory / L"training_state.json"));
+    return state.at("step").as<std::int64_t>();
 }
 
 }  // namespace
@@ -556,6 +568,21 @@ void LoraTrainingManager::training_worker() {
     if (!installed_model_is_complete(&revision)) {
         throw std::runtime_error("base training model has not been downloaded");
     }
+    const auto previous_run = training_data_->latest_lora_training_run();
+    if (previous_run) {
+        if (previous_run->rank != pending_options_.rank ||
+            previous_run->alpha != pending_options_.alpha ||
+            previous_run->dropout != pending_options_.dropout ||
+            previous_run->target_modules != pending_options_.target_modules) {
+            throw std::runtime_error(
+                "目前參數與上一版模型不相容，無法接續訓練。");
+        }
+        revision = previous_run->base_model_revision;
+        if (!std::filesystem::is_regular_file(
+                previous_run->adapter_path / L"adapter_model.safetensors")) {
+            throw std::runtime_error("previous LoRA adapter is missing");
+        }
+    }
     const auto trainer = trainer_executable();
     std::error_code error;
     if (!std::filesystem::is_regular_file(trainer, error)) {
@@ -610,6 +637,10 @@ void LoraTrainingManager::training_worker() {
                                   pending_options_.dtype.end()),
         L"--seed", std::to_wstring(pending_options_.seed),
     };
+    if (previous_run) {
+        train_arguments.push_back(L"--resume-adapter");
+        train_arguments.push_back(previous_run->adapter_path.wstring());
+    }
     if (!pending_options_.shuffle) train_arguments.push_back(L"--no-shuffle");
     run_process(trainer, train_arguments, true);
 
@@ -633,7 +664,23 @@ void LoraTrainingManager::training_worker() {
     if (!std::filesystem::is_regular_file(gguf_path, error)) {
         throw std::runtime_error("trainer completed without producing a GGUF model");
     }
-    if (!training_data_->mark_trained(dataset.included_event_ids)) {
+    const LoraTrainingRun completed_run{
+        .parent_id = previous_run ? previous_run->id : 0,
+        .base_model_revision = revision,
+        .adapter_path = adapter_directory,
+        .output_model_path = gguf_path,
+        .completed_at_utc = utc_now(),
+        .record_count = dataset.written,
+        .cumulative_record_count = dataset.written +
+            (previous_run ? previous_run->cumulative_record_count : 0),
+        .optimizer_steps = training_steps(adapter_directory),
+        .rank = pending_options_.rank,
+        .alpha = pending_options_.alpha,
+        .dropout = pending_options_.dropout,
+        .target_modules = pending_options_.target_modules,
+    };
+    if (!training_data_->complete_lora_training(
+            completed_run, dataset.included_event_ids)) {
         throw std::runtime_error("model completed but training records could not be marked trained");
     }
 

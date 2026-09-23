@@ -127,6 +127,18 @@ public:
         }
     }
 
+    void bind_real(int index, double value) {
+        if (sqlite3_bind_double(statement_, index, value) != SQLITE_OK) {
+            throw_sqlite(database_, "bind real");
+        }
+    }
+
+    void bind_null(int index) {
+        if (sqlite3_bind_null(statement_, index) != SQLITE_OK) {
+            throw_sqlite(database_, "bind null");
+        }
+    }
+
     void execute() {
         if (sqlite3_step(statement_) != SQLITE_DONE) {
             throw_sqlite(database_, "execute statement");
@@ -323,6 +335,25 @@ void initialize_database(const std::filesystem::path& path) {
     database.execute(
         "CREATE INDEX IF NOT EXISTS training_commits_state_id "
         "ON training_commits(training_state, id)");
+    database.execute(
+        "CREATE TABLE IF NOT EXISTS lora_training_runs ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "parent_id INTEGER NULL REFERENCES lora_training_runs(id),"
+        "base_model_revision TEXT NOT NULL,"
+        "adapter_path TEXT NOT NULL,"
+        "output_model_path TEXT NOT NULL,"
+        "completed_at_utc TEXT NOT NULL,"
+        "record_count INTEGER NOT NULL CHECK(record_count > 0),"
+        "cumulative_record_count INTEGER NOT NULL CHECK(cumulative_record_count > 0),"
+        "optimizer_steps INTEGER NOT NULL CHECK(optimizer_steps >= 0),"
+        "rank INTEGER NOT NULL CHECK(rank > 0),"
+        "alpha REAL NOT NULL CHECK(alpha > 0),"
+        "dropout REAL NOT NULL CHECK(dropout >= 0 AND dropout < 1),"
+        "target_modules TEXT NOT NULL"
+        ")");
+    database.execute(
+        "CREATE INDEX IF NOT EXISTS lora_training_runs_completed_id "
+        "ON lora_training_runs(completed_at_utc, id)");
 }
 
 std::string column_text(sqlite3_stmt* statement, int column) {
@@ -503,6 +534,128 @@ bool TrainingDataWriter::exclude_unselected(
 bool TrainingDataWriter::mark_trained(
     const std::vector<std::u16string>& trained_event_ids) noexcept {
     return mark_records(trained_event_ids, "trained");
+}
+
+namespace {
+
+LoraTrainingRun read_lora_training_run(sqlite3_stmt* statement) {
+    return LoraTrainingRun{
+        .id = sqlite3_column_int64(statement, 0),
+        .parent_id = sqlite3_column_type(statement, 1) == SQLITE_NULL
+            ? 0 : sqlite3_column_int64(statement, 1),
+        .base_model_revision = column_text(statement, 2),
+        .adapter_path = std::filesystem::path(
+            utf8::utf8to16(column_text(statement, 3))),
+        .output_model_path = std::filesystem::path(
+            utf8::utf8to16(column_text(statement, 4))),
+        .completed_at_utc = column_text(statement, 5),
+        .record_count = static_cast<std::size_t>(sqlite3_column_int64(statement, 6)),
+        .cumulative_record_count = static_cast<std::size_t>(
+            sqlite3_column_int64(statement, 7)),
+        .optimizer_steps = sqlite3_column_int64(statement, 8),
+        .rank = sqlite3_column_int(statement, 9),
+        .alpha = sqlite3_column_double(statement, 10),
+        .dropout = sqlite3_column_double(statement, 11),
+        .target_modules = utf8::utf8to16(column_text(statement, 12)),
+    };
+}
+
+constexpr const char* select_lora_training_run =
+    "SELECT id,parent_id,base_model_revision,adapter_path,output_model_path,"
+    "completed_at_utc,record_count,cumulative_record_count,optimizer_steps,"
+    "rank,alpha,dropout,target_modules FROM lora_training_runs ";
+
+}  // namespace
+
+std::optional<LoraTrainingRun>
+TrainingDataWriter::latest_lora_training_run() const {
+    Database database(database_path_);
+    const std::string sql = std::string(select_lora_training_run) +
+        "ORDER BY id DESC LIMIT 1";
+    Statement select(database.get(), sql.c_str());
+    if (!select.next()) return std::nullopt;
+    return read_lora_training_run(select.get());
+}
+
+std::vector<LoraTrainingRun>
+TrainingDataWriter::lora_training_history() const noexcept {
+    try {
+        Database database(database_path_);
+        const std::string sql = std::string(select_lora_training_run) +
+            "ORDER BY id";
+        Statement select(database.get(), sql.c_str());
+        std::vector<LoraTrainingRun> result;
+        while (select.next()) result.push_back(read_lora_training_run(select.get()));
+        return result;
+    } catch (const std::exception& error) {
+        std::cerr << "[ERR] unable to read LoRA training history: "
+                  << error.what() << '\n';
+        return {};
+    }
+}
+
+bool TrainingDataWriter::complete_lora_training(
+    const LoraTrainingRun& run,
+    const std::vector<std::u16string>& trained_event_ids) noexcept {
+    try {
+        Database database(database_path_);
+        database.execute("BEGIN IMMEDIATE");
+        try {
+            Statement insert(
+                database.get(),
+                "INSERT INTO lora_training_runs("
+                "parent_id,base_model_revision,adapter_path,output_model_path,"
+                "completed_at_utc,record_count,cumulative_record_count,optimizer_steps,"
+                "rank,alpha,dropout,target_modules) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
+            if (run.parent_id == 0) insert.bind_null(1);
+            else insert.bind_integer(1, run.parent_id);
+            insert.bind_text(2, run.base_model_revision);
+            insert.bind_text(3, utf8::utf16to8(run.adapter_path.u16string()));
+            insert.bind_text(4, utf8::utf16to8(run.output_model_path.u16string()));
+            insert.bind_text(5, run.completed_at_utc);
+            insert.bind_integer(6, static_cast<sqlite3_int64>(run.record_count));
+            insert.bind_integer(7, static_cast<sqlite3_int64>(run.cumulative_record_count));
+            insert.bind_integer(8, run.optimizer_steps);
+            insert.bind_integer(9, run.rank);
+            insert.bind_real(10, run.alpha);
+            insert.bind_real(11, run.dropout);
+            insert.bind_text(12, utf8::utf16to8(run.target_modules));
+            insert.execute();
+
+            database.execute(
+                "CREATE TEMP TABLE IF NOT EXISTS selected_training_events ("
+                "event_id TEXT PRIMARY KEY)");
+            database.execute("DELETE FROM selected_training_events");
+            Statement insert_event(
+                database.get(),
+                "INSERT OR IGNORE INTO selected_training_events(event_id) VALUES (?)");
+            for (const auto& id : trained_event_ids) {
+                insert_event.bind_text(1, utf8::utf16to8(id));
+                insert_event.execute();
+                insert_event.reset();
+            }
+            Statement update(
+                database.get(),
+                "UPDATE training_commits SET training_state='trained' "
+                "WHERE training_state='pending' AND event_id IN "
+                "(SELECT event_id FROM selected_training_events)");
+            update.execute();
+            const auto changed = sqlite3_changes(database.get());
+            if (changed != static_cast<int>(trained_event_ids.size())) {
+                throw std::runtime_error("training record count changed before completion");
+            }
+            database.execute("COMMIT");
+            publish_pending_delta(-static_cast<std::ptrdiff_t>(changed));
+            return true;
+        } catch (...) {
+            try { database.execute("ROLLBACK"); } catch (...) {}
+            throw;
+        }
+    } catch (const std::exception& error) {
+        std::cerr << "[ERR] unable to complete LoRA training: "
+                  << error.what() << '\n';
+        return false;
+    }
 }
 
 bool TrainingDataWriter::mark_records(

@@ -16,12 +16,14 @@
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <format>
 #include <iomanip>
 #include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -55,6 +57,7 @@ namespace {
 using namespace winrt::Windows::UI::Text;
 using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Controls;
+using namespace winrt::Windows::UI::Xaml::Controls::Primitives;
 using namespace winrt::Windows::UI::Xaml::Media;
 
 constexpr wchar_t window_class_name[] = L"LlavonImeSettingsWindow";
@@ -75,6 +78,22 @@ TextBlock make_text(const wchar_t* value, double size, FontWeight weight = FontW
     block.FontWeight(weight);
     block.TextWrapping(TextWrapping::Wrap);
     return block;
+}
+
+std::wstring utc8_timestamp(std::u16string_view value) {
+    const std::string source = utf8::utf16to8(std::u16string(value));
+    std::chrono::sys_time<std::chrono::milliseconds> utc;
+    std::istringstream input(source);
+    std::chrono::from_stream(input, "%FT%TZ", utc);
+    if (input.fail()) {
+        std::wstring fallback;
+        fallback.reserve(value.size());
+        std::ranges::transform(value, std::back_inserter(fallback),
+            [](char16_t character) { return static_cast<wchar_t>(character); });
+        return fallback;
+    }
+    return std::format(L"{:%Y/%m/%d %H:%M}",
+        std::chrono::floor<std::chrono::minutes>(utc + std::chrono::hours{8}));
 }
 
 winrt::Windows::Foundation::IInspectable load_xaml_resource(int id) {
@@ -838,6 +857,7 @@ void SettingsWindow::show_lora_training_dialog() {
         Button previous_page{nullptr};
         Button next_page{nullptr};
         Button training_data_button{nullptr};
+        Button training_history_button{nullptr};
         StackPanel training_data_page{nullptr};
         ScrollViewer main_page{nullptr};
         bool selecting_training_data = false;
@@ -899,6 +919,101 @@ void SettingsWindow::show_lora_training_dialog() {
     state->cancel = named<Button>(dialog_root, L"CancelModelButton");
     state->training_summary = named<TextBlock>(dialog_root, L"TrainingSummary");
     state->training_data_button = named<Button>(dialog_root, L"TrainingDataButton");
+    state->training_history_button = named<Button>(dialog_root, L"TrainingHistoryButton");
+
+    state->training_history_button.Click([this, state](const auto&, const auto&) {
+        std::size_t count = 0;
+        const auto callback = configuration_.get_lora_history_callback;
+        const std::int32_t count_result = callback
+            ? callback(configuration_.get_lora_history_context, nullptr, 0, &count)
+            : ERROR_INVALID_FUNCTION;
+        std::vector<llavon_settings_lora_history_item> history(count);
+        const std::int32_t load_result = count_result == ERROR_SUCCESS
+            ? callback(configuration_.get_lora_history_context, history.data(),
+                       history.size(), &count)
+            : count_result;
+
+        StackPanel content;
+        content.Width(360);
+        content.Spacing(12);
+        content.Children().Append(make_text(
+            L"訓練歷程", 16, FontWeights::SemiBold()));
+
+        StackPanel timeline;
+        timeline.Spacing(0);
+        const bool dark = system_uses_dark_theme();
+        const auto accent = dark ? solid_brush(96, 205, 255)
+                                 : solid_brush(0, 120, 212);
+        const auto muted = dark ? solid_brush(96, 96, 96)
+                                : solid_brush(190, 190, 190);
+
+        const auto append_timeline_item = [&](const std::wstring& title,
+                                               const std::wstring& detail,
+                                               bool last) {
+            Grid row;
+            row.ColumnDefinitions().Append(ColumnDefinition{});
+            row.ColumnDefinitions().GetAt(0).Width(GridLength{24, GridUnitType::Pixel});
+            row.ColumnDefinitions().Append(ColumnDefinition{});
+            row.ColumnDefinitions().GetAt(1).Width(GridLength{1, GridUnitType::Star});
+
+            StackPanel rail;
+            rail.HorizontalAlignment(HorizontalAlignment::Center);
+            Border node;
+            node.Width(11);
+            node.Height(11);
+            node.CornerRadius(CornerRadius{6, 6, 6, 6});
+            node.Background(accent);
+            rail.Children().Append(node);
+            if (!last) {
+                Border line;
+                line.Width(2);
+                line.Height(detail.empty() ? 31 : 47);
+                line.Background(muted);
+                rail.Children().Append(line);
+            }
+            Grid::SetColumn(rail, 0);
+            row.Children().Append(rail);
+
+            StackPanel labels;
+            labels.Margin(Thickness{8.0, 0.0, 0.0, last ? 0.0 : 10.0});
+            labels.Children().Append(make_text(
+                title.c_str(), body_text_size, FontWeights::SemiBold()));
+            if (!detail.empty()) {
+                labels.Children().Append(make_text(
+                    detail.c_str(), caption_text_size));
+            }
+            Grid::SetColumn(labels, 1);
+            row.Children().Append(labels);
+            timeline.Children().Append(row);
+        };
+
+        if (load_result != ERROR_SUCCESS || count == 0) {
+            append_timeline_item(L"Base model", L"", false);
+            append_timeline_item(L"尚無訓練紀錄", L"", true);
+        } else {
+            append_timeline_item(L"Base model", L"", false);
+            for (std::size_t index = 0; index < count; ++index) {
+                const auto& item = history[index];
+                const std::wstring title = item.completed_at_utc
+                    ? utc8_timestamp(item.completed_at_utc)
+                    : std::wstring{};
+                const std::wstring detail = std::format(
+                    L"新增 {} 筆　累計 {} 筆　{} steps",
+                    item.record_count, item.cumulative_record_count,
+                    item.optimizer_steps);
+                append_timeline_item(title, detail, index + 1 == count);
+            }
+        }
+        content.Children().Append(timeline);
+        ScrollViewer scroller;
+        scroller.MaxHeight(440);
+        scroller.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
+        scroller.Content(content);
+        Flyout flyout;
+        flyout.Content(scroller);
+        flyout.Placement(FlyoutPlacementMode::BottomEdgeAlignedRight);
+        flyout.ShowAt(state->training_history_button);
+    });
 
     if (state->items.empty()) {
         named<TextBlock>(dialog_root, L"EmptyTrainingItems").Visibility(Visibility::Visible);

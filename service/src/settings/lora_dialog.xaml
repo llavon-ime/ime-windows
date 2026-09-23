@@ -19,11 +19,15 @@
           </StackPanel>
         </Grid>
       </Border>
-      <StackPanel Orientation="Horizontal" Spacing="8">
-        <Button x:Name="CheckModelButton" Content="檢查更新" MinHeight="32"/>
-        <Button x:Name="DownloadModelButton" Content="下載模型" MinHeight="32"/>
-        <Button x:Name="CancelModelButton" Content="取消下載" MinHeight="32" Visibility="Collapsed"/>
-      </StackPanel>
+      <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+          <Button x:Name="CheckModelButton" Content="檢查更新" MinHeight="32"/>
+          <Button x:Name="DownloadModelButton" Content="下載模型" MinHeight="32"/>
+          <Button x:Name="CancelModelButton" Content="取消下載" MinHeight="32" Visibility="Collapsed"/>
+        </StackPanel>
+        <Button x:Name="TrainingHistoryButton" Grid.Column="1" Content="訓練歷程" MinHeight="32"/>
+      </Grid>
       <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">

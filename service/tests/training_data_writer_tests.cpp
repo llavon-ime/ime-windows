@@ -167,6 +167,27 @@ int main() {
             writer.pending_items().size() != 1) return 10;
         if (writer.pending_count() != 1 ||
             changed_counts != std::vector<std::size_t>{4, 2, 1}) return 17;
+        const llavon::service::LoraTrainingRun run{
+            .base_model_revision = "0123456789012345678901234567890123456789",
+            .adapter_path = path.parent_path() / L"adapter",
+            .output_model_path = path.parent_path() / L"personalized.gguf",
+            .completed_at_utc = "2026-09-24T01:02:03.004Z",
+            .record_count = 1,
+            .cumulative_record_count = 1,
+            .optimizer_steps = 5,
+            .rank = 8,
+            .alpha = 16,
+            .target_modules = u"q_proj,v_proj",
+        };
+        if (!writer.complete_lora_training(run, {u"late:1"})) return 20;
+        const auto history = writer.lora_training_history();
+        const auto latest = writer.latest_lora_training_run();
+        if (history.size() != 1 || !latest || latest->id != history[0].id ||
+            latest->record_count != 1 || latest->cumulative_record_count != 1 ||
+            latest->optimizer_steps != 5 || latest->rank != 8 ||
+            latest->target_modules != u"q_proj,v_proj") return 21;
+        if (writer.pending_count() != 0 ||
+            changed_counts != std::vector<std::size_t>{4, 2, 1, 0}) return 22;
     }
     sqlite3* database = nullptr;
     if (sqlite3_open16(path.c_str(), &database) != SQLITE_OK) return 11;
@@ -187,8 +208,7 @@ int main() {
             sqlite3_column_text(statement, 0));
         const int count = sqlite3_column_int(statement, 1);
         saw_excluded = saw_excluded || (state == "excluded" && count == 2);
-        saw_trained = saw_trained || (state == "trained" && count == 1);
-        saw_pending = saw_pending || (state == "pending" && count == 1);
+        saw_trained = saw_trained || (state == "trained" && count == 2);
     }
     sqlite3_finalize(statement);
     sqlite3_close(database);
@@ -199,6 +219,6 @@ int main() {
     auto shm_path = path;
     shm_path += L"-shm";
     DeleteFileW(shm_path.c_str());
-    if (!saw_excluded || !saw_trained || !saw_pending) return 13;
+    if (!saw_excluded || !saw_trained || saw_pending) return 13;
     return 0;
 }
