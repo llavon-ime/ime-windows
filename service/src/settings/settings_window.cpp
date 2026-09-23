@@ -33,7 +33,9 @@
 #include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/Windows.UI.Xaml.Automation.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.UI.Xaml.Data.h>
 #include <winrt/Windows.UI.Xaml.Input.h>
+#include <winrt/Windows.UI.Xaml.Markup.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.h>
@@ -905,7 +907,11 @@ void SettingsWindow::show_lora_training_dialog() {
 
     struct DialogState {
         ContentDialog dialog{nullptr};
-        std::vector<std::pair<CheckBox, std::u16string>> items;
+        std::vector<std::u16string> item_ids;
+        ListView training_items{nullptr};
+        TextBlock training_summary{nullptr};
+        Button training_data_button{nullptr};
+        Flyout training_data_flyout{nullptr};
         TextBox rank{nullptr};
         TextBox alpha{nullptr};
         TextBox dropout{nullptr};
@@ -925,63 +931,124 @@ void SettingsWindow::show_lora_training_dialog() {
         ComboBox dtype{nullptr};
         ToggleSwitch shuffle{nullptr};
         ProgressBar progress{nullptr};
+        ProgressBar download_progress{nullptr};
         TextBlock status{nullptr};
+        Border model_status_card{nullptr};
+        TextBlock model_status_title{nullptr};
+        TextBlock model_status_detail{nullptr};
         Button check_model{nullptr};
         Button download_model{nullptr};
         Button cancel{nullptr};
         Button reload_model{nullptr};
         DispatcherTimer timer{nullptr};
         std::u16string output_model_path;
-        bool has_training_items = false;
+        bool model_available = false;
+        bool busy = false;
     };
 
     auto state = std::make_shared<DialogState>();
     state->dialog = ContentDialog();
-    state->dialog.Title(winrt::box_value(L"使用我的輸入改進模型"));
-    state->dialog.PrimaryButtonText(L"套用並準備訓練");
+    state->dialog.Title(winrt::box_value(L"訓練個人化模型"));
+    state->dialog.PrimaryButtonText(L"開始訓練");
     state->dialog.SecondaryButtonText(L"關閉");
     state->dialog.DefaultButton(ContentDialogButton::Primary);
+    state->dialog.IsPrimaryButtonEnabled(false);
 
     StackPanel content;
-    content.Width(620);
-    content.Spacing(10);
+    content.Width(500);
+    content.Spacing(12);
     content.Children().Append(make_text(
-        L"基礎模型固定使用 tony65535/llavon-ime-llama-250m（約 1 GB，CC-BY-NC-4.0）。只有按下下載時才會取得模型；預設參數來自 step-search-results.md。",
+        L"基礎模型\ntony65535/llavon-ime-llama-250m · 約 1 GB · CC-BY-NC-4.0",
         caption_text_size));
+
+    StackPanel model_status_content;
+    model_status_content.Spacing(4);
+    state->model_status_title = make_text(
+        L"尚未下載", body_text_size, FontWeights::SemiBold());
+    state->model_status_detail = make_text(
+        L"下載模型後才能開始訓練。", caption_text_size);
+    model_status_content.Children().Append(state->model_status_title);
+    model_status_content.Children().Append(state->model_status_detail);
+    state->download_progress = ProgressBar();
+    state->download_progress.Minimum(0);
+    state->download_progress.Maximum(100);
+    state->download_progress.Value(0);
+    state->download_progress.Margin(Thickness{0, 6, 0, 0});
+    state->download_progress.Visibility(Visibility::Collapsed);
+    model_status_content.Children().Append(state->download_progress);
+
+    state->model_status_card = Border();
+    state->model_status_card.Padding(Thickness{12});
+    state->model_status_card.CornerRadius(CornerRadius{8});
+    state->model_status_card.BorderThickness(Thickness{1});
+    state->model_status_card.BorderBrush(
+        system_uses_dark_theme() ? solid_brush(82, 82, 82) : solid_brush(210, 210, 210));
+    state->model_status_card.Background(
+        system_uses_dark_theme() ? solid_brush(45, 45, 45) : solid_brush(247, 247, 247));
+    state->model_status_card.Child(model_status_content);
+    content.Children().Append(state->model_status_card);
 
     StackPanel model_actions;
     model_actions.Orientation(Orientation::Horizontal);
     model_actions.Spacing(8);
     state->check_model = Button();
-    state->check_model.Content(winrt::box_value(L"檢查模型更新"));
+    state->check_model.Content(winrt::box_value(L"檢查更新"));
     state->check_model.MinHeight(control_height);
     model_actions.Children().Append(state->check_model);
     state->download_model = Button();
-    state->download_model.Content(winrt::box_value(L"下載基礎模型（約 1 GB）"));
+    state->download_model.Content(winrt::box_value(L"下載模型"));
     state->download_model.MinHeight(control_height);
     model_actions.Children().Append(state->download_model);
     state->cancel = Button();
-    state->cancel.Content(winrt::box_value(L"取消目前操作"));
+    state->cancel.Content(winrt::box_value(L"取消下載"));
     state->cancel.MinHeight(control_height);
     state->cancel.Visibility(Visibility::Collapsed);
     model_actions.Children().Append(state->cancel);
     content.Children().Append(model_actions);
 
-    content.Children().Append(make_text(
-        L"訓練資料（預設全選）", body_text_size, FontWeights::SemiBold()));
+    Grid training_header;
+    ColumnDefinition training_summary_column;
+    training_summary_column.Width(GridLength{1, GridUnitType::Star});
+    training_header.ColumnDefinitions().Append(training_summary_column);
+    ColumnDefinition training_button_column;
+    training_button_column.Width(GridLength{1, GridUnitType::Auto});
+    training_header.ColumnDefinitions().Append(training_button_column);
+
+    StackPanel training_summary_panel;
+    training_summary_panel.Spacing(2);
+    training_summary_panel.VerticalAlignment(VerticalAlignment::Center);
+    training_summary_panel.Children().Append(make_text(
+        L"訓練資料", body_text_size, FontWeights::SemiBold()));
+    state->training_summary = make_text(L"已選 0 / 0 筆", caption_text_size);
+    training_summary_panel.Children().Append(state->training_summary);
+    training_header.Children().Append(training_summary_panel);
+
+    state->training_data_button = Button();
+    state->training_data_button.Content(winrt::box_value(L"檢視與選擇"));
+    state->training_data_button.MinHeight(control_height);
+    state->training_data_button.VerticalAlignment(VerticalAlignment::Center);
+    Grid::SetColumn(state->training_data_button, 1);
+    training_header.Children().Append(state->training_data_button);
+    content.Children().Append(training_header);
+
     if (configuration_.training_items.empty()) {
         content.Children().Append(make_text(
             L"目前沒有尚未訓練的資料。請先使用輸入法提交一些文字。",
             body_text_size));
-        state->dialog.IsPrimaryButtonEnabled(false);
+        state->training_data_button.IsEnabled(false);
     } else {
-        state->has_training_items = true;
-        StackPanel item_panel;
-        item_panel.Spacing(4);
+        state->training_items = ListView();
+        state->training_items.SelectionMode(ListViewSelectionMode::Multiple);
+        state->training_items.IsMultiSelectCheckBoxEnabled(true);
+        state->training_items.Width(468);
+        state->training_items.Height(360);
+        state->training_items.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+        state->training_items.ItemTemplate(
+            winrt::Windows::UI::Xaml::Markup::XamlReader::Load(
+                LR"(<DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"><TextBlock Text="{Binding}" TextWrapping="WrapWholeWords" Margin="4,6" MaxWidth="410" /></DataTemplate>)")
+                .as<DataTemplate>());
+        state->item_ids.reserve(configuration_.training_items.size());
         for (const auto& item : configuration_.training_items) {
-            CheckBox check;
-            check.IsChecked(true);
-            check.HorizontalAlignment(HorizontalAlignment::Stretch);
             std::u16string label;
             if (!item.context.empty()) {
                 label += item.context;
@@ -994,22 +1061,78 @@ void SettingsWindow::show_lora_training_dialog() {
                 label += u"]";
             }
             if (item.revice) label += u"    （曾選字）";
-            check.Content(winrt::box_value(to_hstring(label)));
-            item_panel.Children().Append(check);
-            state->items.emplace_back(check, item.event_id);
+            state->training_items.Items().Append(winrt::box_value(to_hstring(label)));
+            state->item_ids.push_back(item.event_id);
         }
-        ScrollViewer item_scroll;
-        item_scroll.MaxHeight(220);
-        item_scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
-        item_scroll.Content(item_panel);
-        content.Children().Append(item_scroll);
-        content.Children().Append(make_text(
-            L"未勾選的資料會設為 excluded；曾選字只作標記，注音仍維持原始輸入。",
-            caption_text_size));
+        state->training_items.SelectAll();
+
+        StackPanel flyout_content;
+        flyout_content.Width(500);
+        flyout_content.Spacing(10);
+        flyout_content.Children().Append(make_text(
+            L"選擇訓練資料", section_title_size, FontWeights::SemiBold()));
+        flyout_content.Children().Append(make_text(
+            L"未選取的資料不會加入這次訓練。", caption_text_size));
+
+        StackPanel selection_actions;
+        selection_actions.Orientation(Orientation::Horizontal);
+        selection_actions.Spacing(8);
+        Button select_all;
+        select_all.Content(winrt::box_value(L"全選"));
+        select_all.MinHeight(control_height);
+        selection_actions.Children().Append(select_all);
+        Button clear_all;
+        clear_all.Content(winrt::box_value(L"全部取消"));
+        clear_all.MinHeight(control_height);
+        selection_actions.Children().Append(clear_all);
+        flyout_content.Children().Append(selection_actions);
+        flyout_content.Children().Append(state->training_items);
+
+        Button finish_selection;
+        finish_selection.Content(winrt::box_value(L"完成"));
+        finish_selection.MinWidth(96);
+        finish_selection.MinHeight(control_height);
+        finish_selection.HorizontalAlignment(HorizontalAlignment::Right);
+        flyout_content.Children().Append(finish_selection);
+
+        state->training_data_flyout = Flyout();
+        state->training_data_flyout.Content(flyout_content);
+        select_all.Click([state](const auto&, const auto&) {
+            state->training_items.SelectAll();
+        });
+        clear_all.Click([state](const auto&, const auto&) {
+            state->training_items.DeselectRange(
+                winrt::Windows::UI::Xaml::Data::ItemIndexRange(
+                    0, state->training_items.Items().Size()));
+        });
+        finish_selection.Click([state](const auto&, const auto&) {
+            state->training_data_flyout.Hide();
+        });
+        state->training_data_button.Click([state](const auto&, const auto&) {
+            state->training_data_flyout.ShowAt(state->training_data_button);
+        });
     }
 
+    const auto refresh_training_selection = [state] {
+        const std::uint32_t selected = state->training_items
+            ? state->training_items.SelectedItems().Size()
+            : 0;
+        const std::wstring summary = L"已選 " + std::to_wstring(selected) + L" / " +
+                                     std::to_wstring(state->item_ids.size()) + L" 筆";
+        state->training_summary.Text(summary);
+        state->dialog.IsPrimaryButtonEnabled(
+            !state->busy && state->model_available && selected != 0);
+    };
+    if (state->training_items) {
+        state->training_items.SelectionChanged(
+            [refresh_training_selection](const auto&, const auto&) {
+                refresh_training_selection();
+            });
+    }
+    refresh_training_selection();
+
     content.Children().Append(make_text(
-        L"微調參數", body_text_size, FontWeights::SemiBold()));
+        L"訓練設定", body_text_size, FontWeights::SemiBold()));
     Grid parameters;
     parameters.ColumnSpacing(12);
     ColumnDefinition label_column;
@@ -1147,7 +1270,7 @@ void SettingsWindow::show_lora_training_dialog() {
             : L"模型已完成，但重新載入失敗。");
     });
 
-    const auto refresh_status = [this, state] {
+    const auto refresh_status = [this, state, refresh_training_selection] {
         llavon_settings_lora_status status{};
         const std::int32_t result = configuration_.get_lora_status_callback
             ? configuration_.get_lora_status_callback(
@@ -1165,20 +1288,91 @@ void SettingsWindow::show_lora_training_dialog() {
                           status.stage == LLAVON_SETTINGS_LORA_PREPARING_DATA ||
                           status.stage == LLAVON_SETTINGS_LORA_TRAINING ||
                           status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL;
-        state->progress.Visibility(busy ? Visibility::Visible : Visibility::Collapsed);
+        const bool checking_model =
+            status.stage == LLAVON_SETTINGS_LORA_CHECKING_MODEL;
+        const bool downloading_model =
+            status.stage == LLAVON_SETTINGS_LORA_DOWNLOADING_MODEL;
+        const bool training_busy =
+            status.stage == LLAVON_SETTINGS_LORA_PREPARING_DATA ||
+            status.stage == LLAVON_SETTINGS_LORA_TRAINING ||
+            status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL;
+        state->busy = busy;
+        state->model_available = status.model_available != 0;
+
+        state->progress.Visibility(
+            training_busy ? Visibility::Visible : Visibility::Collapsed);
         state->progress.IsIndeterminate(
-            busy && status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL);
+            training_busy && status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL);
         if (!state->progress.IsIndeterminate()) {
             state->progress.Value(std::clamp(status.progress, 0.0, 1.0) * 100.0);
         }
+
+        state->download_progress.Visibility(
+            checking_model || downloading_model
+                ? Visibility::Visible
+                : Visibility::Collapsed);
+        state->download_progress.IsIndeterminate(checking_model);
+        if (downloading_model) {
+            const double progress = std::clamp(status.progress, 0.0, 1.0) * 100.0;
+            state->download_progress.Value(progress);
+            state->model_status_title.Text(
+                L"正在下載模型… " + std::to_wstring(static_cast<int>(std::lround(progress))) +
+                L"%");
+            state->model_status_detail.Visibility(Visibility::Collapsed);
+        } else if (checking_model) {
+            state->model_status_title.Text(L"正在檢查模型…");
+            state->model_status_detail.Visibility(Visibility::Collapsed);
+        } else if (status.model_available && status.model_update_available) {
+            state->model_status_title.Text(L"有可用更新");
+            state->model_status_detail.Text(L"基礎模型已下載，可以開始訓練。");
+            state->model_status_detail.Visibility(Visibility::Visible);
+        } else if (status.model_available) {
+            state->model_status_title.Text(L"模型已就緒");
+            state->model_status_detail.Text(L"基礎模型已下載，可以開始訓練。");
+            state->model_status_detail.Visibility(Visibility::Visible);
+        } else {
+            state->model_status_title.Text(L"尚未下載");
+            state->model_status_detail.Text(L"下載模型後才能開始訓練。");
+            state->model_status_detail.Visibility(Visibility::Visible);
+        }
+
+        const bool dark = system_uses_dark_theme();
+        if (downloading_model || checking_model) {
+            state->model_status_card.BorderBrush(
+                dark ? solid_brush(76, 134, 196) : solid_brush(0, 120, 212));
+            state->model_status_card.Background(
+                dark ? solid_brush(30, 48, 66) : solid_brush(235, 246, 255));
+        } else if (status.model_available && !status.model_update_available) {
+            state->model_status_card.BorderBrush(
+                dark ? solid_brush(76, 164, 91) : solid_brush(16, 124, 16));
+            state->model_status_card.Background(
+                dark ? solid_brush(29, 53, 34) : solid_brush(236, 249, 238));
+        } else if (status.model_available) {
+            state->model_status_card.BorderBrush(
+                dark ? solid_brush(204, 154, 52) : solid_brush(160, 96, 0));
+            state->model_status_card.Background(
+                dark ? solid_brush(61, 49, 25) : solid_brush(255, 247, 224));
+        } else {
+            state->model_status_card.BorderBrush(
+                dark ? solid_brush(82, 82, 82) : solid_brush(210, 210, 210));
+            state->model_status_card.Background(
+                dark ? solid_brush(45, 45, 45) : solid_brush(247, 247, 247));
+        }
+
         state->check_model.IsEnabled(!busy);
         state->download_model.IsEnabled(!busy);
         state->download_model.Content(winrt::box_value(
-            status.model_update_available ? L"下載模型更新（約 1 GB）"
-                                          : L"下載基礎模型（約 1 GB）"));
-        state->cancel.Visibility(busy ? Visibility::Visible : Visibility::Collapsed);
-        state->dialog.IsPrimaryButtonEnabled(
-            !busy && status.model_available && state->has_training_items);
+            status.model_available && status.model_update_available
+                ? L"更新模型"
+                : L"下載模型"));
+        state->download_model.Visibility(
+            !downloading_model &&
+                    (!status.model_available || status.model_update_available)
+                ? Visibility::Visible
+                : Visibility::Collapsed);
+        state->cancel.Visibility(
+            downloading_model ? Visibility::Visible : Visibility::Collapsed);
+        refresh_training_selection();
         if (status.stage == LLAVON_SETTINGS_LORA_COMPLETED &&
             status.output_model_path && *status.output_model_path) {
             state->output_model_path = status.output_model_path;
@@ -1263,8 +1457,19 @@ void SettingsWindow::show_lora_training_dialog() {
                 }
 
                 std::vector<std::u16string> selected;
-                for (const auto& [check, event_id] : state->items) {
-                    if (check.IsChecked().GetBoolean()) selected.push_back(event_id);
+                if (state->training_items) {
+                    for (const auto& range : state->training_items.SelectedRanges()) {
+                        const std::int32_t first = range.FirstIndex();
+                        const std::int32_t last = first +
+                            static_cast<std::int32_t>(range.Length());
+                        for (std::int32_t index = first; index < last; ++index) {
+                            if (index >= 0 &&
+                                static_cast<std::size_t>(index) < state->item_ids.size()) {
+                                selected.push_back(
+                                    state->item_ids[static_cast<std::size_t>(index)]);
+                            }
+                        }
+                    }
                 }
                 std::vector<const char16_t*> selected_pointers;
                 selected_pointers.reserve(selected.size());
