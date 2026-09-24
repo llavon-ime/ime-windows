@@ -19,6 +19,27 @@ using llavon::service::RawCommitInputEntry;
 using llavon::service::TrainingDataWriter;
 using llavon::service::write_lora_numeric_dataset;
 
+int delete_pending_tests(const std::filesystem::path& path, RawCommitEvent event) {
+    using namespace std::chrono_literals;
+    {
+        TrainingDataWriter writer(path, 10s);
+        writer.configure_password("delete-test");
+        event.session_id = "delete";
+        event.sequence = 1;
+        writer.enqueue(event);
+        event.sequence = 2;
+        writer.enqueue(event);
+        for (int attempt = 0; attempt < 200 && writer.pending_count() != 1; ++attempt) {
+            std::this_thread::sleep_for(5ms);
+        }
+        if (writer.pending_count() != 1 || !writer.delete_pending(u"delete:1")) return 81;
+        if (writer.pending_count() != 0 || !writer.pending_items().empty()) return 82;
+        if (writer.delete_pending(u"delete:1") || writer.delete_pending(u"missing")) return 83;
+    }
+    std::filesystem::remove(path);
+    return 0;
+}
+
 int reset_tests(const std::filesystem::path& path, RawCommitEvent event) {
     using namespace std::chrono_literals;
     const auto model = path.wstring() + L".gguf";
@@ -536,6 +557,9 @@ int main() {
     protection_path += L".protection.sqlite3";
     auto reset_path = path;
     reset_path += L".reset.sqlite3";
+    auto delete_path = path;
+    delete_path += L".delete.sqlite3";
+    if (const int result = delete_pending_tests(delete_path, event); result != 0) return result;
     if (const int result = reset_tests(reset_path, event); result != 0) return result;
     auto correction_path = path;
     correction_path += L".correction.sqlite3";

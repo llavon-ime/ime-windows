@@ -1,16 +1,11 @@
 <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
             Width="480" Spacing="12">
-  <TextBlock Text="未選取的資料不會加入這次訓練。" FontSize="12" TextWrapping="Wrap" />
-  <StackPanel Orientation="Horizontal" Spacing="8">
-    <Button x:Name="SelectAllButton" Content="全選" MinHeight="32" />
-    <Button x:Name="ClearAllButton" Content="全部取消" MinHeight="32" />
-  </StackPanel>
-  <TextBlock x:Name="SelectionCount" FontSize="12" />
+  <TextBlock x:Name="DeleteStatus" FontSize="12" TextWrapping="Wrap" Visibility="Collapsed" />
   <Border x:Name="TrainingItemsBorder" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
           BorderThickness="1" CornerRadius="4">
     <ListView x:Name="TrainingItems" Height="330"
-              SelectionMode="Multiple" IsMultiSelectCheckBoxEnabled="True"
+              SelectionMode="None"
               AutomationProperties.Name="訓練資料"
               HorizontalContentAlignment="Stretch" />
   </Border>

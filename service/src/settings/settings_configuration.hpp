@@ -58,6 +58,8 @@ struct SettingsConfiguration {
     std::vector<TrainingDataOption> training_items;
     llavon_settings_refresh_training_items_callback refresh_training_items_callback = nullptr;
     void* refresh_training_items_context = nullptr;
+    llavon_settings_delete_training_item_callback delete_training_item_callback = nullptr;
+    void* delete_training_item_context = nullptr;
     llavon_settings_get_lora_history_callback get_lora_history_callback = nullptr;
     void* get_lora_history_context = nullptr;
     llavon_settings_protection_callback protection_callback = nullptr;

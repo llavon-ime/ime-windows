@@ -94,6 +94,9 @@ public:
                       llavon_settings_refresh_training_items_callback
                           refresh_training_items_callback,
                       void* refresh_training_items_context,
+                      llavon_settings_delete_training_item_callback
+                          delete_training_item_callback,
+                      void* delete_training_item_context,
                       llavon_settings_get_lora_history_callback
                           get_lora_history_callback,
                       void* get_lora_history_context,
@@ -116,7 +119,8 @@ public:
             (custom_name_count != 0 && !custom_names) || !save_custom_names_callback ||
             !save_width_toggle_callback ||
             (training_item_count != 0 && !training_items) ||
-            !refresh_training_items_callback || !get_lora_history_callback ||
+            !refresh_training_items_callback || !delete_training_item_callback ||
+            !get_lora_history_callback ||
             !start_lora_training_callback ||
             !get_lora_status_callback ||
             !lora_model_action_callback || !cancel_lora_callback) {
@@ -151,6 +155,8 @@ public:
         configuration.start_lora_training_context = start_lora_training_context;
         configuration.refresh_training_items_callback = refresh_training_items_callback;
         configuration.refresh_training_items_context = refresh_training_items_context;
+        configuration.delete_training_item_callback = delete_training_item_callback;
+        configuration.delete_training_item_context = delete_training_item_context;
         configuration.get_lora_history_callback = get_lora_history_callback;
         configuration.get_lora_history_context = get_lora_history_context;
         configuration.get_lora_status_callback = get_lora_status_callback;
@@ -496,7 +502,7 @@ Runtime& runtime() {
 }  // namespace
 }  // namespace llavon::settings
 
-extern "C" int32_t llavon_settings_ui_configure_v2(
+extern "C" int32_t llavon_settings_ui_configure_v3(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
@@ -520,6 +526,8 @@ extern "C" int32_t llavon_settings_ui_configure_v2(
     size_t training_item_count,
     llavon_settings_refresh_training_items_callback refresh_training_items_callback,
     void* refresh_training_items_context,
+    llavon_settings_delete_training_item_callback delete_training_item_callback,
+    void* delete_training_item_context,
     llavon_settings_get_lora_history_callback get_lora_history_callback,
     void* get_lora_history_context,
     llavon_settings_start_lora_training_callback start_lora_training_callback,
@@ -539,7 +547,8 @@ extern "C" int32_t llavon_settings_ui_configure_v2(
         save_custom_names_context, shift_space_width_toggle_enabled,
         save_width_toggle_callback, save_width_toggle_context,
         training_items, training_item_count, refresh_training_items_callback,
-        refresh_training_items_context, get_lora_history_callback,
+        refresh_training_items_context, delete_training_item_callback,
+        delete_training_item_context, get_lora_history_callback,
         get_lora_history_context, start_lora_training_callback,
         start_lora_training_context, get_lora_status_callback,
         get_lora_status_context, lora_model_action_callback,

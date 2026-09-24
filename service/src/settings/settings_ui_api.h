@@ -131,6 +131,8 @@ typedef int32_t (*llavon_settings_start_lora_training_callback)(
 typedef int32_t (*llavon_settings_refresh_training_items_callback)(
     void* context, struct llavon_settings_training_item* items,
     size_t item_capacity, size_t* item_count, const llavon_char16_t* password);
+typedef int32_t (*llavon_settings_delete_training_item_callback)(
+    void* context, const llavon_char16_t* event_id);
 typedef int32_t (*llavon_settings_get_lora_history_callback)(
     void* context, struct llavon_settings_lora_history_item* items,
     size_t item_capacity, size_t* item_count);
@@ -156,7 +158,7 @@ typedef int32_t (*llavon_settings_protection_callback)(
 // Supplies a snapshot of devices and the setting used for the current service
 // process. Strings and the device array are copied before this call returns.
 // This must be called before llavon_settings_ui_start.
-LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v2(
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v3(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
@@ -180,6 +182,8 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v2(
     size_t training_item_count,
     llavon_settings_refresh_training_items_callback refresh_training_items_callback,
     void* refresh_training_items_context,
+    llavon_settings_delete_training_item_callback delete_training_item_callback,
+    void* delete_training_item_context,
     llavon_settings_get_lora_history_callback get_lora_history_callback,
     void* get_lora_history_context,
     llavon_settings_start_lora_training_callback start_lora_training_callback,

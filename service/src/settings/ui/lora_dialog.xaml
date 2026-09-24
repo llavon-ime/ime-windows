@@ -41,9 +41,9 @@
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
           <TextBlock Text="訓練資料" FontSize="14" FontWeight="SemiBold"/>
-          <TextBlock x:Name="TrainingSummary" Text="已選 0 / 0 筆" FontSize="12"/>
+          <TextBlock x:Name="TrainingSummary" Text="共 0 筆" FontSize="12"/>
         </StackPanel>
-        <Button x:Name="TrainingDataButton" Grid.Column="1" Content="檢視與選擇" MinHeight="32" VerticalAlignment="Center"/>
+        <Button x:Name="TrainingDataButton" Grid.Column="1" Content="檢視訓練資料" MinHeight="32" VerticalAlignment="Center"/>
       </Grid>
       <TextBlock x:Name="EmptyTrainingItems" Text="目前沒有尚未訓練的資料。請先使用輸入法提交一些文字。"
                  FontSize="14" TextWrapping="Wrap" Visibility="Collapsed"/>

@@ -68,10 +68,8 @@ constexpr double body_text_size = 14;
 constexpr double caption_text_size = 12;
 constexpr std::size_t training_page_size = 100;
 
-std::wstring training_selection_label(const std::vector<bool>& selected_items) {
-    return L"已選 " + std::to_wstring(std::count(
-        selected_items.begin(), selected_items.end(), true)) +
-        L" / " + std::to_wstring(selected_items.size()) + L" 筆";
+std::wstring training_count_label(std::size_t count) {
+    return L"共 " + std::to_wstring(count) + L" 筆";
 }
 
 SolidColorBrush solid_brush(std::uint8_t red, std::uint8_t green, std::uint8_t blue) {
@@ -865,6 +863,7 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
     dialog.CloseButtonText(L"取消");
     StackPanel content;
     content.Spacing(12);
+    content.Width(400);
     auto description = make_text(setup
         ? L"設定密碼以保護對話資料，如果不知道要設什麼建議 0000。"
         : L"請輸入密碼以解密對話資料。", body_text_size);
@@ -872,6 +871,7 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
     content.Children().Append(description);
     auto note = make_text(L"密碼不會被系統保存，忘記將無法還原。", caption_text_size);
     note.TextWrapping(TextWrapping::Wrap);
+    note.Visibility(setup ? Visibility::Visible : Visibility::Collapsed);
     content.Children().Append(note);
     PasswordBox password;
     password.PlaceholderText(L"密碼");
@@ -880,49 +880,59 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
     confirmation.PlaceholderText(L"再次輸入密碼");
     confirmation.Visibility(setup ? Visibility::Visible : Visibility::Collapsed);
     content.Children().Append(confirmation);
-    struct PasswordDialogState { bool setup; bool confirming_reset = false; };
+    struct PasswordDialogState {
+        bool setup;
+        bool confirming_reset = false;
+        bool input_enabled = true;
+        winrt::hstring previous_status;
+    };
     auto dialog_state = std::make_shared<PasswordDialogState>(PasswordDialogState{setup});
     Button reset;
     reset.Content(winrt::box_value(L"忘記密碼，清除所有對話資料"));
-    content.Children().Append(reset);
+    reset.HorizontalAlignment(HorizontalAlignment::Right);
+    reset.Visibility(setup ? Visibility::Collapsed : Visibility::Visible);
     TextBlock status;
     status.TextWrapping(TextWrapping::Wrap);
     content.Children().Append(status);
-    // The second click is an explicit destructive-action confirmation. It does
-    // not require the forgotten password and never touches model files.
-    reset.Click([this, weak_dialog = winrt::make_weak(dialog), dialog_state, password, confirmation, description, status](const auto& sender, const auto&) {
-        const auto reset = sender.as<Button>();
+    content.Children().Append(reset);
+    reset.Click([weak_dialog = winrt::make_weak(dialog), dialog_state, password,
+                 confirmation, description, note, status](const auto& sender, const auto&) {
         const auto dialog = weak_dialog.get();
         if (!dialog) return;
-        if (!dialog_state->confirming_reset) {
-            dialog_state->confirming_reset = true;
-            dialog.IsPrimaryButtonEnabled(false);
-            reset.Content(winrt::box_value(L"確認清除所有對話資料"));
-            status.Text(L"所有對話記錄及訓練暫存資料將永久刪除，LoRA 模型檔會保留。請再次按下確認清除，或按取消離開。");
-            return;
-        }
-        std::size_t result = 0;
-        const auto callback = configuration_.protection_callback;
-        if (!callback || callback(configuration_.protection_context,
-                LLAVON_PROTECTION_RESET, nullptr, &result) != ERROR_SUCCESS) {
-            status.Text(L"清除未完成，請先結束訓練並確認檔案權限後重試。LoRA 模型檔不會被刪除。");
-            return;
-        }
-        if (const auto close = close_lora_dialog_) close();
-        configuration_.training_items.clear();
-        set_pending_count(0);
-        refresh_protection_controls();
+        dialog_state->confirming_reset = true;
+        dialog_state->input_enabled = dialog.IsPrimaryButtonEnabled();
+        dialog_state->previous_status = status.Text();
+        dialog.Title(winrt::box_value(L"清除所有對話資料？"));
+        dialog.PrimaryButtonText(L"確認清除");
+        dialog.CloseButtonText(L"返回");
+        dialog.IsPrimaryButtonEnabled(true);
+        description.Text(L"所有對話記錄及訓練暫存資料將永久刪除，無法復原。LoRA 模型檔及訓練歷程會保留。清除後可重新設定密碼。");
         password.Password(L"");
         confirmation.Password(L"");
-        confirmation.Visibility(Visibility::Visible);
-        dialog_state->setup = true;
+        password.Visibility(Visibility::Collapsed);
+        confirmation.Visibility(Visibility::Collapsed);
+        note.Visibility(Visibility::Collapsed);
+        sender.as<Button>().Visibility(Visibility::Collapsed);
+        status.Text(L"");
+    });
+    dialog.CloseButtonClick([dialog_state, password, confirmation, description, note, reset, status](
+        const auto& sender, const ContentDialogButtonClickEventArgs& args) {
+        if (!dialog_state->confirming_reset) return;
+        args.Cancel(true);
         dialog_state->confirming_reset = false;
-        dialog.Title(winrt::box_value(L"設定密碼"));
-        dialog.PrimaryButtonText(L"設定並開啟");
-        dialog.IsPrimaryButtonEnabled(true);
-        description.Text(L"設定密碼以保護對話資料，如果不知道要設什麼建議 0000。");
-        reset.Content(winrt::box_value(L"忘記密碼，清除所有對話資料"));
-        status.Text(L"已清除所有對話資料，LoRA 模型檔已保留。請設定新密碼。");
+        const auto dialog = sender.as<ContentDialog>();
+        dialog.Title(winrt::box_value(dialog_state->setup ? L"設定密碼" : L"輸入密碼以繼續"));
+        dialog.PrimaryButtonText(dialog_state->setup ? L"設定並開啟" : L"繼續");
+        dialog.CloseButtonText(L"取消");
+        dialog.IsPrimaryButtonEnabled(dialog_state->input_enabled);
+        description.Text(dialog_state->setup
+            ? L"設定密碼以保護對話資料，如果不知道要設什麼建議 0000。"
+            : L"請輸入密碼以解密對話資料。");
+        password.Visibility(Visibility::Visible);
+        confirmation.Visibility(dialog_state->setup ? Visibility::Visible : Visibility::Collapsed);
+        note.Visibility(dialog_state->setup ? Visibility::Visible : Visibility::Collapsed);
+        reset.Visibility(dialog_state->setup ? Visibility::Collapsed : Visibility::Visible);
+        status.Text(dialog_state->previous_status);
         password.Focus(FocusState::Programmatic);
     });
     dialog.Content(content);
@@ -941,8 +951,40 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
                         L" 個檔案；這些暫存資料不會再用於訓練。");
         }
     });
-    dialog.PrimaryButtonClick([this, dialog_state, password, confirmation, status, action = std::move(action)](
-        const auto&, const ContentDialogButtonClickEventArgs& args) {
+    dialog.PrimaryButtonClick([this, dialog_state, password, confirmation, description, note, reset, status, action = std::move(action)](
+        const auto& sender, const ContentDialogButtonClickEventArgs& args) {
+        if (dialog_state->confirming_reset) {
+            args.Cancel(true);
+            const auto dialog = sender.as<ContentDialog>();
+            std::size_t result = 0;
+            const auto callback = configuration_.protection_callback;
+            if (!callback || callback(configuration_.protection_context,
+                    LLAVON_PROTECTION_RESET, nullptr, &result) != ERROR_SUCCESS) {
+                status.Text(L"清除未完成，請先結束訓練並確認檔案權限後重試。LoRA 模型檔不會被刪除。");
+                return;
+            }
+            if (const auto close = close_lora_dialog_) close();
+            configuration_.training_items.clear();
+            set_pending_count(0);
+            refresh_protection_controls();
+            password.Password(L"");
+            confirmation.Password(L"");
+            confirmation.Visibility(Visibility::Visible);
+            dialog_state->setup = true;
+            dialog_state->confirming_reset = false;
+            dialog.Title(winrt::box_value(L"設定密碼"));
+            dialog.PrimaryButtonText(L"設定並開啟");
+            dialog.IsPrimaryButtonEnabled(true);
+            dialog.CloseButtonText(L"取消");
+            password.Visibility(Visibility::Visible);
+            note.Visibility(Visibility::Visible);
+            reset.Visibility(Visibility::Collapsed);
+            description.Text(L"設定密碼以保護對話資料，如果不知道要設什麼建議 0000。");
+            reset.Content(winrt::box_value(L"忘記密碼，清除所有對話資料"));
+            status.Text(L"已清除所有對話資料，LoRA 模型檔已保留。請設定新密碼。");
+            password.Focus(FocusState::Programmatic);
+            return;
+        }
         auto secret = to_utf16(password.Password());
         auto repeated = to_utf16(confirmation.Password());
         const bool valid = !dialog_state->confirming_reset && !secret.empty() &&
@@ -1011,13 +1053,12 @@ void SettingsWindow::show_lora_training_dialog() {
         Button primary_button{nullptr};
         Button secondary_button{nullptr};
         std::vector<TrainingDataOption> items;
-        std::vector<std::u16string> item_ids;
-        std::vector<bool> selected_items;
+        std::vector<bool> deleted_items;
+        std::size_t active_count = 0;
         std::size_t current_page = 0;
-        bool updating_page = false;
         ListView training_items{nullptr};
         TextBlock training_summary{nullptr};
-        TextBlock selection_count{nullptr};
+        TextBlock delete_status{nullptr};
         TextBlock page_summary{nullptr};
         Button previous_page{nullptr};
         Button next_page{nullptr};
@@ -1067,7 +1108,8 @@ void SettingsWindow::show_lora_training_dialog() {
 
     auto state = std::make_shared<DialogState>();
     state->items = configuration_.training_items;
-    state->selected_items.assign(state->items.size(), true);
+    state->deleted_items.assign(state->items.size(), false);
+    state->active_count = state->items.size();
     state->overlay = load_xaml_resource(IDR_LORA_DIALOG_XAML).as<Grid>();
     const auto dialog_root = state->overlay.as<FrameworkElement>();
     state->content = named<ContentControl>(dialog_root, L"DialogContent");
@@ -1181,6 +1223,8 @@ void SettingsWindow::show_lora_training_dialog() {
         flyout.ShowAt(state->training_history_button);
     });
 
+    const auto refresh_training_count =
+        std::make_shared<std::function<void()>>();
     if (state->items.empty()) {
         named<TextBlock>(dialog_root, L"EmptyTrainingItems").Visibility(Visibility::Visible);
         state->training_data_button.IsEnabled(false);
@@ -1195,65 +1239,84 @@ void SettingsWindow::show_lora_training_dialog() {
         state->training_items.Resources().Insert(
             winrt::box_value(L"ListViewItemBackground"),
             dark_selection ? solid_brush(39, 39, 39) : solid_brush(243, 244, 246));
-        state->training_items.Resources().Insert(
-            winrt::box_value(L"ListViewItemBackgroundSelected"),
-            dark_selection ? solid_brush(44, 44, 44) : solid_brush(255, 255, 255));
-        state->training_items.Resources().Insert(
-            winrt::box_value(L"ListViewItemBackgroundSelectedPointerOver"),
-            dark_selection ? solid_brush(49, 49, 49) : solid_brush(249, 251, 253));
-        state->training_items.Resources().Insert(
-            winrt::box_value(L"ListViewItemBackgroundSelectedPressed"),
-            dark_selection ? solid_brush(53, 53, 53) : solid_brush(244, 248, 252));
-        state->item_ids.reserve(state->items.size());
-        for (const auto& item : state->items) {
-            state->item_ids.push_back(item.event_id);
-        }
         state->page_summary = named<TextBlock>(state->training_data_page, L"PageSummary");
-        state->selection_count = named<TextBlock>(
-            state->training_data_page, L"SelectionCount");
+        state->delete_status = named<TextBlock>(
+            state->training_data_page, L"DeleteStatus");
         state->previous_page =
             named<Button>(state->training_data_page, L"PreviousPageButton");
         state->next_page = named<Button>(state->training_data_page, L"NextPageButton");
 
         const auto render_page = std::make_shared<std::function<void()>>();
-        *render_page = [state, dark_selection] {
-            state->updating_page = true;
+        *render_page = [this, state, dark_selection, refresh_training_count] {
             state->training_items.Items().Clear();
             const std::size_t begin = state->current_page * training_page_size;
             const std::size_t end = std::min(
                 begin + training_page_size, state->items.size());
             for (std::size_t index = begin; index < end; ++index) {
                 const auto& item = state->items[index];
+                Grid row;
+                ColumnDefinition action_column;
+                action_column.Width(GridLength{44, GridUnitType::Pixel});
+                row.ColumnDefinitions().Append(action_column);
+                row.ColumnDefinitions().Append(ColumnDefinition{});
+                Button remove;
+                remove.Width(32);
+                remove.Height(32);
+                remove.Padding(Thickness{0});
+                remove.VerticalAlignment(VerticalAlignment::Center);
+                FontIcon icon;
+                icon.FontFamily(FontFamily(L"Segoe Fluent Icons"));
+                icon.Glyph(L"\uE74D");
+                icon.FontSize(16);
+                remove.Content(icon);
+                Automation::AutomationProperties::SetName(
+                    remove, L"刪除訓練資料");
+                ToolTipService::SetToolTip(remove, winrt::box_value(L"刪除訓練資料"));
+                Grid::SetColumn(remove, 0);
+                row.Children().Append(remove);
+                FrameworkElement content{nullptr};
                 try {
                     auto root = load_xaml_resource(
                         IDR_LORA_TRAINING_ITEM_XAML).as<Grid>();
                     render_training_item(item, root, root, dark_selection);
-                    root.Tag(winrt::box_value(static_cast<std::uint64_t>(index)));
                     Automation::AutomationProperties::SetName(
                         root, to_hstring(item.answer));
-                    state->training_items.Items().Append(root);
+                    content = root;
                 } catch (...) {
                     TextBlock fallback;
                     fallback.Text(to_hstring(item.answer));
                     fallback.FontSize(18);
                     fallback.Padding(Thickness{12, 10, 12, 10});
                     fallback.TextWrapping(TextWrapping::WrapWholeWords);
-                    fallback.Tag(winrt::box_value(static_cast<std::uint64_t>(index)));
-                    state->training_items.Items().Append(fallback);
+                    content = fallback;
                 }
-            }
-            for (std::size_t local = 0; local < end - begin;) {
-                while (local < end - begin &&
-                       !state->selected_items[begin + local]) ++local;
-                const std::size_t first = local;
-                while (local < end - begin &&
-                       state->selected_items[begin + local]) ++local;
-                if (first != local) {
-                    state->training_items.SelectRange(
-                        winrt::Microsoft::UI::Xaml::Data::ItemIndexRange(
-                            static_cast<std::int32_t>(first),
-                            static_cast<std::uint32_t>(local - first)));
+                Grid::SetColumn(content, 1);
+                row.Children().Append(content);
+                if (state->deleted_items[index]) {
+                    row.Opacity(0.4);
+                    remove.IsEnabled(false);
                 }
+                remove.Click([this, state, index, row, remove, refresh_training_count]
+                    (const auto&, const auto&) {
+                    if (state->closed || state->deleted_items[index]) return;
+                    const auto callback = configuration_.delete_training_item_callback;
+                    const auto result = callback
+                        ? callback(configuration_.delete_training_item_context,
+                                   state->items[index].event_id.c_str())
+                        : ERROR_INVALID_FUNCTION;
+                    if (result != ERROR_SUCCESS) {
+                        state->delete_status.Text(L"刪除失敗，請稍後再試。");
+                        state->delete_status.Visibility(Visibility::Visible);
+                        return;
+                    }
+                    state->delete_status.Visibility(Visibility::Collapsed);
+                    state->deleted_items[index] = true;
+                    --state->active_count;
+                    row.Opacity(0.4);
+                    remove.IsEnabled(false);
+                    (*refresh_training_count)();
+                });
+                state->training_items.Items().Append(row);
             }
             const std::size_t page_count =
                 (state->items.size() + training_page_size - 1) /
@@ -1262,13 +1325,9 @@ void SettingsWindow::show_lora_training_dialog() {
                 L"第 " + std::to_wstring(state->current_page + 1) + L" / " +
                 std::to_wstring(page_count) + L" 頁（" +
                 std::to_wstring(begin + 1) + L"–" + std::to_wstring(end) +
-                L"，共 " + std::to_wstring(state->items.size()) + L" 筆）");
+                L"）");
             state->previous_page.IsEnabled(state->current_page != 0);
             state->next_page.IsEnabled(state->current_page + 1 < page_count);
-            const auto selection_label = training_selection_label(state->selected_items);
-            state->selection_count.Text(selection_label);
-            state->training_summary.Text(selection_label);
-            state->updating_page = false;
         };
         state->previous_page.Click(
             [state, render_page](const auto&, const auto&) {
@@ -1283,37 +1342,30 @@ void SettingsWindow::show_lora_training_dialog() {
                 if (state->current_page + 1 < page_count) ++state->current_page;
                 (*render_page)();
             });
-        named<Button>(state->training_data_page, L"SelectAllButton").Click(
-            [state, render_page](const auto&, const auto&) {
-                std::fill(state->selected_items.begin(), state->selected_items.end(), true);
-                (*render_page)();
-            });
-        named<Button>(state->training_data_page, L"ClearAllButton").Click(
-            [state, render_page](const auto&, const auto&) {
-                std::fill(state->selected_items.begin(), state->selected_items.end(), false);
-                (*render_page)();
-            });
         (*render_page)();
         state->training_data_button.Click([this, state, render_page](const auto&, const auto&) {
             show_password_dialog(false, [this, state, render_page](const char16_t* password) {
                 if (state->closed || !load_training_items(password)) return false;
-                for (auto& item : state->items) {
+                for (std::size_t index = 0; index < state->items.size(); ++index) {
+                    if (state->deleted_items[index]) continue;
+                    auto& item = state->items[index];
                     const auto found = std::find_if(configuration_.training_items.begin(),
                         configuration_.training_items.end(), [&](const auto& loaded) {
                             return loaded.event_id == item.event_id;
                     });
-                if (found == configuration_.training_items.end()) return false;
-                item = *found;
-            }
-            configuration_.training_items.clear();
-            (*render_page)();
-            state->selecting_training_data = true;
-            state->content.Content(state->training_data_page);
-            state->title.Text(L"選擇訓練資料");
-            state->primary_button.Content(winrt::box_value(L"完成"));
-            state->secondary_button.Visibility(Visibility::Collapsed);
-            state->primary_button.IsEnabled(true);
-            return true;
+                    if (found == configuration_.training_items.end()) return false;
+                    item = *found;
+                }
+                configuration_.training_items.clear();
+                (*render_page)();
+                state->selecting_training_data = true;
+                state->content.Content(state->training_data_page);
+                state->title.Text(L"檢視訓練資料");
+                state->primary_button.Content(winrt::box_value(L"完成"));
+                Grid::SetColumnSpan(state->primary_button, 2);
+                state->secondary_button.Visibility(Visibility::Collapsed);
+                state->primary_button.IsEnabled(true);
+                return true;
             });
         });
     }
@@ -1367,8 +1419,7 @@ void SettingsWindow::show_lora_training_dialog() {
             return;
         }
 
-        const std::uint64_t selected = static_cast<std::uint64_t>(std::count(
-            state->selected_items.begin(), state->selected_items.end(), true));
+        const std::uint64_t selected = static_cast<std::uint64_t>(state->active_count);
         const std::uint64_t batch = static_cast<std::uint64_t>(*batch_size);
         const std::uint64_t gradient = static_cast<std::uint64_t>(*accumulation);
         const std::uint64_t batches = (selected + batch - 1) / batch;
@@ -1383,45 +1434,19 @@ void SettingsWindow::show_lora_training_dialog() {
     };
 
     const auto refresh_training_selection = [state, refresh_estimated_steps] {
-        const std::size_t selected = static_cast<std::size_t>(std::count(
-            state->selected_items.begin(), state->selected_items.end(), true));
-        const auto selection_label = training_selection_label(state->selected_items);
-        state->training_summary.Text(selection_label);
-        if (state->selection_count) {
-            state->selection_count.Text(selection_label);
-        }
+        state->training_summary.Text(training_count_label(state->active_count));
+        state->training_data_button.IsEnabled(state->active_count != 0);
         state->primary_button.IsEnabled(
             state->selecting_training_data ||
-            (!state->busy && state->model_available && selected != 0));
+            (!state->busy && state->model_available && state->active_count != 0));
         refresh_estimated_steps();
     };
+    *refresh_training_count = refresh_training_selection;
     for (const auto& field : {state->batch_size, state->gradient_accumulation,
                               state->epochs, state->max_steps}) {
         field.TextChanged([refresh_estimated_steps](const auto&, const auto&) {
             refresh_estimated_steps();
         });
-    }
-    if (state->training_items) {
-        state->training_items.SelectionChanged(
-            [state, refresh_training_selection](
-                const auto&, const SelectionChangedEventArgs& args) {
-                if (state->updating_page) return;
-                const auto update_items = [state](const auto& items, bool selected) {
-                    for (const auto& item : items) {
-                        const auto element = item.try_as<FrameworkElement>();
-                        if (!element || !element.Tag()) continue;
-                        const auto index = winrt::unbox_value<std::uint64_t>(element.Tag());
-                        const auto begin = state->current_page * training_page_size;
-                        const auto end = std::min(
-                            begin + training_page_size, state->selected_items.size());
-                        if (index < begin || index >= end) continue;
-                        state->selected_items[static_cast<std::size_t>(index)] = selected;
-                    }
-                };
-                update_items(args.RemovedItems(), false);
-                update_items(args.AddedItems(), true);
-                refresh_training_selection();
-            });
     }
     refresh_training_selection();
 
@@ -1612,6 +1637,7 @@ void SettingsWindow::show_lora_training_dialog() {
                 state->content.Content(state->main_page);
                 state->title.Text(L"訓練個人化模型");
                 state->primary_button.Content(winrt::box_value(L"開始訓練"));
+                Grid::SetColumnSpan(state->primary_button, 1);
                 state->secondary_button.Visibility(Visibility::Visible);
                 refresh_training_selection();
                 return;
@@ -1682,9 +1708,9 @@ void SettingsWindow::show_lora_training_dialog() {
                 }
 
                 std::vector<std::u16string> selected;
-                for (std::size_t index = 0; index < state->item_ids.size(); ++index) {
-                    if (state->selected_items[index]) {
-                        selected.push_back(state->item_ids[index]);
+                for (std::size_t index = 0; index < state->items.size(); ++index) {
+                    if (!state->deleted_items[index]) {
+                        selected.push_back(state->items[index].event_id);
                     }
                 }
                 show_password_dialog(false, [this, state, options, dtype, target_modules, selected](const char16_t* password) mutable {

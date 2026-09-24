@@ -276,6 +276,9 @@ int main(int argc, char* argv[]) {
             [&server](std::string_view password) {
                 return server.training_data_writer()->pending_items(password);
             },
+            [&server](std::u16string_view event_id) {
+                return server.training_data_writer()->delete_pending(event_id);
+            },
             [&server] {
                 return server.training_data_writer()->lora_training_history();
             },

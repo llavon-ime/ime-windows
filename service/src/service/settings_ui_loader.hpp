@@ -31,6 +31,7 @@ public:
         std::function<bool(const std::vector<CustomNameSetting>&)>;
     using SaveWidthToggleSetting = std::function<bool(bool)>;
     using LoadTrainingData = std::function<std::vector<TrainingDataItem>(std::string_view)>;
+    using DeleteTrainingData = std::function<bool(std::u16string_view)>;
     using LoadLoraHistory = std::function<std::vector<LoraTrainingRun>()>;
     using StartLoraTraining = std::function<bool(
         const std::vector<std::u16string>&,
@@ -53,6 +54,7 @@ public:
         bool shift_space_width_toggle_enabled,
         SaveWidthToggleSetting save_width_toggle,
         LoadTrainingData load_training_data,
+        DeleteTrainingData delete_training_data,
         LoadLoraHistory load_lora_history,
         StartLoraTraining start_lora_training,
         GetLoraStatus get_lora_status,
@@ -102,6 +104,7 @@ private:
         llavon_settings_save_width_toggle_callback, void*,
         const llavon_settings_training_item*, std::size_t,
         llavon_settings_refresh_training_items_callback, void*,
+        llavon_settings_delete_training_item_callback, void*,
         llavon_settings_get_lora_history_callback, void*,
         llavon_settings_start_lora_training_callback, void*,
         llavon_settings_get_lora_status_callback, void*,
@@ -133,6 +136,8 @@ private:
     static std::int32_t refresh_training_items_trampoline(
         void* context, llavon_settings_training_item* items,
         std::size_t item_capacity, std::size_t* item_count, const char16_t* password) noexcept;
+    static std::int32_t delete_training_item_trampoline(
+        void* context, const char16_t* event_id) noexcept;
     static std::int32_t protection_trampoline(void*, std::int32_t, const char16_t*, std::size_t*) noexcept;
     static std::int32_t get_lora_history_trampoline(
         void* context, llavon_settings_lora_history_item* items,
@@ -166,6 +171,7 @@ private:
     bool shift_space_width_toggle_enabled_ = false;
     SaveWidthToggleSetting save_width_toggle_;
     LoadTrainingData load_training_data_;
+    DeleteTrainingData delete_training_data_;
     LoadLoraHistory load_lora_history_;
     StartLoraTraining start_lora_training_;
     GetLoraStatus get_lora_status_;

@@ -652,6 +652,23 @@ std::vector<TrainingDataRecord> TrainingDataWriter::pending_records(
     return result;
 }
 
+bool TrainingDataWriter::delete_pending(std::u16string_view event_id) noexcept {
+    try {
+        Database database(database_path_);
+        database.execute("PRAGMA secure_delete=ON");
+        Statement remove(database.get(),
+            "DELETE FROM training_commits WHERE event_id=? AND training_state='pending'");
+        remove.bind_text(1, utf8::utf16to8(std::u16string(event_id)));
+        remove.execute();
+        if (sqlite3_changes(database.get()) != 1) return false;
+        publish_pending_delta(-1);
+        return true;
+    } catch (const std::exception& error) {
+        std::cerr << "[ERR] unable to delete training data: " << error.what() << '\n';
+        return false;
+    }
+}
+
 bool TrainingDataWriter::exclude_unselected(
     const std::vector<std::u16string>& selected_event_ids,
     const std::vector<std::u16string>& reviewed_event_ids) noexcept {

@@ -90,6 +90,7 @@ public:
     std::vector<TrainingDataItem> pending_items(std::string_view password = {}) const;
     std::vector<TrainingDataRecord> pending_records(
         const std::vector<std::u16string>& event_ids, std::string_view password = {}) const;
+    bool delete_pending(std::u16string_view event_id) noexcept;
     bool exclude_unselected(
         const std::vector<std::u16string>& selected_event_ids,
         const std::vector<std::u16string>& reviewed_event_ids) noexcept;

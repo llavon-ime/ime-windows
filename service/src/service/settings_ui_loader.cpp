@@ -4,6 +4,7 @@
 
 #include <utf8/cpp20.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -105,6 +106,7 @@ void SettingsUiLoader::configure(
     bool shift_space_width_toggle_enabled,
     SaveWidthToggleSetting save_width_toggle,
     LoadTrainingData load_training_data,
+    DeleteTrainingData delete_training_data,
     LoadLoraHistory load_lora_history,
     StartLoraTraining start_lora_training,
     GetLoraStatus get_lora_status,
@@ -152,6 +154,7 @@ void SettingsUiLoader::configure(
     shift_space_width_toggle_enabled_ = shift_space_width_toggle_enabled;
     save_width_toggle_ = std::move(save_width_toggle);
     load_training_data_ = std::move(load_training_data);
+    delete_training_data_ = std::move(delete_training_data);
     load_lora_history_ = std::move(load_lora_history);
     start_lora_training_ = std::move(start_lora_training);
     get_lora_status_ = std::move(get_lora_status);
@@ -236,7 +239,7 @@ bool SettingsUiLoader::load() {
     }
 
     start_ = resolve<StartFunction>(module_, "llavon_settings_ui_start");
-    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v2");
+    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v3");
     show_ = resolve<ShowFunction>(module_, "llavon_settings_ui_show");
     show_context_menu_ =
         resolve<ShowContextMenuFunction>(module_, "llavon_settings_ui_show_context_menu");
@@ -325,6 +328,7 @@ bool SettingsUiLoader::configure_module() {
                save_width_toggle_trampoline, this,
                training_items.data(), training_items.size(),
                refresh_training_items_trampoline, this,
+               delete_training_item_trampoline, this,
                get_lora_history_trampoline, this,
                start_lora_training_trampoline, this,
                get_lora_status_trampoline, this,
@@ -431,6 +435,24 @@ std::int32_t SettingsUiLoader::refresh_training_items_trampoline(
         return ERROR_SUCCESS;
     } catch (...) {
         return ERROR_GEN_FAILURE;
+    }
+}
+
+std::int32_t SettingsUiLoader::delete_training_item_trampoline(
+    void* context, const char16_t* event_id) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->delete_training_data_ || !event_id) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    try {
+        if (!self->delete_training_data_(event_id)) return ERROR_WRITE_FAULT;
+        const std::u16string_view deleted_id(event_id);
+        std::erase_if(self->reviewed_event_ids_, [&](const auto& id) {
+            return id == deleted_id;
+        });
+        return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_WRITE_FAULT;
     }
 }
 
