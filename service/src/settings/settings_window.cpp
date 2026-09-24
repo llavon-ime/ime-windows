@@ -1096,11 +1096,11 @@ void SettingsWindow::show_lora_training_dialog() {
         Button download_model{nullptr};
         Button cancel{nullptr};
         Button reload_model{nullptr};
-        TextBlock reload_model_status{nullptr};
         TextBlock estimated_steps{nullptr};
         DispatcherTimer timer{nullptr};
         std::u16string output_model_path;
-        bool model_reload_failed = false;
+        bool training_observed = false;
+        bool model_applied = false;
         bool model_available = false;
         bool busy = false;
         bool closed = false;
@@ -1393,7 +1393,6 @@ void SettingsWindow::show_lora_training_dialog() {
     state->progress = named<ProgressBar>(dialog_root, L"TrainingProgress");
     state->status = named<TextBlock>(dialog_root, L"Status");
     state->reload_model = named<Button>(dialog_root, L"ReloadModelButton");
-    state->reload_model_status = named<TextBlock>(dialog_root, L"ReloadModelStatus");
     state->estimated_steps = named<TextBlock>(dialog_root, L"EstimatedSteps");
 
     const auto refresh_estimated_steps = [state] {
@@ -1471,35 +1470,38 @@ void SettingsWindow::show_lora_training_dialog() {
             configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
         }
     });
-    const auto refresh_reload_result = [this, state] {
-        const bool completed = !state->output_model_path.empty();
-        const bool loaded = completed &&
-            state->output_model_path == configuration_.model_path;
-        state->reload_model.Visibility(completed && !loaded
-            ? Visibility::Visible : Visibility::Collapsed);
-        state->reload_model_status.Text(loaded
-            ? L"載入成功" : L"模型載入失敗，請重試。");
-        state->reload_model_status.Visibility(completed && (loaded || state->model_reload_failed)
-            ? Visibility::Visible : Visibility::Collapsed);
+    const auto refresh_apply_state = [state] {
+        const bool pending = !state->output_model_path.empty() &&
+                             !state->model_applied;
+        state->reload_model.Visibility(
+            pending ? Visibility::Visible : Visibility::Collapsed);
+        state->secondary_button.Content(winrt::box_value(
+            pending ? L"套用新模型並關閉" : L"關閉"));
     };
-    state->reload_model.Click([this, state, refresh_reload_result](const auto&, const auto&) {
-        if (state->output_model_path.empty()) return;
+    const auto apply_new_model = [this, state, refresh_apply_state] {
+        if (state->output_model_path.empty() || state->model_applied) return true;
         const std::int32_t result = configuration_.save_model_path_callback
             ? configuration_.save_model_path_callback(
                   configuration_.save_model_path_context,
                   state->output_model_path.c_str())
             : ERROR_INVALID_FUNCTION;
-        state->model_reload_failed = result != ERROR_SUCCESS;
         if (result == ERROR_SUCCESS) {
             configuration_.model_path = state->output_model_path;
             model_path_.Text(to_hstring(configuration_.model_path));
             update_model_path_save_state();
-            state->secondary_button.Focus(FocusState::Programmatic);
+            state->model_applied = true;
+            state->status.Text(L"新模型已套用。");
+        } else {
+            state->status.Text(L"無法套用新模型，請重試。");
         }
-        refresh_reload_result();
+        refresh_apply_state();
+        return result == ERROR_SUCCESS;
+    };
+    state->reload_model.Click([apply_new_model](const auto&, const auto&) {
+        apply_new_model();
     });
 
-    const auto refresh_status = [this, state, refresh_training_selection, refresh_reload_result] {
+    const auto refresh_status = [this, state, refresh_training_selection, refresh_apply_state] {
         llavon_settings_lora_status status{};
         const std::int32_t result = configuration_.get_lora_status_callback
             ? configuration_.get_lora_status_callback(
@@ -1525,6 +1527,7 @@ void SettingsWindow::show_lora_training_dialog() {
             status.stage == LLAVON_SETTINGS_LORA_PREPARING_DATA ||
             status.stage == LLAVON_SETTINGS_LORA_TRAINING ||
             status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL;
+        if (training_busy) state->training_observed = true;
         state->busy = busy;
         state->model_available = status.model_available != 0;
 
@@ -1583,14 +1586,31 @@ void SettingsWindow::show_lora_training_dialog() {
         state->cancel.Visibility(
             downloading_model ? Visibility::Visible : Visibility::Collapsed);
         refresh_training_selection();
-        const std::u16string output_model_path =
+        const std::u16string completed_model_path =
             status.stage == LLAVON_SETTINGS_LORA_COMPLETED && status.output_model_path
                 ? status.output_model_path : u"";
+        if (!completed_model_path.empty() &&
+            configuration_.model_path != completed_model_path) {
+            configuration_.model_path = completed_model_path;
+            model_path_.Text(to_hstring(completed_model_path));
+            update_model_path_save_state();
+        }
+        const bool completed_for_dialog =
+            status.stage == LLAVON_SETTINGS_LORA_COMPLETED &&
+            state->training_observed;
+        const std::u16string output_model_path =
+            completed_for_dialog ? completed_model_path : u"";
         if (state->output_model_path != output_model_path) {
             state->output_model_path = output_model_path;
-            state->model_reload_failed = false;
+            state->model_applied = false;
+            if (!output_model_path.empty()) {
+                configuration_.model_path = output_model_path;
+                model_path_.Text(to_hstring(output_model_path));
+                update_model_path_save_state();
+                state->status.Text(L"訓練完成，請套用新模型。");
+            }
         }
-        refresh_reload_result();
+        refresh_apply_state();
     };
 
     state->timer = DispatcherTimer();
@@ -1618,19 +1638,26 @@ void SettingsWindow::show_lora_training_dialog() {
         close_lora_dialog_ = {};
     };
     close_lora_dialog_ = close_dialog;
-    state->secondary_button.Click([close_dialog](const auto&, const auto&) {
+    const auto apply_and_close = [state, apply_new_model, close_dialog] {
+        if (!state->output_model_path.empty() && !state->model_applied &&
+            !apply_new_model()) {
+            return;
+        }
         close_dialog();
+    };
+    state->secondary_button.Click([apply_and_close](const auto&, const auto&) {
+        apply_and_close();
     });
-    state->overlay.KeyDown([close_dialog](
+    state->overlay.KeyDown([apply_and_close](
         const auto&, const winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs& args) {
         if (static_cast<int>(args.Key()) == VK_ESCAPE) {
             args.Handled(true);
-            close_dialog();
+            apply_and_close();
         }
     });
 
     state->primary_button.Click(
-        [this, state, refresh_training_selection](
+        [this, state, refresh_training_selection, refresh_apply_state](
             const auto&, const auto&) {
             if (state->selecting_training_data) {
                 state->selecting_training_data = false;
@@ -1713,7 +1740,9 @@ void SettingsWindow::show_lora_training_dialog() {
                         selected.push_back(state->items[index].event_id);
                     }
                 }
-                show_password_dialog(false, [this, state, options, dtype, target_modules, selected](const char16_t* password) mutable {
+                show_password_dialog(false, [this, state, options, dtype, target_modules,
+                                             selected, refresh_apply_state](
+                    const char16_t* password) mutable {
                     if (state->closed) return false;
                     options.dtype = dtype.c_str();
                     options.target_modules = target_modules.c_str();
@@ -1728,6 +1757,10 @@ void SettingsWindow::show_lora_training_dialog() {
                               selected_pointers.data(), selected_pointers.size(), &options, password)
                         : ERROR_INVALID_FUNCTION;
                     if (result == ERROR_SUCCESS) {
+                        state->training_observed = true;
+                        state->output_model_path.clear();
+                        state->model_applied = false;
+                        refresh_apply_state();
                         state->primary_button.IsEnabled(false);
                         state->status.Text(L"訓練已啟動，關閉視窗後仍會在背景繼續。");
                     } else {

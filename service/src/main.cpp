@@ -205,7 +205,11 @@ int main(int argc, char* argv[]) {
         llavon::service::PredictionPipeServer server(
             std::move(core), candidate_ui, custom_names);
         llavon::service::LoraTrainingManager lora_training(
-            server.training_data_writer(), config.tables_dir);
+            server.training_data_writer(), config.tables_dir,
+            [](const std::filesystem::path& model_path) {
+                return llavon::service::save_model_path(
+                    utf8::utf16to8(model_path.u16string()));
+            });
         auto custom_names_update_mutex = std::make_shared<std::mutex>();
         llavon::service::SettingsUiLoader settings_ui;
         auto active_config = std::make_shared<llavon::ime::core::CoreConfig>(config);

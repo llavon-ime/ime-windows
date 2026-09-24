@@ -15,6 +15,7 @@
 #include <fstream>
 #include <format>
 #include <iomanip>
+#include <iostream>
 #include <iterator>
 #include <optional>
 #include <sstream>
@@ -203,9 +204,11 @@ std::int64_t training_steps(const std::filesystem::path& adapter_directory) {
 
 LoraTrainingManager::LoraTrainingManager(
     std::shared_ptr<TrainingDataWriter> training_data,
-    std::filesystem::path tables_directory)
+    std::filesystem::path tables_directory,
+    SaveCompletedModelPath save_completed_model_path)
     : training_data_(std::move(training_data)),
       tables_directory_(std::move(tables_directory)),
+      save_completed_model_path_(std::move(save_completed_model_path)),
       assets_root_(environment_path(assets_path_environment).value_or(
           local_app_data_root() / L"training-assets")) {
     if (!training_data_) throw std::invalid_argument("training data dependency is required");
@@ -747,11 +750,15 @@ void LoraTrainingManager::training_worker() {
             completed_run, dataset.included_event_ids)) {
         throw std::runtime_error("model completed but training records could not be marked trained");
     }
+    if (save_completed_model_path_ &&
+        !save_completed_model_path_(gguf_path)) {
+        std::clog << "[SRV] unable to persist the completed model path\n";
+    }
 
     std::lock_guard lock(status_mutex_);
     status_.stage = LoraOperationStage::completed;
     status_.progress = 1;
-    status_.message = u"個人化模型已完成";
+    status_.message.clear();
     status_.output_model_path = gguf_path.u16string();
 }
 

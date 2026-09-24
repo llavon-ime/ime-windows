@@ -93,9 +93,8 @@
       <ToggleSwitch x:Name="Shuffle" Header="Shuffle training data" IsOn="True"/>
       <ProgressBar x:Name="TrainingProgress" Minimum="0" Maximum="100" Visibility="Collapsed"/>
       <TextBlock x:Name="Status" Text="所有欄位都已填入建議預設值。" FontSize="12" TextWrapping="Wrap"/>
-      <Button x:Name="ReloadModelButton" Content="重新載入完成的模型" MinHeight="32"
+      <Button x:Name="ReloadModelButton" Content="立即套用" MinHeight="32"
               HorizontalAlignment="Left" Visibility="Collapsed"/>
-      <TextBlock x:Name="ReloadModelStatus" FontSize="12" TextWrapping="Wrap" Visibility="Collapsed"/>
       <TextBlock x:Name="EstimatedSteps" Text="預計 steps：0" FontSize="12" TextWrapping="Wrap"/>
     </StackPanel>
         </ScrollViewer>

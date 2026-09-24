@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -62,8 +63,12 @@ struct LoraOperationStatus {
 
 class LoraTrainingManager final {
 public:
+    using SaveCompletedModelPath =
+        std::function<bool(const std::filesystem::path&)>;
+
     LoraTrainingManager(std::shared_ptr<TrainingDataWriter> training_data,
-                        std::filesystem::path tables_directory);
+                        std::filesystem::path tables_directory,
+                        SaveCompletedModelPath save_completed_model_path = {});
     ~LoraTrainingManager();
 
     LoraTrainingManager(const LoraTrainingManager&) = delete;
@@ -100,6 +105,7 @@ private:
 
     std::shared_ptr<TrainingDataWriter> training_data_;
     std::filesystem::path tables_directory_;
+    SaveCompletedModelPath save_completed_model_path_;
     std::filesystem::path assets_root_;
     mutable std::mutex status_mutex_;
     LoraOperationStatus status_;
