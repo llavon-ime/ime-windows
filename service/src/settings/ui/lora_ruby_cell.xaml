@@ -5,8 +5,9 @@
     <RowDefinition Height="17"/>
     <RowDefinition Height="Auto"/>
   </Grid.RowDefinitions>
-  <TextBlock x:Name="Reading" Grid.Row="0" FontSize="11" TextAlignment="Center"
-             TextTrimming="CharacterEllipsis" VerticalAlignment="Bottom"/>
+  <TextBlock x:Name="Reading" Grid.Row="0" FontSize="8"
+             FontFamily="Microsoft JhengHei UI" TextAlignment="Center"
+             TextTrimming="None" VerticalAlignment="Bottom"/>
   <TextBlock x:Name="Character" Grid.Row="1" FontSize="21" TextAlignment="Center"
              VerticalAlignment="Top"/>
 </Grid>
