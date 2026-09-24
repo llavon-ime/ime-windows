@@ -720,9 +720,7 @@ void LoraTrainingManager::training_worker() {
     std::lock_guard lock(status_mutex_);
     status_.stage = LoraOperationStage::completed;
     status_.progress = 1;
-    status_.message = dataset.skipped == 0
-        ? u"個人化模型已完成，可以立即重新載入"
-        : u"個人化模型已完成；不相容的紀錄仍保留為 pending";
+    status_.message = u"個人化模型已完成";
     status_.output_model_path = gguf_path.u16string();
 }
 

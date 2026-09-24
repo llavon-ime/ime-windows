@@ -892,9 +892,11 @@ void SettingsWindow::show_lora_training_dialog() {
         Button download_model{nullptr};
         Button cancel{nullptr};
         Button reload_model{nullptr};
+        TextBlock reload_model_status{nullptr};
         TextBlock estimated_steps{nullptr};
         DispatcherTimer timer{nullptr};
         std::u16string output_model_path;
+        bool model_reload_failed = false;
         bool model_available = false;
         bool busy = false;
         bool closed = false;
@@ -1162,6 +1164,7 @@ void SettingsWindow::show_lora_training_dialog() {
     state->progress = named<ProgressBar>(dialog_root, L"TrainingProgress");
     state->status = named<TextBlock>(dialog_root, L"Status");
     state->reload_model = named<Button>(dialog_root, L"ReloadModelButton");
+    state->reload_model_status = named<TextBlock>(dialog_root, L"ReloadModelStatus");
     state->estimated_steps = named<TextBlock>(dialog_root, L"EstimatedSteps");
 
     const auto refresh_estimated_steps = [state] {
@@ -1266,19 +1269,35 @@ void SettingsWindow::show_lora_training_dialog() {
             configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
         }
     });
-    state->reload_model.Click([this, state](const auto&, const auto&) {
+    const auto refresh_reload_result = [this, state] {
+        const bool completed = !state->output_model_path.empty();
+        const bool loaded = completed &&
+            state->output_model_path == configuration_.model_path;
+        state->reload_model.Visibility(completed && !loaded
+            ? Visibility::Visible : Visibility::Collapsed);
+        state->reload_model_status.Text(loaded
+            ? L"載入成功" : L"模型載入失敗，請重試。");
+        state->reload_model_status.Visibility(completed && (loaded || state->model_reload_failed)
+            ? Visibility::Visible : Visibility::Collapsed);
+    };
+    state->reload_model.Click([this, state, refresh_reload_result](const auto&, const auto&) {
         if (state->output_model_path.empty()) return;
         const std::int32_t result = configuration_.save_model_path_callback
             ? configuration_.save_model_path_callback(
                   configuration_.save_model_path_context,
                   state->output_model_path.c_str())
             : ERROR_INVALID_FUNCTION;
-        state->status.Text(result == ERROR_SUCCESS
-            ? L"個人化模型已重新載入並設為目前模型。"
-            : L"模型已完成，但重新載入失敗。");
+        state->model_reload_failed = result != ERROR_SUCCESS;
+        if (result == ERROR_SUCCESS) {
+            configuration_.model_path = state->output_model_path;
+            model_path_.Text(to_hstring(configuration_.model_path));
+            update_model_path_save_state();
+            state->secondary_button.Focus(FocusState::Programmatic);
+        }
+        refresh_reload_result();
     });
 
-    const auto refresh_status = [this, state, refresh_training_selection] {
+    const auto refresh_status = [this, state, refresh_training_selection, refresh_reload_result] {
         llavon_settings_lora_status status{};
         const std::int32_t result = configuration_.get_lora_status_callback
             ? configuration_.get_lora_status_callback(
@@ -1362,11 +1381,14 @@ void SettingsWindow::show_lora_training_dialog() {
         state->cancel.Visibility(
             downloading_model ? Visibility::Visible : Visibility::Collapsed);
         refresh_training_selection();
-        if (status.stage == LLAVON_SETTINGS_LORA_COMPLETED &&
-            status.output_model_path && *status.output_model_path) {
-            state->output_model_path = status.output_model_path;
-            state->reload_model.Visibility(Visibility::Visible);
+        const std::u16string output_model_path =
+            status.stage == LLAVON_SETTINGS_LORA_COMPLETED && status.output_model_path
+                ? status.output_model_path : u"";
+        if (state->output_model_path != output_model_path) {
+            state->output_model_path = output_model_path;
+            state->model_reload_failed = false;
         }
+        refresh_reload_result();
     };
 
     state->timer = DispatcherTimer();
