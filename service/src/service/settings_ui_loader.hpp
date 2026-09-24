@@ -30,12 +30,13 @@ public:
     using SaveCustomNames =
         std::function<bool(const std::vector<CustomNameSetting>&)>;
     using SaveWidthToggleSetting = std::function<bool(bool)>;
-    using LoadTrainingData = std::function<std::vector<TrainingDataItem>()>;
+    using LoadTrainingData = std::function<std::vector<TrainingDataItem>(std::string_view)>;
     using LoadLoraHistory = std::function<std::vector<LoraTrainingRun>()>;
     using StartLoraTraining = std::function<bool(
         const std::vector<std::u16string>&,
         const std::vector<std::u16string>&,
-        const llavon_settings_lora_options&)>;
+        const llavon_settings_lora_options&, std::string_view)>;
+    using ProtectionAction = std::function<std::size_t(int, std::string_view)>;
     using GetLoraStatus = std::function<LoraOperationStatus()>;
     using LoraModelAction = std::function<bool(bool)>;
     using CancelLora = std::function<void()>;
@@ -56,7 +57,7 @@ public:
         StartLoraTraining start_lora_training,
         GetLoraStatus get_lora_status,
         LoraModelAction lora_model_action,
-        CancelLora cancel_lora);
+        CancelLora cancel_lora, ProtectionAction protection_action);
     bool show();
     bool show_context_menu(POINT location);
     void notify_pending_count(std::size_t count) noexcept;
@@ -105,7 +106,7 @@ private:
         llavon_settings_start_lora_training_callback, void*,
         llavon_settings_get_lora_status_callback, void*,
         llavon_settings_lora_model_action_callback, void*,
-        llavon_settings_cancel_lora_callback, void*);
+        llavon_settings_cancel_lora_callback, void*, llavon_settings_protection_callback, void*);
     using StartFunction = std::int32_t (*)();
     using ShowFunction = void (*)();
     using ShowContextMenuFunction = void (*)(std::int32_t, std::int32_t);
@@ -115,7 +116,7 @@ private:
     bool load();
     bool start();
     bool configure_module();
-    void refresh_training_items();
+    void refresh_training_items(std::string_view password = {});
     static std::int32_t save_trampoline(
         void* context, std::int32_t backend, const char16_t* device_id) noexcept;
     static std::int32_t save_custom_names_trampoline(
@@ -128,10 +129,11 @@ private:
     static std::int32_t start_lora_training_trampoline(
         void* context, const char16_t* const* selected_event_ids,
         std::size_t selected_event_id_count,
-        const llavon_settings_lora_options* options) noexcept;
+        const llavon_settings_lora_options* options, const char16_t* password) noexcept;
     static std::int32_t refresh_training_items_trampoline(
         void* context, llavon_settings_training_item* items,
-        std::size_t item_capacity, std::size_t* item_count) noexcept;
+        std::size_t item_capacity, std::size_t* item_count, const char16_t* password) noexcept;
+    static std::int32_t protection_trampoline(void*, std::int32_t, const char16_t*, std::size_t*) noexcept;
     static std::int32_t get_lora_history_trampoline(
         void* context, llavon_settings_lora_history_item* items,
         std::size_t item_capacity, std::size_t* item_count) noexcept;
@@ -169,10 +171,12 @@ private:
     GetLoraStatus get_lora_status_;
     LoraModelAction lora_model_action_;
     CancelLora cancel_lora_;
+    ProtectionAction protection_action_;
     std::u16string lora_status_message_;
     std::u16string lora_status_revision_;
     std::u16string lora_status_output_path_;
     std::vector<TrainingDataStorage> training_items_;
+    std::vector<std::u16string> reviewed_event_ids_;
     std::vector<LoraHistoryStorage> lora_history_;
     bool started_ = false;
 };

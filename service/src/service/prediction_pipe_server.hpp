@@ -601,7 +601,7 @@ public:
         return result.get();
     }
 
-    std::vector<TrainingDataItem> pending_training_data() const noexcept {
+    std::vector<TrainingDataItem> pending_training_data() const {
         return training_data_->pending_items();
     }
 

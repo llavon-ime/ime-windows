@@ -273,15 +273,15 @@ int main(int argc, char* argv[]) {
             [](bool enabled) {
                 return llavon::service::save_shift_space_width_toggle_setting(enabled);
             },
-            [&server] {
-                return server.pending_training_data();
+            [&server](std::string_view password) {
+                return server.training_data_writer()->pending_items(password);
             },
             [&server] {
                 return server.training_data_writer()->lora_training_history();
             },
             [&lora_training](const std::vector<std::u16string>& selected_event_ids,
                              const std::vector<std::u16string>& reviewed_event_ids,
-                             const llavon_settings_lora_options& source) {
+                             const llavon_settings_lora_options& source, std::string_view password) {
                 llavon::service::LoraTrainingOptions options{
                     .rank = source.rank,
                     .alpha = source.alpha,
@@ -305,7 +305,7 @@ int main(int argc, char* argv[]) {
                         : u"q_proj,v_proj",
                 };
                 return lora_training.start_training_async(
-                    selected_event_ids, reviewed_event_ids, std::move(options));
+                    selected_event_ids, reviewed_event_ids, std::move(options), password);
             },
             [&lora_training] { return lora_training.status(); },
             [&lora_training](bool download_or_update) {
@@ -313,7 +313,21 @@ int main(int argc, char* argv[]) {
                     ? lora_training.download_model_async()
                     : lora_training.check_model_async();
             },
-            [&lora_training] { lora_training.cancel(); });
+            [&lora_training] { lora_training.cancel(); },
+            [&server, &lora_training](int action, std::string_view password) -> std::size_t {
+                auto writer = server.training_data_writer();
+                switch (action) {
+                case LLAVON_PROTECTION_STATUS: {
+                    const auto status = writer->protection_status();
+                    return (status.configured ? 1u : 0u) | (status.enabled ? 2u : 0u);
+                }
+                case LLAVON_PROTECTION_SETUP: writer->configure_password(password); return 0;
+                case LLAVON_PROTECTION_ENABLE: writer->set_recording_enabled(true); return 0;
+                case LLAVON_PROTECTION_DISABLE: writer->set_recording_enabled(false); return 0;
+                case LLAVON_PROTECTION_CLEANUP: return lora_training.discard_plaintext_datasets();
+                default: throw std::invalid_argument("unknown protection action");
+                }
+            });
         struct PendingCountRegistration {
             std::shared_ptr<llavon::service::TrainingDataWriter> writer;
             ~PendingCountRegistration() {

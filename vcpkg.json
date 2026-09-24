@@ -11,6 +11,7 @@
       "platform": "windows"
     },
     "llama-cpp",
+    { "name": "libsodium", "platform": "windows" },
     "reflectcpp",
     {
       "name": "sqlite3",

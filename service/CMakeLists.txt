@@ -2,6 +2,7 @@ if(NOT WIN32)
     message(FATAL_ERROR "The Llavon IME service is Windows-only")
 endif()
 
+find_package(unofficial-sodium CONFIG REQUIRED)
 find_package(asio CONFIG REQUIRED)
 find_package(cppwinrt CONFIG REQUIRED)
 find_package(reflectcpp CONFIG REQUIRED)
@@ -19,6 +20,8 @@ add_executable(llavon-ime-service
     src/service/candidate_ui_loader.hpp
     src/service/custom_name_matcher.cpp
     src/service/custom_name_matcher.hpp
+    src/service/commit_crypto.hpp
+    src/service/training_data_cleanup.hpp
     src/service/lora_dataset_builder.cpp
     src/service/lora_dataset_builder.hpp
     src/service/lora_training_manager.cpp
@@ -162,6 +165,7 @@ target_link_libraries(llavon-ime-service PRIVATE
     asio::asio
     reflectcpp::reflectcpp
     utf8cpp::utf8cpp
+    unofficial-sodium::sodium
     unofficial::sqlite3::sqlite3
     advapi32
     ole32
@@ -235,6 +239,7 @@ if(BUILD_TESTING)
         utf8::cpp
         utf8cpp::utf8cpp
         reflectcpp::reflectcpp
+        unofficial-sodium::sodium
         unofficial::sqlite3::sqlite3
         ole32
         shell32

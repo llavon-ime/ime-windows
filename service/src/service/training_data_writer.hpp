@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -72,13 +73,18 @@ public:
     TrainingDataWriter& operator=(const TrainingDataWriter&) = delete;
 
     void enqueue(RawCommitEvent event);
+    struct ProtectionStatus { bool configured; bool enabled; };
+    ProtectionStatus protection_status() const;
+    void configure_password(std::string_view password);
+    void set_recording_enabled(bool enabled);
     std::size_t pending_count() const noexcept {
         return pending_count_.load(std::memory_order_acquire);
     }
     void set_pending_count_callback(std::function<void(std::size_t)> callback);
-    std::vector<TrainingDataItem> pending_items() const noexcept;
+    // Without a password, only IDs and selection metadata are returned.
+    std::vector<TrainingDataItem> pending_items(std::string_view password = {}) const;
     std::vector<TrainingDataRecord> pending_records(
-        const std::vector<std::u16string>& event_ids) const;
+        const std::vector<std::u16string>& event_ids, std::string_view password = {}) const;
     bool exclude_unselected(
         const std::vector<std::u16string>& selected_event_ids,
         const std::vector<std::u16string>& reviewed_event_ids) noexcept;
@@ -100,6 +106,8 @@ private:
                       const char* state) noexcept;
 
     std::filesystem::path database_path_;
+    mutable std::mutex protection_mutex_;
+    std::atomic_bool recording_enabled_{false};
     std::mutex mutex_;
     std::condition_variable available_;
     std::deque<RawCommitEvent> queue_;

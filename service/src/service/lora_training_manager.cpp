@@ -1,4 +1,5 @@
 #include "lora_training_manager.hpp"
+#include "training_data_cleanup.hpp"
 
 #include "lora_dataset_builder.hpp"
 #include "winrt_http.hpp"
@@ -258,12 +259,15 @@ bool LoraTrainingManager::download_model_async() {
 bool LoraTrainingManager::start_training_async(
     std::vector<std::u16string> event_ids,
     const std::vector<std::u16string>& reviewed_event_ids,
-    LoraTrainingOptions options) {
+    LoraTrainingOptions options, std::string_view password) {
     {
         std::lock_guard operation_lock(operation_mutex_);
         if (busy_.load(std::memory_order_acquire)) return false;
         if (worker_.joinable()) worker_.join();
+        auto records = training_data_->pending_records(event_ids, password);
+        if (records.empty() || records.size() != event_ids.size()) return false;
         if (!training_data_->exclude_unselected(event_ids, reviewed_event_ids)) return false;
+        pending_records_ = std::move(records);
         pending_event_ids_ = std::move(event_ids);
         pending_options_ = std::move(options);
         cancelling_.store(false, std::memory_order_release);
@@ -278,14 +282,22 @@ bool LoraTrainingManager::start_training_async(
                 } catch (...) {
                     set_failed_unknown();
                 }
+                pending_records_.clear();
                 busy_.store(false, std::memory_order_release);
             });
         } catch (...) {
+            pending_records_.clear();
             busy_.store(false, std::memory_order_release);
             throw;
         }
     }
     return true;
+}
+
+std::size_t LoraTrainingManager::discard_plaintext_datasets() {
+    std::lock_guard operation_lock(operation_mutex_);
+    if (busy_.load(std::memory_order_acquire)) throw std::runtime_error("training is busy");
+    return discard_plaintext_training_datasets(assets_root_ / L"runs");
 }
 
 bool LoraTrainingManager::launch(Operation operation) {
@@ -625,10 +637,19 @@ void LoraTrainingManager::training_worker() {
 
     set_status(LoraOperationStage::preparing_data, 0.01,
                u"正在由 service 轉換訓練資料…");
-    const auto records = training_data_->pending_records(pending_event_ids_);
+    const auto& records = pending_records_;
     const auto model_directory = assets_root_ / model_repository_directory / widen(revision);
     const auto run_directory = assets_root_ / L"runs" / widen(run_name());
     const auto dataset_path = run_directory / L"training.jsonl";
+    struct DatasetCleanup {
+        std::filesystem::path path;
+        ~DatasetCleanup() {
+            std::error_code ignored;
+            std::filesystem::remove(path, ignored);
+            path += L".partial";
+            std::filesystem::remove(path, ignored);
+        }
+    } cleanup{dataset_path};
     const auto adapter_directory = run_directory / L"adapter";
     const auto f16_path = run_directory / L"personalized-f16.gguf";
     const auto gguf_path = run_directory / L"personalized-Q4_K_M.gguf";
@@ -676,6 +697,7 @@ void LoraTrainingManager::training_worker() {
     }
     if (!pending_options_.shuffle) train_arguments.push_back(L"--no-shuffle");
     run_process(trainer, train_arguments, true);
+    std::filesystem::remove(dataset_path);
 
     throw_if_cancelled(cancelling_);
     set_status(LoraOperationStage::exporting_model, 0.88,

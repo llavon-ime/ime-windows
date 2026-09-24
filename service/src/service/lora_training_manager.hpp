@@ -74,7 +74,8 @@ public:
     bool download_model_async();
     bool start_training_async(std::vector<std::u16string> event_ids,
                               const std::vector<std::u16string>& reviewed_event_ids,
-                              LoraTrainingOptions options);
+                              LoraTrainingOptions options, std::string_view password);
+    std::size_t discard_plaintext_datasets();
     void cancel() noexcept;
 
 private:
@@ -109,6 +110,7 @@ private:
     std::mutex process_mutex_;
     HANDLE active_process_ = nullptr;
     std::vector<std::u16string> pending_event_ids_;
+    std::vector<TrainingDataRecord> pending_records_;
     LoraTrainingOptions pending_options_;
 };
 

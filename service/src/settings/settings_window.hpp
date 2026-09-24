@@ -12,6 +12,7 @@
 #include <winrt/base.h>
 
 #include <memory>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -53,6 +54,11 @@ private:
     void save_custom_names();
     void update_custom_names_save_state();
     void show_lora_training_dialog();
+    bool load_training_items(const char16_t* password = nullptr);
+    void refresh_protection_controls();
+    void show_password_dialog(bool setup, std::function<bool(const char16_t*)> action,
+                              bool clean_datasets = false);
+    bool updating_protection_ = false;
     bool collect_custom_names(std::vector<CustomNameEntry>& entries) const;
     const std::vector<std::u16string>& lookup_bopomofo(char32_t character) const;
     void begin_update_check();

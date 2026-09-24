@@ -127,10 +127,10 @@ typedef int32_t (*llavon_settings_save_width_toggle_callback)(
 typedef int32_t (*llavon_settings_start_lora_training_callback)(
     void* context, const llavon_char16_t* const* selected_event_ids,
     size_t selected_event_id_count,
-    const struct llavon_settings_lora_options* options);
+    const struct llavon_settings_lora_options* options, const llavon_char16_t* password);
 typedef int32_t (*llavon_settings_refresh_training_items_callback)(
     void* context, struct llavon_settings_training_item* items,
-    size_t item_capacity, size_t* item_count);
+    size_t item_capacity, size_t* item_count, const llavon_char16_t* password);
 typedef int32_t (*llavon_settings_get_lora_history_callback)(
     void* context, struct llavon_settings_lora_history_item* items,
     size_t item_capacity, size_t* item_count);
@@ -140,10 +140,22 @@ typedef int32_t (*llavon_settings_lora_model_action_callback)(
     void* context, int32_t download_or_update);
 typedef void (*llavon_settings_cancel_lora_callback)(void* context);
 
+enum llavon_settings_protection_action {
+    LLAVON_PROTECTION_STATUS = 0,
+    LLAVON_PROTECTION_SETUP = 1,
+    LLAVON_PROTECTION_ENABLE = 2,
+    LLAVON_PROTECTION_DISABLE = 3,
+    LLAVON_PROTECTION_CLEANUP = 4,
+    LLAVON_PROTECTION_CLEAR_VIEW = 5,
+};
+// STATUS: bit 0 = configured, bit 1 = enabled. CLEANUP: deleted file count.
+typedef int32_t (*llavon_settings_protection_callback)(
+    void* context, int32_t action, const llavon_char16_t* password, size_t* result);
+
 // Supplies a snapshot of devices and the setting used for the current service
 // process. Strings and the device array are copied before this call returns.
 // This must be called before llavon_settings_ui_start.
-LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure(
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v2(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
@@ -176,7 +188,8 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure(
     llavon_settings_lora_model_action_callback lora_model_action_callback,
     void* lora_model_action_context,
     llavon_settings_cancel_lora_callback cancel_lora_callback,
-    void* cancel_lora_context);
+    void* cancel_lora_context,
+    llavon_settings_protection_callback protection_callback, void* protection_context);
 
 // Starts the settings UI's dedicated STA thread. Calling this function more
 // than once is safe. Returns zero on success.

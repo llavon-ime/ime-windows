@@ -13,6 +13,13 @@
 namespace llavon::service {
 namespace {
 
+struct TransientPassword {
+    std::string value;
+    explicit TransientPassword(const char16_t* password)
+        : value(password ? utf8::utf16to8(std::u16string_view(password)) : std::string{}) {}
+    ~TransientPassword() { if (!value.empty()) SecureZeroMemory(value.data(), value.size()); }
+};
+
 constexpr wchar_t settings_ui_filename[] = L"llavon-ime-settings-ui.dll";
 
 std::filesystem::path executable_directory() {
@@ -102,7 +109,7 @@ void SettingsUiLoader::configure(
     StartLoraTraining start_lora_training,
     GetLoraStatus get_lora_status,
     LoraModelAction lora_model_action,
-    CancelLora cancel_lora) {
+    CancelLora cancel_lora, ProtectionAction protection_action) {
     devices_.clear();
     devices_.reserve(devices.size());
     for (const auto& device : devices) {
@@ -150,6 +157,7 @@ void SettingsUiLoader::configure(
     get_lora_status_ = std::move(get_lora_status);
     lora_model_action_ = std::move(lora_model_action);
     cancel_lora_ = std::move(cancel_lora);
+    protection_action_ = std::move(protection_action);
 }
 
 SettingsUiLoader::~SettingsUiLoader() {
@@ -228,7 +236,7 @@ bool SettingsUiLoader::load() {
     }
 
     start_ = resolve<StartFunction>(module_, "llavon_settings_ui_start");
-    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure");
+    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v2");
     show_ = resolve<ShowFunction>(module_, "llavon_settings_ui_show");
     show_context_menu_ =
         resolve<ShowContextMenuFunction>(module_, "llavon_settings_ui_show_context_menu");
@@ -321,7 +329,23 @@ bool SettingsUiLoader::configure_module() {
                start_lora_training_trampoline, this,
                get_lora_status_trampoline, this,
                lora_model_action_trampoline, this,
-               cancel_lora_trampoline, this) == 0;
+               cancel_lora_trampoline, this, protection_trampoline, this) == 0;
+}
+
+std::int32_t SettingsUiLoader::protection_trampoline(
+    void* context, std::int32_t action, const char16_t* password, std::size_t* result) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !result) return ERROR_INVALID_PARAMETER;
+    try {
+        if (action == LLAVON_PROTECTION_CLEAR_VIEW) {
+            self->training_items_.clear();
+            *result = 0;
+        } else {
+            TransientPassword secret(password);
+            *result = self->protection_action_(action, secret.value);
+        }
+        return ERROR_SUCCESS;
+    } catch (...) { return ERROR_ACCESS_DENIED; }
 }
 
 std::int32_t SettingsUiLoader::get_lora_history_trampoline(
@@ -361,10 +385,12 @@ std::int32_t SettingsUiLoader::get_lora_history_trampoline(
     }
 }
 
-void SettingsUiLoader::refresh_training_items() {
+void SettingsUiLoader::refresh_training_items(std::string_view password) {
     training_items_.clear();
+    if (password.empty()) reviewed_event_ids_.clear();
     if (!load_training_data_) return;
-    for (auto& item : load_training_data_()) {
+    for (auto& item : load_training_data_(password)) {
+        if (password.empty()) reviewed_event_ids_.push_back(item.event_id);
         training_items_.push_back(TrainingDataStorage{
             .event_id = std::move(item.event_id),
             .context = std::move(item.context),
@@ -377,13 +403,14 @@ void SettingsUiLoader::refresh_training_items() {
 
 std::int32_t SettingsUiLoader::refresh_training_items_trampoline(
     void* context, llavon_settings_training_item* items,
-    std::size_t item_capacity, std::size_t* item_count) noexcept {
+    std::size_t item_capacity, std::size_t* item_count, const char16_t* password) noexcept {
     auto* self = static_cast<SettingsUiLoader*>(context);
     if (!self || !item_count || (item_capacity != 0 && !items)) {
         return ERROR_INVALID_PARAMETER;
     }
     try {
-        self->refresh_training_items();
+        TransientPassword secret(password);
+        if (!items) self->refresh_training_items(secret.value);
         *item_count = self->training_items_.size();
         if (!items) return ERROR_SUCCESS;
         if (item_capacity < self->training_items_.size()) return ERROR_INSUFFICIENT_BUFFER;
@@ -406,7 +433,7 @@ std::int32_t SettingsUiLoader::refresh_training_items_trampoline(
 std::int32_t SettingsUiLoader::start_lora_training_trampoline(
     void* context, const char16_t* const* selected_event_ids,
     std::size_t selected_event_id_count,
-    const llavon_settings_lora_options* options) noexcept {
+    const llavon_settings_lora_options* options, const char16_t* password) noexcept {
     auto* self = static_cast<SettingsUiLoader*>(context);
     if (!self || !self->start_lora_training_ || !options ||
         (selected_event_id_count != 0 && !selected_event_ids)) {
@@ -419,12 +446,8 @@ std::int32_t SettingsUiLoader::start_lora_training_trampoline(
             if (!selected_event_ids[index]) return ERROR_INVALID_PARAMETER;
             selected.emplace_back(selected_event_ids[index]);
         }
-        std::vector<std::u16string> reviewed;
-        reviewed.reserve(self->training_items_.size());
-        for (const auto& item : self->training_items_) {
-            reviewed.push_back(item.event_id);
-        }
-        return self->start_lora_training_(selected, reviewed, *options)
+        TransientPassword secret(password);
+        return self->start_lora_training_(selected, self->reviewed_event_ids_, *options, secret.value)
             ? ERROR_SUCCESS
             : ERROR_WRITE_FAULT;
     } catch (...) {

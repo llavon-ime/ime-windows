@@ -1,4 +1,5 @@
 #include "training_data_writer.hpp"
+#include "commit_crypto.hpp"
 
 #include <shlobj.h>
 #include <sqlite3.h>
@@ -292,7 +293,7 @@ void discard_existing_non_bopomofo_commits(Database& database) {
     std::vector<sqlite3_int64> ids;
     {
         Statement select(database.get(),
-            "SELECT id, padding_json FROM training_commits WHERE training_state='pending'");
+            "SELECT id, padding_json FROM training_commits WHERE training_state='pending' AND schema_version=1");
         while (select.next()) {
             if (!has_bopomofo_annotation(column_text(select.get(), 1))) {
                 ids.push_back(sqlite3_column_int64(select.get(), 0));
@@ -322,6 +323,10 @@ void initialize_database(const std::filesystem::path& path) {
     }
     Database database(path);
     database.execute("PRAGMA journal_mode=WAL");
+    database.execute(
+        "CREATE TABLE IF NOT EXISTS commit_protection ("
+        "id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL CHECK(version=1),"
+        "salt TEXT NOT NULL, public_key TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)))");
     database.execute(
         "CREATE TABLE IF NOT EXISTS training_commits ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -376,6 +381,8 @@ TrainingDataWriter::TrainingDataWriter(
     : database_path_(database_path ? std::move(*database_path)
                                    : default_database_path()) {
     initialize_database(database_path_);
+    commit_crypto::initialize();
+    recording_enabled_.store(protection_status().enabled);
     {
         Database database(database_path_);
         discard_existing_non_bopomofo_commits(database);
@@ -399,9 +406,10 @@ TrainingDataWriter::~TrainingDataWriter() {
 }
 
 void TrainingDataWriter::enqueue(RawCommitEvent event) {
+    if (!recording_enabled_.load(std::memory_order_acquire)) return;
     {
         std::lock_guard lock(mutex_);
-        if (stopping_) return;
+        if (stopping_ || !recording_enabled_.load(std::memory_order_acquire) || queue_.size() >= 256) return;
         queue_.push_back(std::move(event));
     }
     available_.notify_one();
@@ -435,47 +443,146 @@ void TrainingDataWriter::publish_pending_delta(std::ptrdiff_t delta) noexcept {
     }
 }
 
-std::vector<TrainingDataItem> TrainingDataWriter::pending_items() const noexcept {
-    try {
-        Database database(database_path_);
-        Statement select(
-            database.get(),
-            "SELECT event_id, context, answer, reading, revice "
-            "FROM training_commits WHERE training_state='pending' ORDER BY id");
-        std::vector<TrainingDataItem> result;
-        while (select.next()) {
-            result.push_back(TrainingDataItem{
-                .event_id = utf8::utf8to16(column_text(select.get(), 0)),
-                .context = utf8::utf8to16(column_text(select.get(), 1)),
-                .answer = utf8::utf8to16(column_text(select.get(), 2)),
-                .reading = utf8::utf8to16(column_text(select.get(), 3)),
-                .revice = sqlite3_column_int(select.get(), 4) != 0,
-            });
-        }
-        return result;
-    } catch (const std::exception& error) {
-        std::cerr << "[ERR] unable to read training data: " << error.what() << '\n';
-        return {};
+namespace {
+commit_crypto::PublicParameters read_parameters(Database& database) {
+    Statement select(database.get(), "SELECT version,salt,public_key FROM commit_protection WHERE id=1");
+    if (!select.next() || sqlite3_column_int(select.get(), 0) != 1) {
+        throw std::runtime_error("commit password is not configured");
+    }
+    commit_crypto::PublicParameters parameters;
+    commit_crypto::unhex(column_text(select.get(), 1), parameters.salt);
+    commit_crypto::unhex(column_text(select.get(), 2), parameters.key);
+    return parameters;
+}
+}
+
+TrainingDataWriter::ProtectionStatus TrainingDataWriter::protection_status() const {
+    Database database(database_path_);
+    Statement select(database.get(), "SELECT enabled FROM commit_protection WHERE id=1");
+    if (!select.next()) return {false, false};
+    return {true, sqlite3_column_int(select.get(), 0) != 0};
+}
+
+void TrainingDataWriter::set_recording_enabled(bool enabled) {
+    std::lock_guard protection_lock(protection_mutex_);
+    Database database(database_path_);
+    if (enabled) (void)read_parameters(database);
+    Statement update(database.get(), "UPDATE commit_protection SET enabled=? WHERE id=1");
+    update.bind_integer(1, enabled ? 1 : 0);
+    update.execute();
+    recording_enabled_.store(enabled, std::memory_order_release);
+    if (!enabled) {
+        std::lock_guard lock(mutex_);
+        queue_.clear();
     }
 }
 
-std::vector<TrainingDataRecord> TrainingDataWriter::pending_records(
-    const std::vector<std::u16string>& event_ids) const {
+void TrainingDataWriter::configure_password(std::string_view password) {
+    std::lock_guard protection_lock(protection_mutex_);
+    if (protection_status().configured) throw std::runtime_error("password already configured");
+    commit_crypto::PublicParameters parameters;
+    randombytes_buf(parameters.salt.data(), parameters.salt.size());
+    commit_crypto::PrivateKey private_key;
+    commit_crypto::derive(password, parameters, private_key, false);
     Database database(database_path_);
+    database.execute("PRAGMA secure_delete=ON");
+    database.execute("BEGIN IMMEDIATE");
+    try {
+        Statement insert(database.get(),
+            "INSERT INTO commit_protection VALUES(1,1,?,?,0)");
+        insert.bind_text(1, commit_crypto::hex(parameters.salt));
+        insert.bind_text(2, commit_crypto::hex(parameters.key));
+        insert.execute();
+        Statement select(database.get(),
+            "SELECT event_id,context,answer,padding_json,reading FROM training_commits WHERE schema_version=1");
+        Statement update(database.get(),
+            "UPDATE training_commits SET schema_version=2,context=?,answer=?,padding_json=?,reading=? WHERE event_id=?");
+        constexpr const char* fields[]{"context", "answer", "padding_json", "reading"};
+        while (select.next()) {
+            const auto id = column_text(select.get(), 0);
+            for (int index = 0; index < 4; ++index) {
+                auto plaintext = column_text(select.get(), index + 1);
+                const auto ciphertext = commit_crypto::seal(plaintext, id + "/" + fields[index], parameters);
+                sodium_memzero(plaintext.data(), plaintext.size());
+                update.bind_text(index + 1, ciphertext);
+            }
+            update.bind_text(5, id);
+            update.execute();
+            update.reset();
+        }
+        database.execute("COMMIT");
+    } catch (...) {
+        try { database.execute("ROLLBACK"); } catch (...) {}
+        throw;
+    }
+    database.execute("VACUUM");
+    database.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+    database.execute("UPDATE commit_protection SET enabled=1 WHERE id=1");
+    recording_enabled_.store(true, std::memory_order_release);
+}
+
+std::vector<TrainingDataItem> TrainingDataWriter::pending_items(std::string_view password) const {
+    Database database(database_path_);
+    commit_crypto::PublicParameters parameters;
+    commit_crypto::PrivateKey private_key;
+    if (!password.empty()) {
+        parameters = read_parameters(database);
+        commit_crypto::derive(password, parameters, private_key, true);
+    }
     Statement select(
         database.get(),
-        "SELECT event_id, context, answer, padding_json, revice "
+        "SELECT event_id, context, answer, reading, revice, schema_version "
+        "FROM training_commits WHERE training_state='pending' ORDER BY id");
+    std::vector<TrainingDataItem> result;
+    while (select.next()) {
+        const auto id = column_text(select.get(), 0);
+        const auto decrypt = [&](int column, const char* field) {
+            if (password.empty()) return std::u16string{};
+            if (sqlite3_column_int(select.get(), 5) != 2) {
+                throw std::runtime_error("unencrypted training record blocked");
+            }
+            return utf8::utf8to16(commit_crypto::open(column_text(select.get(), column),
+                id + "/" + field, parameters, private_key));
+        };
+        result.push_back(TrainingDataItem{
+            .event_id = utf8::utf8to16(id),
+            .context = decrypt(1, "context"),
+            .answer = decrypt(2, "answer"),
+            .reading = decrypt(3, "reading"),
+            .revice = sqlite3_column_int(select.get(), 4) != 0,
+        });
+    }
+    return result;
+}
+
+std::vector<TrainingDataRecord> TrainingDataWriter::pending_records(
+    const std::vector<std::u16string>& event_ids, std::string_view password) const {
+    Database database(database_path_);
+    auto parameters = read_parameters(database);
+    commit_crypto::PrivateKey private_key;
+    commit_crypto::derive(password, parameters, private_key, true);
+    Statement select(
+        database.get(),
+        "SELECT event_id, context, answer, padding_json, revice, schema_version "
         "FROM training_commits WHERE training_state='pending' AND event_id=?");
     std::vector<TrainingDataRecord> result;
     result.reserve(event_ids.size());
     for (const auto& event_id : event_ids) {
         select.bind_text(1, utf8::utf16to8(event_id));
         if (select.next()) {
+            if (sqlite3_column_int(select.get(), 5) != 2) {
+                throw std::runtime_error("unencrypted training record blocked");
+            }
+            const auto id = column_text(select.get(), 0);
+            const auto decrypt = [&](int column, const char* field) {
+                return commit_crypto::open(column_text(select.get(), column),
+                    id + "/" + field, parameters, private_key);
+            };
             result.push_back(TrainingDataRecord{
                 .event_id = utf8::utf8to16(column_text(select.get(), 0)),
-                .context = utf8::utf8to16(column_text(select.get(), 1)),
-                .answer = utf8::utf8to16(column_text(select.get(), 2)),
-                .padding_json = column_text(select.get(), 3),
+                .context = utf8::utf8to16(decrypt(1, "context")),
+                .answer = utf8::utf8to16(decrypt(2, "answer")),
+                .padding_json = decrypt(3, "padding_json"),
                 .revice = sqlite3_column_int(select.get(), 4) != 0,
             });
         }
@@ -711,12 +818,13 @@ void TrainingDataWriter::worker_main() noexcept {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     try {
         Database database(database_path_);
+        std::optional<commit_crypto::PublicParameters> public_parameters;
         Statement insert(
             database.get(),
             "INSERT OR IGNORE INTO training_commits("
             "event_id, schema_version, context, answer, padding_json, reading, revice, "
             "event_type, committed_at_utc, revision_of, training_state) "
-            "VALUES (?, 1, ?, ?, ?, ?, ?, 'commit', ?, NULL, 'pending')");
+            "VALUES (?, 2, ?, ?, ?, ?, ?, 'commit', ?, NULL, 'pending')");
 
         while (true) {
             RawCommitEvent event;
@@ -733,13 +841,17 @@ void TrainingDataWriter::worker_main() noexcept {
 
             try {
                 if (!has_bopomofo_input(event)) continue;
+                std::lock_guard protection_lock(protection_mutex_);
+                if (!recording_enabled_.load(std::memory_order_acquire)) continue;
+                if (!public_parameters) public_parameters = read_parameters(database);
+                const auto& parameters = *public_parameters;
                 const std::string event_id =
                     event.session_id + ":" + std::to_string(event.sequence);
                 insert.bind_text(1, event_id);
-                insert.bind_text(2, utf8::utf16to8(event.context));
-                insert.bind_text(3, utf8::utf16to8(event.answer));
-                insert.bind_text(4, serialize_padding(event));
-                insert.bind_text(5, utf8::utf16to8(display_reading(event)));
+                insert.bind_text(2, commit_crypto::seal(utf8::utf16to8(event.context), event_id + "/context", parameters));
+                insert.bind_text(3, commit_crypto::seal(utf8::utf16to8(event.answer), event_id + "/answer", parameters));
+                insert.bind_text(4, commit_crypto::seal(serialize_padding(event), event_id + "/padding_json", parameters));
+                insert.bind_text(5, commit_crypto::seal(utf8::utf16to8(display_reading(event)), event_id + "/reading", parameters));
                 insert.bind_integer(6, was_revised(event) ? 1 : 0);
                 insert.bind_text(7, event.committed_at_utc);
                 insert.execute();

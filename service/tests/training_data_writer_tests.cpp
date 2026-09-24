@@ -1,11 +1,15 @@
 #include "service/training_data_writer.hpp"
 #include "service/lora_dataset_builder.hpp"
+#include "service/commit_crypto.hpp"
+#include "service/training_data_cleanup.hpp"
 
 #include <windows.h>
 #include <sqlite3.h>
 
 #include <filesystem>
+#include <chrono>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -13,6 +17,115 @@ using llavon::service::RawCommitEvent;
 using llavon::service::RawCommitInputEntry;
 using llavon::service::TrainingDataWriter;
 using llavon::service::write_lora_numeric_dataset;
+
+int protection_tests(const std::filesystem::path& path, RawCommitEvent event) {
+    using namespace llavon::service;
+    {
+        TrainingDataWriter writer(path);
+        writer.enqueue(event);
+    }
+    {
+        TrainingDataWriter writer(path);
+        if (writer.pending_count() != 0) return 40;
+        writer.configure_password("test-password");
+        writer.set_recording_enabled(false);
+        writer.enqueue(event);
+    }
+    {
+        TrainingDataWriter writer(path);
+        if (writer.pending_count() != 0 || writer.protection_status().enabled) return 41;
+        writer.set_recording_enabled(true);
+        writer.enqueue(event);
+    }
+    {
+        TrainingDataWriter writer(path);
+        if (writer.pending_count() != 1 || !writer.protection_status().enabled) return 42;
+        if (writer.pending_items("test-password").front().answer != event.answer) return 43;
+        try { writer.configure_password("replacement"); return 44; } catch (const std::exception&) {}
+    }
+    sqlite3* database = nullptr;
+    if (sqlite3_open16(path.c_str(), &database) != SQLITE_OK) return 45;
+    sqlite3_stmt* statement = nullptr;
+    if (sqlite3_prepare_v2(database,
+        "SELECT schema_version,context,answer,padding_json,reading FROM training_commits", -1,
+        &statement, nullptr) != SQLITE_OK) return 46;
+    if (sqlite3_step(statement) != SQLITE_ROW || sqlite3_column_int(statement, 0) != 2) return 47;
+    for (int column = 1; column <= 4; ++column) {
+        const std::string ciphertext(reinterpret_cast<const char*>(sqlite3_column_text(statement, column)));
+        if (ciphertext.size() < 96 || ciphertext.find("sample") != std::string::npos ||
+            ciphertext.find("result") != std::string::npos) return 48;
+    }
+    sqlite3_finalize(statement);
+    // Swapping authenticated fields must fail even with the correct password.
+    if (sqlite3_exec(database, "UPDATE training_commits SET answer=context", nullptr, nullptr, nullptr) != SQLITE_OK) return 49;
+    sqlite3_close(database);
+    {
+        TrainingDataWriter writer(path);
+        try { (void)writer.pending_items("test-password"); return 50; } catch (const std::exception&) {}
+        try { (void)writer.pending_records({u"session:7"}, "test-password"); return 51; } catch (const std::exception&) {}
+    }
+    std::filesystem::remove(path);
+
+    // Migrate a legacy plaintext row without ever making it readable unauthenticated.
+    { TrainingDataWriter writer(path); }
+    if (sqlite3_open16(path.c_str(), &database) != SQLITE_OK) return 52;
+    const char* legacy = "INSERT INTO training_commits(event_id,context,answer,padding_json,reading,revice,committed_at_utc) "
+        "VALUES('legacy:1','old-context','old-answer','[{\"syllable\":\"ㄅ\",\"tone\":1}]','ㄅ',0,'t')";
+    if (sqlite3_exec(database, legacy, nullptr, nullptr, nullptr) != SQLITE_OK) return 53;
+    sqlite3_close(database);
+    {
+        TrainingDataWriter writer(path);
+        if (!writer.pending_items().front().answer.empty()) return 54;
+        writer.configure_password("migration-password");
+        const auto records = writer.pending_records({u"legacy:1"}, "migration-password");
+        if (records.size() != 1 || records.front().answer != u"old-answer") return 55;
+    }
+    {
+        std::ifstream file(path, std::ios::binary);
+        const std::string bytes{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        if (bytes.find("old-answer") != std::string::npos || bytes.find("old-context") != std::string::npos) return 56;
+    }
+    std::filesystem::remove(path);
+
+    const auto cache = path.parent_path() / (path.filename().wstring() + L"-runs");
+    const auto run = cache / L"one";
+    std::filesystem::create_directories(run);
+    { std::ofstream file(run / L"training.jsonl"); file << "plaintext"; }
+    { std::ofstream file(run / L"training.jsonl.partial"); file << "plaintext"; }
+    { std::ofstream file(run / L"adapter.safetensors"); file << "model"; }
+    if (discard_plaintext_training_datasets(cache) != 2 ||
+        !std::filesystem::exists(run / L"adapter.safetensors") ||
+        discard_plaintext_training_datasets(cache) != 0) return 57;
+    const auto locked = run / L"training.jsonl";
+    HANDLE handle = CreateFileW(locked.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return 58;
+    bool blocked = false;
+    try { (void)discard_plaintext_training_datasets(cache); } catch (const std::exception&) { blocked = true; }
+    CloseHandle(handle);
+    if (!blocked || discard_plaintext_training_datasets(cache) != 1) return 59;
+    std::filesystem::remove(run / L"adapter.safetensors");
+    std::filesystem::remove(run);
+    std::filesystem::remove(cache);
+
+    commit_crypto::PublicParameters parameters;
+    randombytes_buf(parameters.salt.data(), parameters.salt.size());
+    commit_crypto::PrivateKey private_key;
+    commit_crypto::derive("benchmark-password", parameters, private_key, false);
+    const auto first = commit_crypto::seal("message", "id/answer", parameters);
+    if (first == commit_crypto::seal("message", "id/answer", parameters) ||
+        commit_crypto::open(first, "id/answer", parameters, private_key) != "message") return 60;
+    auto damaged = first;
+    damaged.back() = damaged.back() == '0' ? '1' : '0';
+    try { (void)commit_crypto::open(damaged, "id/answer", parameters, private_key); return 61; } catch (const std::exception&) {}
+    const std::string payload(1024, 'x');
+    const auto begin = std::chrono::steady_clock::now();
+    for (int record = 0; record < 100; ++record) {
+        for (int field = 0; field < 4; ++field) (void)commit_crypto::seal(payload, "benchmark/field", parameters);
+    }
+    const auto microseconds = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
+    std::cout << "Background encryption (4 x 1 KiB fields): " << microseconds / 100 << " us/commit\n";
+    return 0;
+}
 
 int main() {
     const RawCommitEvent event{
@@ -85,6 +198,9 @@ int main() {
     std::vector<std::size_t> inserted_counts;
     {
         TrainingDataWriter writer(path);
+        if (writer.protection_status().configured || writer.protection_status().enabled) return 30;
+        writer.enqueue(event); // Default-off must not persist this event.
+        writer.configure_password("0000");
         writer.set_pending_count_callback([&](std::size_t count) {
             inserted_counts.push_back(count);
         });
@@ -118,13 +234,16 @@ int main() {
         });
         if (writer.pending_count() != 4 ||
             changed_counts != std::vector<std::size_t>{4}) return 15;
-        const auto pending = writer.pending_items();
+        if (writer.pending_items()[0].answer != u"") return 31;
+        try { (void)writer.pending_items("incorrect"); return 32; } catch (const std::exception&) {}
+        try { (void)writer.pending_records({u"session:7"}); return 33; } catch (const std::exception&) {}
+        const auto pending = writer.pending_items("0000");
         if (pending.size() != 4 || pending[0].event_id != u"session:7" ||
             pending[0].context != u"sample" || pending[0].answer != u"result" ||
             pending[0].reading.empty() || !pending[0].revice) {
             return 4;
         }
-        const auto stored = writer.pending_records({u"session:7", u"s:1"});
+        const auto stored = writer.pending_records({u"session:7", u"s:1"}, "0000");
         if (stored.size() != 2 || !stored[0].revice || stored[1].revice ||
             stored[0].padding_json.find(R"("tone":3)") == std::string::npos ||
             stored[0].padding_json.find(R"("tone":1)") == std::string::npos ||
@@ -132,7 +251,7 @@ int main() {
             stored[1].padding_json.find(R"({"rawReading":)") == std::string::npos) {
             return 5;
         }
-        const auto records = writer.pending_records({u"train:1"});
+        const auto records = writer.pending_records({u"train:1"}, "0000");
         if (records.size() != 1 || records[0].padding_json.empty()) return 6;
 
         auto config_path = path;
@@ -280,5 +399,7 @@ int main() {
     auto malformed_shm_path = malformed_path;
     malformed_shm_path += L"-shm";
     DeleteFileW(malformed_shm_path.c_str());
-    return 0;
+    auto protection_path = path;
+    protection_path += L".protection.sqlite3";
+    return protection_tests(protection_path, event);
 }

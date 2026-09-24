@@ -105,7 +105,8 @@ public:
                       llavon_settings_lora_model_action_callback lora_model_action_callback,
                       void* lora_model_action_context,
                       llavon_settings_cancel_lora_callback cancel_lora_callback,
-                      void* cancel_lora_context) {
+                      void* cancel_lora_context,
+    llavon_settings_protection_callback protection_callback, void* protection_context) {
         std::lock_guard lock(mutex_);
         if (settings_thread_.thread) {
             return ERROR_BUSY;
@@ -158,6 +159,8 @@ public:
         configuration.lora_model_action_context = lora_model_action_context;
         configuration.cancel_lora_callback = cancel_lora_callback;
         configuration.cancel_lora_context = cancel_lora_context;
+        configuration.protection_callback = protection_callback;
+        configuration.protection_context = protection_context;
         configuration.training_items.reserve(training_item_count);
         for (std::size_t index = 0; index < training_item_count; ++index) {
             const auto& source = training_items[index];
@@ -493,7 +496,7 @@ Runtime& runtime() {
 }  // namespace
 }  // namespace llavon::settings
 
-extern "C" int32_t llavon_settings_ui_configure(
+extern "C" int32_t llavon_settings_ui_configure_v2(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
@@ -526,7 +529,8 @@ extern "C" int32_t llavon_settings_ui_configure(
     llavon_settings_lora_model_action_callback lora_model_action_callback,
     void* lora_model_action_context,
     llavon_settings_cancel_lora_callback cancel_lora_callback,
-    void* cancel_lora_context) {
+    void* cancel_lora_context,
+    llavon_settings_protection_callback protection_callback, void* protection_context) {
     return llavon::settings::runtime().configure(
         devices, device_count, selected_backend, selected_device_id, active_device,
         gpu_offload, fell_back_to_cpu, save_callback, save_context,
@@ -539,7 +543,8 @@ extern "C" int32_t llavon_settings_ui_configure(
         get_lora_history_context, start_lora_training_callback,
         start_lora_training_context, get_lora_status_callback,
         get_lora_status_context, lora_model_action_callback,
-        lora_model_action_context, cancel_lora_callback, cancel_lora_context);
+        lora_model_action_context, cancel_lora_callback, cancel_lora_context,
+        protection_callback, protection_context);
 }
 
 extern "C" int32_t llavon_settings_ui_start(void) {

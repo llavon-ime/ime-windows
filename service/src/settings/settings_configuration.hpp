@@ -60,6 +60,8 @@ struct SettingsConfiguration {
     void* refresh_training_items_context = nullptr;
     llavon_settings_get_lora_history_callback get_lora_history_callback = nullptr;
     void* get_lora_history_context = nullptr;
+    llavon_settings_protection_callback protection_callback = nullptr;
+    void* protection_context = nullptr;
     llavon_settings_start_lora_training_callback start_lora_training_callback = nullptr;
     void* start_lora_training_context = nullptr;
     llavon_settings_get_lora_status_callback get_lora_status_callback = nullptr;
