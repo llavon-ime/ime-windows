@@ -2,7 +2,8 @@
 
 #include <shlobj.h>
 #include <sqlite3.h>
-#include <jsoncons/json.hpp>
+#include <rfl/Generic.hpp>
+#include <rfl/json.hpp>
 #include <utf8/cpp20.h>
 #include <windows.h>
 
@@ -12,6 +13,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 namespace llavon::service {
 namespace {
@@ -265,13 +267,17 @@ std::string column_text(sqlite3_stmt* statement, int column);
 
 bool has_bopomofo_annotation(std::string_view padding_json) {
     try {
-        const auto padding = jsoncons::json::parse(padding_json);
-        if (!padding.is_array()) return true; // Leave malformed data untouched.
-        for (const auto& entry : padding.array_range()) {
-            if (!entry.is_object()) return true;
+        const auto padding = rfl::json::read<rfl::Generic>(padding_json);
+        if (!padding) return true; // Leave malformed data untouched.
+        const auto* entries = std::get_if<rfl::Generic::Array>(&padding->get());
+        if (!entries) return true;
+        for (const auto& entry : *entries) {
+            const auto* object = std::get_if<rfl::Generic::Object>(&entry.get());
+            if (!object) return true;
             for (const char* key : {"syllable", "rawReading"}) {
-                if (entry.contains(key) && entry.at(key).is_string() &&
-                    has_bopomofo(utf8::utf8to16(entry.at(key).as<std::string>()))) {
+                if (!object->count(key)) continue;
+                const auto value = object->at(key).to_string();
+                if (value && has_bopomofo(utf8::utf8to16(*value))) {
                     return true;
                 }
             }

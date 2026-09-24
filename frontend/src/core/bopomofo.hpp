@@ -12,7 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "jsoncons/json.hpp"
+#include <rfl/json.hpp>
 #include "system/globals.h"
 #include "utf8cpp/utf8/cpp20.h"
 
@@ -244,8 +244,8 @@ private:
     HanziMapEngine() {
         std::filesystem::path mapping_file = resolve_mapping_file();
         std::ifstream ifs(mapping_file);
-        jsoncons::json j = jsoncons::json::parse(ifs);
-        auto temp = j.as<std::unordered_map<std::string, std::vector<std::string>>>();
+        auto temp = rfl::json::read<
+            std::unordered_map<std::string, std::vector<std::string>>>(ifs).value();
         for (auto& [k, v] : temp) {
             auto key = utf8::utf8to16(k);
             std::vector<char32_t> wvec;

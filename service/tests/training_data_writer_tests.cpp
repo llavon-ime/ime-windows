@@ -251,5 +251,34 @@ int main() {
     shm_path += L"-shm";
     DeleteFileW(shm_path.c_str());
     if (!saw_excluded || !saw_trained || saw_pending) return 13;
+
+    auto malformed_path = path;
+    malformed_path += L".malformed.sqlite3";
+    DeleteFileW(malformed_path.c_str());
+    {
+        TrainingDataWriter writer(malformed_path);
+    }
+    sqlite3* malformed_database = nullptr;
+    if (sqlite3_open16(malformed_path.c_str(), &malformed_database) != SQLITE_OK) return 24;
+    const char* malformed_insert =
+        "INSERT INTO training_commits(event_id,context,answer,padding_json,reading,"
+        "revice,committed_at_utc) VALUES "
+        "('malformed:1','','','{','',0,'t'),"
+        "('nonobject:1','','','[42]','',0,'t')";
+    const int malformed_result = sqlite3_exec(
+        malformed_database, malformed_insert, nullptr, nullptr, nullptr);
+    sqlite3_close(malformed_database);
+    if (malformed_result != SQLITE_OK) return 25;
+    {
+        TrainingDataWriter writer(malformed_path);
+        if (writer.pending_count() != 2 || writer.pending_items().size() != 2) return 26;
+    }
+    DeleteFileW(malformed_path.c_str());
+    auto malformed_wal_path = malformed_path;
+    malformed_wal_path += L"-wal";
+    DeleteFileW(malformed_wal_path.c_str());
+    auto malformed_shm_path = malformed_path;
+    malformed_shm_path += L"-shm";
+    DeleteFileW(malformed_shm_path.c_str());
     return 0;
 }

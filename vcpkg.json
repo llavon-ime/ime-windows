@@ -10,10 +10,6 @@
       "name": "cppwinrt",
       "platform": "windows"
     },
-    {
-      "name": "jsoncons",
-      "platform": "windows"
-    },
     "llama-cpp",
     "reflectcpp",
     {

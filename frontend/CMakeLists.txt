@@ -52,7 +52,7 @@ target_compile_options(llavon-ime-lifecycle PRIVATE
 )
 
 find_package(cppwinrt CONFIG REQUIRED)
-find_package(jsoncons CONFIG REQUIRED)
+find_package(reflectcpp CONFIG REQUIRED)
 find_package(utf8cpp CONFIG REQUIRED)
 
 target_link_libraries(llavon-ime PRIVATE
@@ -62,7 +62,7 @@ target_link_libraries(llavon-ime PRIVATE
     ole32       # COM
     oleaut32    # COM Automation
     uuid        # TSF GUID constants
-    jsoncons
+    reflectcpp::reflectcpp
     llavon::debug-client
     utf8::cpp
     utf8cpp::utf8cpp

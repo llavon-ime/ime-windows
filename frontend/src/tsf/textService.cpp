@@ -11,7 +11,8 @@
 #include <inputscope.h>
 #include <optional>
 
-#include <jsoncons/json.hpp>
+#include <rfl/DefaultIfMissing.hpp>
+#include <rfl/json.hpp>
 
 #include "candidateUiController.hpp"
 #include "core/bopomofo.hpp"
@@ -65,6 +66,10 @@ bool has_private_input_scope(ITfContext* context, TfEditCookie cookie,
     return is_private;
 }
 
+struct WidthToggleSettings {
+    bool shift_space_width_toggle_enabled = false;
+};
+
 bool load_width_toggle_setting() noexcept {
     try {
         const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
@@ -81,13 +86,9 @@ bool load_width_toggle_setting() noexcept {
         std::ifstream input(path, std::ios::binary);
         if (!input) return false;
 
-        const jsoncons::json document = jsoncons::json::parse(input);
-        if (!document.is_object() ||
-            !document.contains("shift_space_width_toggle_enabled")) {
-            return false;
-        }
-        const auto& setting = document.at("shift_space_width_toggle_enabled");
-        return setting.is_bool() && setting.as<bool>();
+        const auto settings = rfl::json::read<
+            WidthToggleSettings, rfl::DefaultIfMissing>(input);
+        return settings && settings->shift_space_width_toggle_enabled;
     } catch (...) {
         return false;
     }

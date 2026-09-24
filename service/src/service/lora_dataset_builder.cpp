@@ -1,12 +1,12 @@
 #include "lora_dataset_builder.hpp"
 
-#include <jsoncons/json.hpp>
 #include <rfl/json.hpp>
 #include <utf8/cpp20.h>
 
 #include <algorithm>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -18,6 +18,16 @@ namespace {
 
 using TokenMap = std::unordered_map<std::string, std::int64_t>;
 using CandidateMap = std::unordered_map<std::string, std::vector<std::string>>;
+
+struct ModelConfig {
+    std::int64_t vocab_size;
+    std::int64_t max_position_embeddings;
+};
+
+struct PaddingEntry {
+    std::optional<std::string> syllable;
+    std::optional<int> tone;
+};
 
 std::string read_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
@@ -152,10 +162,10 @@ std::vector<std::int64_t> tokenize_context(const std::u16string& context,
     return result;
 }
 
-std::string reading_with_tone(const jsoncons::json& entry) {
-    if (!entry.contains("syllable") || !entry.contains("tone")) return {};
-    std::string result = entry.at("syllable").as<std::string>();
-    switch (entry.at("tone").as<int>()) {
+std::string reading_with_tone(const PaddingEntry& entry) {
+    if (!entry.syllable || !entry.tone) return {};
+    std::string result = *entry.syllable;
+    switch (*entry.tone) {
         case 1: result += " "; break;
         case 2: result += "ˊ"; break;
         case 3: result += "ˇ"; break;
@@ -168,14 +178,14 @@ std::string reading_with_tone(const jsoncons::json& entry) {
 
 bool build_row(const TrainingDataRecord& record, const RuntimeTables& tables,
                std::int32_t maximum_sequence_length, std::string& output) {
-    const auto padding = jsoncons::json::parse(record.padding_json);
-    if (!padding.is_array()) return false;
+    const auto padding = rfl::json::read<std::vector<PaddingEntry>>(record.padding_json);
+    if (!padding) return false;
     const std::u32string answer = utf8::utf8to32(utf8::utf16to8(record.answer));
-    if (answer.empty() || answer.size() != padding.size()) return false;
+    if (answer.empty() || answer.size() != padding->size()) return false;
 
     std::vector<std::string> readings;
-    readings.reserve(padding.size());
-    for (const auto& entry : padding.array_range()) {
+    readings.reserve(padding->size());
+    for (const auto& entry : *padding) {
         const std::string reading = reading_with_tone(entry);
         if (reading.empty()) return false;
         readings.push_back(reading);
@@ -254,10 +264,9 @@ LoraDatasetBuildResult write_lora_numeric_dataset(
         throw std::invalid_argument("maximum sequence length must be greater than one");
     }
 
-    const auto model_config = jsoncons::json::parse(read_file(model_config_path));
-    const std::int64_t vocabulary_size = model_config.at("vocab_size").as<std::int64_t>();
-    const std::int64_t model_maximum =
-        model_config.at("max_position_embeddings").as<std::int64_t>();
+    const auto model_config = rfl::json::read<ModelConfig>(read_file(model_config_path)).value();
+    const std::int64_t vocabulary_size = model_config.vocab_size;
+    const std::int64_t model_maximum = model_config.max_position_embeddings;
     if (vocabulary_size <= 0 || model_maximum <= 1 ||
         maximum_sequence_length > model_maximum) {
         throw std::invalid_argument("training sequence length exceeds the model configuration");

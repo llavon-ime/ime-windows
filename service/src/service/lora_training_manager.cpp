@@ -3,7 +3,7 @@
 #include "lora_dataset_builder.hpp"
 #include "winrt_http.hpp"
 
-#include <jsoncons/json.hpp>
+#include <rfl/json.hpp>
 #include <shlobj.h>
 #include <utf8/cpp20.h>
 
@@ -184,10 +184,18 @@ std::string utc_now() {
         std::chrono::system_clock::now()));
 }
 
+struct TrainingState {
+    std::int64_t step;
+};
+
+struct ModelRevision {
+    std::string sha;
+};
+
 std::int64_t training_steps(const std::filesystem::path& adapter_directory) {
-    const auto state = jsoncons::json::parse(
-        read_text(adapter_directory / L"training_state.json"));
-    return state.at("step").as<std::int64_t>();
+    const auto state = rfl::json::read<TrainingState>(
+        read_text(adapter_directory / L"training_state.json")).value();
+    return state.step;
 }
 
 }  // namespace
@@ -352,8 +360,8 @@ std::string LoraTrainingManager::resolve_remote_revision() {
     const std::string body = http_get_string(
         L"/api/models/tony65535/llavon-ime-llama-250m/revision/main",
         http_transfer_);
-    const auto metadata = jsoncons::json::parse(body);
-    const std::string revision = metadata.at("sha").as<std::string>();
+    const auto metadata = rfl::json::read<ModelRevision>(body).value();
+    const std::string revision = metadata.sha;
     if (!valid_revision(revision)) {
         throw std::runtime_error("Hugging Face returned an invalid model revision");
     }
