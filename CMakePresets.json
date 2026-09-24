@@ -9,6 +9,7 @@
     {
       "name": "windows",
       "displayName": "Windows",
+      "architecture": "x64",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/dist",
