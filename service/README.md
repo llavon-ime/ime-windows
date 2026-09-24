@@ -19,6 +19,17 @@ The service also owns the interactive per-user process shell:
 - After the model has loaded, the settings window receives the active backend,
   hardware description, device ID, and GPU-offload state reported by
   `ime-core`; this runtime status is kept separate from the next-start setting.
+- With supported NVIDIA drivers, the service requests a device-scoped latency
+  boost before `Ready` and `Predict`, then releases it after two seconds without
+  either request. This keeps GPU clocks from dropping between keystrokes while
+  retaining the existing ime-core warmup. It uses the public NVAPI low-latency
+  boost hint on an offscreen D3D11 device matched to the inference GPU's PCI
+  address; inference still uses the selected backend. No driver profile or
+  global power setting is changed, and no background inference work is added.
+  Switching model/device or shutting down also releases the hint. Missing or
+  unsupported drivers retain ordinary inference; boost errors are logged.
+  Performance verification must include 250 ms request spacing and resumption
+  after more than two seconds idle, not only continuous token throughput.
 - `llavon-ime-candidate-ui.dll` is loaded on the first candidate presentation.
   It owns one dedicated STA thread, one candidate HWND, and its own XAML island.
 - Candidate presentation snapshots arrive through the independent

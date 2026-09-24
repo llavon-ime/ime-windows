@@ -4,14 +4,14 @@
 
 #include <windows.h>
 #include <sddl.h>
-#include <objbase.h>
+#include <winrt/Windows.Foundation.h>
 
 #include <asio.hpp>
 #include <ime-core/core.hpp>
 #include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <cstdint>
+#include <format>
 #include <future>
 #include <iostream>
 #include <list>
@@ -24,6 +24,7 @@
 
 #include "candidate_pipe_server.hpp"
 #include "custom_name_matcher.hpp"
+#include "gpu_latency_boost.hpp"
 #include "training_data_writer.hpp"
 
 namespace llavon::service {
@@ -184,29 +185,22 @@ inline asio::awaitable<bool> read_utf16_string(
 }
 
 inline std::string new_collection_session_id() {
-    GUID value{};
-    if (FAILED(CoCreateGuid(&value))) {
-        return std::to_string(GetCurrentProcessId()) + "-" +
-               std::to_string(GetTickCount64());
+    try {
+        const auto value = winrt::Windows::Foundation::GuidHelper::CreateNewGuid();
+        return std::format(
+            "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            value.Data1, value.Data2, value.Data3, value.Data4[0], value.Data4[1],
+            value.Data4[2], value.Data4[3], value.Data4[4], value.Data4[5],
+            value.Data4[6], value.Data4[7]);
+    } catch (const winrt::hresult_error&) {
+        return std::format("{}-{}", GetCurrentProcessId(), GetTickCount64());
     }
-    char text[37]{};
-    std::snprintf(
-        text, sizeof(text),
-        "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-        value.Data1, value.Data2, value.Data3, value.Data4[0], value.Data4[1],
-        value.Data4[2], value.Data4[3], value.Data4[4], value.Data4[5],
-        value.Data4[6], value.Data4[7]);
-    return text;
 }
 
 inline std::string utc_timestamp() {
-    SYSTEMTIME value{};
-    GetSystemTime(&value);
-    char text[25]{};
-    std::snprintf(text, sizeof(text), "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ",
-                  value.wYear, value.wMonth, value.wDay, value.wHour,
-                  value.wMinute, value.wSecond, value.wMilliseconds);
-    return text;
+    const auto now = std::chrono::floor<std::chrono::milliseconds>(
+        std::chrono::system_clock::now());
+    return std::format("{:%FT%T}Z", now);
 }
 
 template <typename T>
@@ -269,10 +263,12 @@ public:
     using ClientId = std::uint64_t;
     static constexpr std::size_t capacity = 5;
 
-    explicit SessionLru(std::shared_ptr<llavon::ime::core::Core> core) : core_(std::move(core)) {
+    SessionLru(asio::io_context& context, std::shared_ptr<llavon::ime::core::Core> core)
+        : core_(std::move(core)), gpu_activity_(context) {
         if (!core_) {
             throw std::invalid_argument("inference core is required");
         }
+        gpu_activity_.set_backend(make_gpu_latency_boost(core_->inference_runtime_info()));
     }
 
     llavon::ime::core::InferenceRuntimeInfo replace_core(
@@ -283,6 +279,7 @@ public:
         idle_.clear();
         recency_.clear();
         core_ = std::move(replacement);
+        gpu_activity_.set_backend(make_gpu_latency_boost(core_->inference_runtime_info()));
         return core_->inference_runtime_info();
     }
 
@@ -290,6 +287,7 @@ public:
         if (!core_) {
             throw std::runtime_error("inference core is not loaded");
         }
+        gpu_activity_.activate();
         const auto existing = sessions_.find(client_id);
         if (existing != sessions_.end()) {
             recency_.splice(recency_.begin(), recency_, existing->second.recency);
@@ -333,6 +331,10 @@ public:
         idle_.push_back(std::move(session));
     }
 
+    void release_gpu_activity() noexcept {
+        gpu_activity_.set_backend({});
+    }
+
 private:
     struct Entry {
         std::unique_ptr<llavon::ime::core::Session> session;
@@ -341,6 +343,7 @@ private:
 
     // SessionLru is confined to the prediction server's single io_context thread.
     std::shared_ptr<llavon::ime::core::Core> core_;
+    GpuActivityLease gpu_activity_;
     std::list<ClientId> recency_;
     std::unordered_map<ClientId, Entry> sessions_;
     std::vector<std::unique_ptr<llavon::ime::core::Session>> idle_;
@@ -578,7 +581,7 @@ public:
         std::shared_ptr<llavon::ime::core::Core> core,
         CandidateUiLoader& candidate_ui,
         std::shared_ptr<CustomNameMatcher> custom_names)
-        : sessions_(std::make_shared<prediction_pipe::SessionLru>(std::move(core))),
+        : sessions_(std::make_shared<prediction_pipe::SessionLru>(io_ctx_, std::move(core))),
           candidate_ui_(candidate_ui),
           custom_names_(std::move(custom_names)),
           training_data_(std::make_shared<TrainingDataWriter>()) {
@@ -658,6 +661,9 @@ public:
                  asio::detached);
         co_spawn(io_ctx_, candidate_pipe.listen(), asio::detached);
         io_ctx_.run();
+        // Release on the inference thread even when stop() prevented the idle
+        // timer from running and outstanding clients still retain sessions_.
+        sessions_->release_gpu_activity();
         accepting_reloads_.store(false, std::memory_order_release);
 
         return 0;

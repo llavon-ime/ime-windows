@@ -20,6 +20,9 @@ add_executable(llavon-ime-service
     src/service/candidate_ui_loader.hpp
     src/service/custom_name_matcher.cpp
     src/service/custom_name_matcher.hpp
+    src/service/gpu_activity_lease.hpp
+    src/service/gpu_latency_boost.cpp
+    src/service/gpu_latency_boost.hpp
     src/service/commit_crypto.hpp
     src/service/training_data_cleanup.hpp
     src/service/lora_dataset_builder.cpp
@@ -168,6 +171,9 @@ target_link_libraries(llavon-ime-service PRIVATE
     unofficial-sodium::sodium
     unofficial::sqlite3::sqlite3
     advapi32
+    d3d11
+    dxgi
+    gdi32
     ole32
     oleaut32
     shell32
@@ -191,6 +197,15 @@ target_link_libraries(llavon-ime-candidate-ui PRIVATE
 )
 
 if(BUILD_TESTING)
+    add_executable(gpu-activity-lease-tests tests/gpu_activity_lease_tests.cpp)
+    target_compile_features(gpu-activity-lease-tests PRIVATE cxx_std_23)
+    target_compile_definitions(gpu-activity-lease-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+    target_compile_options(gpu-activity-lease-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(gpu-activity-lease-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(gpu-activity-lease-tests PRIVATE asio::asio ws2_32)
+    add_test(NAME gpu-activity-lease COMMAND gpu-activity-lease-tests)
+
     add_executable(candidate-pipe-protocol-tests
         tests/candidate_pipe_protocol_tests.cpp
         src/service/candidate_pipe_protocol.hpp
