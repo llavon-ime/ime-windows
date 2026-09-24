@@ -205,11 +205,7 @@ int main(int argc, char* argv[]) {
         llavon::service::PredictionPipeServer server(
             std::move(core), candidate_ui, custom_names);
         llavon::service::LoraTrainingManager lora_training(
-            server.training_data_writer(), config.tables_dir,
-            [](const std::filesystem::path& model_path) {
-                return llavon::service::save_model_path(
-                    utf8::utf16to8(model_path.u16string()));
-            });
+            server.training_data_writer(), config.tables_dir);
         auto custom_names_update_mutex = std::make_shared<std::mutex>();
         llavon::service::SettingsUiLoader settings_ui;
         auto active_config = std::make_shared<llavon::ime::core::CoreConfig>(config);
@@ -241,7 +237,8 @@ int main(int argc, char* argv[]) {
                 }
             },
             std::move(displayed_model_path),
-            [&server, active_config](const std::filesystem::path& model_path) {
+            [&server, active_config, &lora_training](
+                const std::filesystem::path& model_path) {
                 try {
                     const auto resolved_model_path =
                         resolve_configured_model_path(model_path);
@@ -256,6 +253,7 @@ int main(int argc, char* argv[]) {
                     const auto model_path_utf8 = utf8::utf16to8(model_path.u16string());
                     if (!llavon::service::save_model_path(model_path_utf8)) return false;
                     active_config->model_path = resolved_model_path;
+                    lora_training.on_model_applied(resolved_model_path);
                     return true;
                 } catch (const std::exception& error) {
                     std::cerr << "[ERR] unable to reload model: "

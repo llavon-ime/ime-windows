@@ -8,7 +8,6 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -63,12 +62,8 @@ struct LoraOperationStatus {
 
 class LoraTrainingManager final {
 public:
-    using SaveCompletedModelPath =
-        std::function<bool(const std::filesystem::path&)>;
-
     LoraTrainingManager(std::shared_ptr<TrainingDataWriter> training_data,
-                        std::filesystem::path tables_directory,
-                        SaveCompletedModelPath save_completed_model_path = {});
+                        std::filesystem::path tables_directory);
     ~LoraTrainingManager();
 
     LoraTrainingManager(const LoraTrainingManager&) = delete;
@@ -80,6 +75,7 @@ public:
     bool start_training_async(std::vector<std::u16string> event_ids,
                               const std::vector<std::u16string>& reviewed_event_ids,
                               LoraTrainingOptions options, std::string_view password);
+    void on_model_applied(const std::filesystem::path& model_path) const noexcept;
     std::size_t discard_plaintext_datasets();
     void reset_conversation_data();
     void cancel() noexcept;
@@ -91,6 +87,8 @@ private:
     void check_model_worker();
     void download_model_worker();
     void training_worker();
+    void prune_obsolete_gguf_models(
+        const std::filesystem::path& applied_model_path) const noexcept;
     void set_status(LoraOperationStage stage, double progress,
                     std::u16string message);
     void set_failed(const std::exception& error) noexcept;
@@ -105,7 +103,6 @@ private:
 
     std::shared_ptr<TrainingDataWriter> training_data_;
     std::filesystem::path tables_directory_;
-    SaveCompletedModelPath save_completed_model_path_;
     std::filesystem::path assets_root_;
     mutable std::mutex status_mutex_;
     LoraOperationStatus status_;

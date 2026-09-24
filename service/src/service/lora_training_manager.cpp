@@ -204,11 +204,9 @@ std::int64_t training_steps(const std::filesystem::path& adapter_directory) {
 
 LoraTrainingManager::LoraTrainingManager(
     std::shared_ptr<TrainingDataWriter> training_data,
-    std::filesystem::path tables_directory,
-    SaveCompletedModelPath save_completed_model_path)
+    std::filesystem::path tables_directory)
     : training_data_(std::move(training_data)),
       tables_directory_(std::move(tables_directory)),
-      save_completed_model_path_(std::move(save_completed_model_path)),
       assets_root_(environment_path(assets_path_environment).value_or(
           local_app_data_root() / L"training-assets")) {
     if (!training_data_) throw std::invalid_argument("training data dependency is required");
@@ -218,6 +216,50 @@ LoraTrainingManager::LoraTrainingManager(
         status_.model_revision = utf8::utf8to16(revision);
         status_.stage = LoraOperationStage::model_ready;
         status_.message = u"基礎模型已下載";
+    }
+}
+
+void LoraTrainingManager::on_model_applied(
+    const std::filesystem::path& model_path) const noexcept {
+    prune_obsolete_gguf_models(model_path);
+}
+
+void LoraTrainingManager::prune_obsolete_gguf_models(
+    const std::filesystem::path& applied_model_path) const noexcept {
+    try {
+        const auto history = training_data_->lora_training_history();
+        if (history.size() < 2) return;
+
+        std::error_code error;
+        const auto normalize = [&](const std::filesystem::path& path) {
+            return std::filesystem::absolute(path, error).lexically_normal();
+        };
+        const auto runs_root = normalize(assets_root_ / L"runs");
+        if (error) return;
+        const auto latest = normalize(history.back().output_model_path);
+        if (error || !std::filesystem::is_regular_file(latest, error)) return;
+        if (applied_model_path.empty()) return;
+        const auto active = normalize(applied_model_path);
+        if (error || active != latest) return;
+
+        for (const auto& run : history) {
+            const auto candidate = normalize(run.output_model_path);
+            if (error) break;
+            if (candidate == latest ||
+                candidate.filename() != L"personalized-Q4_K_M.gguf" ||
+                candidate.parent_path().parent_path() != runs_root) {
+                continue;
+            }
+            std::filesystem::remove(candidate, error);
+            if (error) {
+                std::clog << "[SRV] unable to remove obsolete LoRA GGUF: "
+                          << error.message() << '\n';
+                error.clear();
+            }
+        }
+    } catch (const std::exception& error) {
+        std::clog << "[SRV] unable to prune obsolete LoRA GGUF models: "
+                  << error.what() << '\n';
     }
 }
 
@@ -750,11 +792,6 @@ void LoraTrainingManager::training_worker() {
             completed_run, dataset.included_event_ids)) {
         throw std::runtime_error("model completed but training records could not be marked trained");
     }
-    if (save_completed_model_path_ &&
-        !save_completed_model_path_(gguf_path)) {
-        std::clog << "[SRV] unable to persist the completed model path\n";
-    }
-
     std::lock_guard lock(status_mutex_);
     status_.stage = LoraOperationStage::completed;
     status_.progress = 1;

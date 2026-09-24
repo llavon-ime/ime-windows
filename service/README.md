@@ -134,7 +134,13 @@ Hugging Face and stores `config.json`, `ime_vocab.json`, and
 %LOCALAPPDATA%\Llavon IME\training-assets\tony65535--llavon-ime-llama-250m\<revision>
 ```
 
-Each run gets its own directory under `training-assets\runs`. The service—not
+Each run gets its own directory under `training-assets\runs`. Training history
+and each run's `adapter_model.safetensors`, `adapter_config.json`, and
+`training_state.json` are retained so an earlier adapter can be exported again
+with its matching base-model revision. Only the latest completed run's quantized
+GGUF is retained for inference after the new model is successfully applied.
+Older GGUF files are kept if loading or saving the new model fails. The
+intermediate f16 GGUF is removed after export. The service—not
 the settings DLL—converts the selected SQLite rows into the numeric JSONL
 accepted by the CLI, starts the hidden trainer process, exports the adapter,
 and performs every related file operation. The default CLI path matches the
