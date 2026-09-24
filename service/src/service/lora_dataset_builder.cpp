@@ -27,6 +27,7 @@ struct ModelConfig {
 struct PaddingEntry {
     std::optional<std::string> syllable;
     std::optional<int> tone;
+    std::optional<std::string> literal;
 };
 
 std::string read_file(const std::filesystem::path& path) {
@@ -183,28 +184,44 @@ bool build_row(const TrainingDataRecord& record, const RuntimeTables& tables,
     const std::u32string answer = utf8::utf8to32(utf8::utf16to8(record.answer));
     if (answer.empty() || answer.size() != padding->size()) return false;
 
-    std::vector<std::string> readings;
-    readings.reserve(padding->size());
-    for (const auto& entry : *padding) {
-        const std::string reading = reading_with_tone(entry);
-        if (reading.empty()) return false;
-        readings.push_back(reading);
-    }
-
     std::vector<std::int64_t> tokens{tables.bos};
     auto context_tokens = tokenize_context(record.context, tables);
     tokens.insert(tokens.end(), context_tokens.begin(), context_tokens.end());
-    for (const auto& reading : readings) {
+    std::vector<std::string> readings;
+    readings.reserve(padding->size());
+    for (std::size_t position = 0; position < padding->size(); ++position) {
+        const auto& entry = (*padding)[position];
+        if (entry.literal && !entry.syllable && !entry.tone) {
+            const auto characters = utf8::utf8to32(*entry.literal);
+            if (characters.size() != 1 || characters.front() != answer[position]) return false;
+            const auto token = tables.characters.find(*entry.literal);
+            tokens.push_back(token == tables.characters.end() ? tables.unknown : token->second);
+            readings.emplace_back();
+            continue;
+        }
+        if (entry.literal) return false;
+        const std::string reading = reading_with_tone(entry);
+        if (reading.empty()) return false;
         const auto token = tables.bopomofo.find("<" + reading + ">");
         if (token == tables.bopomofo.end()) return false;
         tokens.push_back(token->second);
+        readings.push_back(reading);
     }
     tokens.push_back(tables.sep);
     const std::size_t prompt_length = tokens.size();
 
-    std::vector<std::vector<std::int64_t>> candidate_masks;
+    std::vector<std::optional<std::vector<std::int64_t>>> candidate_masks;
     candidate_masks.reserve(answer.size());
+    std::vector<std::int64_t> loss_weights;
+    loss_weights.reserve(answer.size());
     for (std::size_t position = 0; position < answer.size(); ++position) {
+        if (readings[position].empty()) {
+            const auto token = tables.characters.find(code_point_utf8(answer[position]));
+            tokens.push_back(token == tables.characters.end() ? tables.unknown : token->second);
+            candidate_masks.push_back(std::nullopt);
+            loss_weights.push_back(0);
+            continue;
+        }
         const auto candidates = tables.candidates.find(readings[position]);
         if (candidates == tables.candidates.end()) return false;
         std::vector<std::int64_t> mask;
@@ -223,7 +240,9 @@ bool build_row(const TrainingDataRecord& record, const RuntimeTables& tables,
         if (answer_token < 0 || mask.empty()) return false;
         tokens.push_back(answer_token);
         candidate_masks.push_back(std::move(mask));
+        loss_weights.push_back(1);
     }
+    if (std::find(loss_weights.begin(), loss_weights.end(), 1) == loss_weights.end()) return false;
     if (tokens.size() > static_cast<std::size_t>(maximum_sequence_length)) return false;
 
     output += R"({"tokens":)";
@@ -232,9 +251,13 @@ bool build_row(const TrainingDataRecord& record, const RuntimeTables& tables,
     append_integer_array(output, tokens);
     output += R"(,"loss_weights":)";
     output.push_back('[');
-    for (std::size_t index = 0; index < tokens.size(); ++index) {
+    for (std::size_t index = 0; index < prompt_length; ++index) {
         if (index != 0) output.push_back(',');
-        output.push_back(index < prompt_length ? '0' : '1');
+        output.push_back('0');
+    }
+    for (const auto weight : loss_weights) {
+        output.push_back(',');
+        output += std::to_string(weight);
     }
     output += R"(],"attention_mask":)";
     append_repeated_array(output, tokens.size(), 1);
@@ -244,8 +267,12 @@ bool build_row(const TrainingDataRecord& record, const RuntimeTables& tables,
         output += "null";
     }
     for (const auto& mask : candidate_masks) {
-        if (prompt_length != 0 || &mask != &candidate_masks.front()) output.push_back(',');
-        append_integer_array(output, mask);
+        output.push_back(',');
+        if (mask) {
+            append_integer_array(output, *mask);
+        } else {
+            output += "null";
+        }
     }
     output += "]}\n";
     return true;

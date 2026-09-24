@@ -86,12 +86,16 @@ Ordinary Bopomofo commits are stored in the SQLite `training_commits` table.
 `context`, `answer`, and `padding_json` preserve the same shape as the public
 validation set. The `revice` boolean is true when any position in the commit
 was manually selected; the original Bopomofo reading remains unchanged.
-Mixed commits retain literal punctuation and incomplete input as `literal` or
+Mixed commits retain literal characters and incomplete input as `literal` or
 `rawReading` entries. Commits with no Bopomofo reading anywhere are discarded,
 including pre-existing pending literal-only rows when the service starts. The
 `training_state` column is constrained to `pending`, `excluded`, or `trained`.
 `event_id`, `event_type`, and nullable `revision_of` are also stored; the last
 column reserves space for future typo/backspace/retype correction detection.
+During dataset conversion, literal characters use the same fixed character
+tokens as inference and provide context for later positions without loss.
+Records still need at least one complete, trainable Bopomofo reading; incomplete
+`rawReading` entries remain untrainable.
 
 Commits are first held as plaintext only in the service process for ten seconds.
 If the frontend reports an immediate Backspace for the same TSF context and the

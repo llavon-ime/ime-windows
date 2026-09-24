@@ -5,19 +5,29 @@
 
 #include <windows.h>
 #include <sqlite3.h>
+#include <rfl/json.hpp>
 
 #include <filesystem>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 using llavon::service::RawCommitEvent;
 using llavon::service::RawCommitInputEntry;
 using llavon::service::TrainingDataWriter;
 using llavon::service::write_lora_numeric_dataset;
+
+struct NumericTrainingRow {
+    std::vector<std::int64_t> tokens;
+    std::vector<std::int64_t> loss_weights;
+    std::vector<std::optional<std::vector<std::int64_t>>> candidate_masks;
+};
 
 int delete_pending_tests(const std::filesystem::path& path, RawCommitEvent event) {
     using namespace std::chrono_literals;
@@ -452,6 +462,52 @@ int main() {
             }
         }
         weighted_input.close();
+        auto mixed_record = records.front();
+        mixed_record.event_id = u"mixed:1";
+        mixed_record.answer = u"你，a2你";
+        mixed_record.padding_json =
+            R"([{"syllable":"ㄋㄧ","tone":3},{"literal":"，"},{"literal":"a"},{"literal":"2"},{"syllable":"ㄋㄧ","tone":3}])";
+        auto incomplete_record = mixed_record;
+        incomplete_record.event_id = u"incomplete:1";
+        incomplete_record.answer = u"ㄉ2";
+        incomplete_record.padding_json = R"([{"rawReading":"ㄉ"},{"literal":"2"}])";
+        const auto mixed_dataset = write_lora_numeric_dataset(
+            {mixed_record, incomplete_record},
+            std::filesystem::path(LLAVON_TEST_TABLES_DIR),
+            config_path, dataset_path, 384);
+        std::ifstream mixed_input(dataset_path, std::ios::binary);
+        std::string mixed_line;
+        std::getline(mixed_input, mixed_line);
+        const auto parsed_mixed = rfl::json::read<NumericTrainingRow>(mixed_line);
+        if (mixed_dataset.written != 1 || mixed_dataset.skipped != 1 ||
+            mixed_dataset.included_event_ids != std::vector<std::u16string>{u"mixed:1"} ||
+            !parsed_mixed) return 62;
+        const auto& mixed_row = parsed_mixed.value();
+        if (mixed_row.tokens.size() != 12 ||
+            mixed_row.loss_weights !=
+                std::vector<std::int64_t>{0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1} ||
+            mixed_row.candidate_masks.size() != mixed_row.tokens.size() ||
+            !mixed_row.candidate_masks[7] || mixed_row.candidate_masks[8] ||
+            mixed_row.candidate_masks[9] || mixed_row.candidate_masks[10] ||
+            !mixed_row.candidate_masks[11]) return 63;
+        const auto token_directory =
+            std::filesystem::path(LLAVON_TEST_TABLES_DIR) / L"tokens";
+        const auto characters = rfl::json::load<
+            std::unordered_map<std::string, std::int64_t>>(
+                (token_directory / L"chars.json").string()).value();
+        const auto special = rfl::json::load<
+            std::unordered_map<std::string, std::int64_t>>(
+                (token_directory / L"special_tokens.json").string()).value();
+        const auto fixed_token = [&](std::string_view character) {
+            const auto found = characters.find(std::string(character));
+            return found == characters.end() ? special.at("<UNK>") : found->second;
+        };
+        if (mixed_row.tokens[2] != fixed_token("，") ||
+            mixed_row.tokens[3] != fixed_token("a") ||
+            mixed_row.tokens[4] != fixed_token("2") ||
+            mixed_row.tokens[8] != mixed_row.tokens[2] ||
+            mixed_row.tokens[9] != mixed_row.tokens[3] ||
+            mixed_row.tokens[10] != mixed_row.tokens[4]) return 64;
         DeleteFileW(config_path.c_str());
         DeleteFileW(dataset_path.c_str());
         if (weighted.written != 2 || weighted.skipped != 0 ||
