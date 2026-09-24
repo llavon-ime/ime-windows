@@ -82,10 +82,15 @@ including pre-existing pending literal-only rows when the service starts. The
 `event_id`, `event_type`, and nullable `revision_of` are also stored; the last
 column reserves space for future typo/backspace/retype correction detection.
 
-Commits are inserted by a below-normal-priority writer thread. SQLite uses WAL
-mode, and selection/state changes run in transactions, so training-data I/O
-does not run on the inference path. This pre-release schema intentionally does
-not import the former JSONL prototype.
+Commits are first held as plaintext only in the service process for ten seconds.
+If the frontend reports an immediate Backspace for the same TSF context and the
+same latest commit, that staged commit is discarded and never reaches SQLite.
+Otherwise the below-normal-priority writer encrypts and inserts it after the
+window expires; a following commit in the same collection session confirms and
+flushes the preceding one early. Correction detection never decrypts or reads a
+stored commit. SQLite uses WAL mode, and selection/state changes run in
+transactions, so training-data I/O does not run on the inference path. This
+pre-release schema intentionally does not import the former JSONL prototype.
 
 ## Local LoRA training
 

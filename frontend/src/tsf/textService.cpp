@@ -804,14 +804,50 @@ void TextService::clear_composition_state() {
     private_input_scope_ = false;
 }
 
-void TextService::record_commit(CommitSample sample, bool private_input_scope) noexcept {
+void TextService::record_commit(CommitSample sample, bool private_input_scope,
+                                ITfContext* context) noexcept {
     if (private_input_scope || sample.answer.empty() || sample.input.empty()) {
         return;
     }
     try {
-        get_engine()->record_commit(sample);
+        const std::uint64_t token = get_engine()->record_commit(sample);
+        if (token == 0) return;
+        recent_commit_context_.copy_from(context);
+        recent_commit_time_ = std::chrono::steady_clock::now();
+        recent_commit_token_ = token;
+        recent_commit_tail_ = sample.context + sample.answer;
+        constexpr std::size_t maximum_context_length = 256;
+        if (recent_commit_tail_.size() > maximum_context_length) {
+            recent_commit_tail_.erase(
+                0, recent_commit_tail_.size() - maximum_context_length);
+        }
     } catch (...) {
         // Collection is best effort and must never break text input.
+    }
+}
+
+void TextService::forget_recent_commit() noexcept {
+    recent_commit_context_ = nullptr;
+    recent_commit_time_.reset();
+    recent_commit_tail_.clear();
+    recent_commit_token_ = 0;
+}
+
+void TextService::discard_recent_commit(ITfContext* context) noexcept {
+    constexpr auto correction_window = std::chrono::seconds(10);
+    try {
+        if (!context || !recent_commit_context_ || !recent_commit_time_ ||
+            !same_com_object(recent_commit_context_.get(), context) ||
+            std::chrono::steady_clock::now() - *recent_commit_time_ >
+                correction_window ||
+            get_pre_composit_context(context) != recent_commit_tail_) {
+            forget_recent_commit();
+            return;
+        }
+        get_engine()->discard_commit(recent_commit_token_);
+        forget_recent_commit();
+    } catch (...) {
+        forget_recent_commit();
     }
 }
 
@@ -839,6 +875,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* /*pDocMgr*/) try {
  * Receives document focus changes but does not react to them yet.
  */
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocumentMgr* /*pDocMgrPrevFocus*/) try {
+    forget_recent_commit();
     refresh_width_toggle_setting();
     refresh_input_mode_indicator();
     return S_OK;
@@ -860,7 +897,13 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* /*pContext*/) try { return S
  *
  * Releases contexts without additional cleanup.
  */
-STDMETHODIMP TextService::OnPopContext(ITfContext* /*pContext*/) try { return S_OK; } catch (...) {
+STDMETHODIMP TextService::OnPopContext(ITfContext* pContext) try {
+    if (recent_commit_context_ &&
+        same_com_object(recent_commit_context_.get(), pContext)) {
+        forget_recent_commit();
+    }
+    return S_OK;
+} catch (...) {
     return handle_com_exception();
 }
 
@@ -873,6 +916,8 @@ STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
     if (fForeground) {
         refresh_width_toggle_setting();
         refresh_input_mode_indicator();
+    } else {
+        forget_recent_commit();
     }
     return S_OK;
 } catch (...) {
@@ -1034,6 +1079,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         } else {
             clear_composition_state();
         }
+    }
+
+    if (wParam == VK_BACK && !has_composition_state()) {
+        discard_recent_commit(pContext);
     }
 
     if (shift_key(wParam)) {
@@ -1325,7 +1374,7 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfCompo
             }
         }
         record_commit(compositionBuffer.commit_sample(collection_context_),
-                      private_input_scope_);
+                      private_input_scope_, composition_context_.get());
     }
     clear_composition_state();
     return S_OK;
@@ -1547,7 +1596,7 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
         _tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &session_hr);
     const HRESULT result = FAILED(request_hr) ? request_hr : session_hr;
     if (SUCCEEDED(result)) {
-        record_commit(std::move(sample), private_input_scope);
+        record_commit(std::move(sample), private_input_scope, pContext);
     } else {
         commit_reported_ = false;
     }

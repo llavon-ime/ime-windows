@@ -38,6 +38,7 @@ enum class PipeCommand : uint8_t {
     GetInputMode = 3,
     Ready = 4,
     RecordCommit = 5,
+    DiscardLastCommit = 6,
 };
 
 enum class InputMode : uint8_t {
@@ -371,7 +372,7 @@ inline asio::awaitable<void> handle_client(
     std::string collection_session_id,
     SessionLru::ClientId client_id) {
     ClientSession client_session(std::move(sessions), client_id);
-    std::uint64_t commit_sequence = 0;
+    std::uint64_t latest_commit_token = 0;
 
     while (true) {
         uint8_t raw_command = 0;
@@ -408,7 +409,10 @@ inline asio::awaitable<void> handle_client(
             constexpr std::uint32_t maximum_entry_count = 1024;
             constexpr std::uint32_t maximum_entry_length = 64;
             RawCommitEvent event;
-            if (!co_await read_utf16_string(
+            std::uint64_t commit_token = 0;
+            if (!co_await read_val(pipe, commit_token) || commit_token == 0 ||
+                commit_token <= latest_commit_token ||
+                !co_await read_utf16_string(
                     pipe, event.context, maximum_context_length) ||
                 !co_await read_utf16_string(
                     pipe, event.answer, maximum_answer_length)) {
@@ -441,9 +445,20 @@ inline asio::awaitable<void> handle_client(
             if (!valid) break;
 
             event.session_id = collection_session_id;
-            event.sequence = ++commit_sequence;
+            event.sequence = commit_token;
             event.committed_at_utc = utc_timestamp();
             training_data->enqueue(std::move(event));
+            latest_commit_token = commit_token;
+            continue;
+        }
+
+        if (command == PipeCommand::DiscardLastCommit) {
+            std::uint64_t commit_token = 0;
+            if (!co_await read_val(pipe, commit_token)) break;
+            if (commit_token == latest_commit_token) {
+                training_data->discard_staged(
+                    collection_session_id, commit_token);
+            }
             continue;
         }
 

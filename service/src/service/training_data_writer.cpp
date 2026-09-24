@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <list>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
@@ -377,9 +378,14 @@ std::string column_text(sqlite3_stmt* statement, int column) {
 }  // namespace
 
 TrainingDataWriter::TrainingDataWriter(
-    std::optional<std::filesystem::path> database_path)
+    std::optional<std::filesystem::path> database_path,
+    std::chrono::steady_clock::duration staging_window)
     : database_path_(database_path ? std::move(*database_path)
-                                   : default_database_path()) {
+                                   : default_database_path()),
+      staging_window_(staging_window) {
+    if (staging_window_ <= std::chrono::steady_clock::duration::zero()) {
+        throw std::invalid_argument("staging window must be positive");
+    }
     initialize_database(database_path_);
     commit_crypto::initialize();
     recording_enabled_.store(protection_status().enabled);
@@ -410,7 +416,27 @@ void TrainingDataWriter::enqueue(RawCommitEvent event) {
     {
         std::lock_guard lock(mutex_);
         if (stopping_ || !recording_enabled_.load(std::memory_order_acquire) || queue_.size() >= 256) return;
-        queue_.push_back(std::move(event));
+        queue_.push_back(QueuedOperation{
+            .kind = QueuedOperation::Kind::commit,
+            .event = std::move(event),
+            .queued_at = std::chrono::steady_clock::now(),
+        });
+    }
+    available_.notify_one();
+}
+
+void TrainingDataWriter::discard_staged(
+    std::string session_id, std::uint64_t sequence) {
+    if (!recording_enabled_.load(std::memory_order_acquire)) return;
+    {
+        std::lock_guard lock(mutex_);
+        if (stopping_ || !recording_enabled_.load(std::memory_order_acquire)) return;
+        queue_.push_back(QueuedOperation{
+            .kind = QueuedOperation::Kind::discard,
+            .session_id = std::move(session_id),
+            .sequence = sequence,
+            .queued_at = std::chrono::steady_clock::now(),
+        });
     }
     available_.notify_one();
 }
@@ -474,7 +500,12 @@ void TrainingDataWriter::set_recording_enabled(bool enabled) {
     if (!enabled) {
         std::lock_guard lock(mutex_);
         queue_.clear();
+        queue_.push_back(QueuedOperation{
+            .kind = QueuedOperation::Kind::clear,
+            .queued_at = std::chrono::steady_clock::now(),
+        });
     }
+    available_.notify_one();
 }
 
 void TrainingDataWriter::configure_password(std::string_view password) {
@@ -826,32 +857,31 @@ void TrainingDataWriter::worker_main() noexcept {
             "event_type, committed_at_utc, revision_of, training_state) "
             "VALUES (?, 2, ?, ?, ?, ?, ?, 'commit', ?, NULL, 'pending')");
 
-        while (true) {
+        struct StagedCommit {
             RawCommitEvent event;
-            {
-                std::unique_lock lock(mutex_);
-                available_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
-                if (queue_.empty()) {
-                    if (stopping_) break;
-                    continue;
-                }
-                event = std::move(queue_.front());
-                queue_.pop_front();
-            }
+            std::chrono::steady_clock::time_point deadline;
+        };
+        std::list<StagedCommit> staged;
 
+        const auto persist = [&](RawCommitEvent event) {
             try {
-                if (!has_bopomofo_input(event)) continue;
+                if (!has_bopomofo_input(event)) return;
                 std::lock_guard protection_lock(protection_mutex_);
-                if (!recording_enabled_.load(std::memory_order_acquire)) continue;
+                if (!recording_enabled_.load(std::memory_order_acquire)) return;
                 if (!public_parameters) public_parameters = read_parameters(database);
                 const auto& parameters = *public_parameters;
                 const std::string event_id =
                     event.session_id + ":" + std::to_string(event.sequence);
                 insert.bind_text(1, event_id);
-                insert.bind_text(2, commit_crypto::seal(utf8::utf16to8(event.context), event_id + "/context", parameters));
-                insert.bind_text(3, commit_crypto::seal(utf8::utf16to8(event.answer), event_id + "/answer", parameters));
-                insert.bind_text(4, commit_crypto::seal(serialize_padding(event), event_id + "/padding_json", parameters));
-                insert.bind_text(5, commit_crypto::seal(utf8::utf16to8(display_reading(event)), event_id + "/reading", parameters));
+                insert.bind_text(2, commit_crypto::seal(
+                    utf8::utf16to8(event.context), event_id + "/context", parameters));
+                insert.bind_text(3, commit_crypto::seal(
+                    utf8::utf16to8(event.answer), event_id + "/answer", parameters));
+                insert.bind_text(4, commit_crypto::seal(
+                    serialize_padding(event), event_id + "/padding_json", parameters));
+                insert.bind_text(5, commit_crypto::seal(
+                    utf8::utf16to8(display_reading(event)),
+                    event_id + "/reading", parameters));
                 insert.bind_integer(6, was_revised(event) ? 1 : 0);
                 insert.bind_text(7, event.committed_at_utc);
                 insert.execute();
@@ -865,6 +895,86 @@ void TrainingDataWriter::worker_main() noexcept {
                 }
                 std::cerr << "[ERR] unable to insert training data: "
                           << error.what() << '\n';
+            }
+        };
+
+        while (true) {
+            std::optional<QueuedOperation> operation;
+            bool finish = false;
+            {
+                std::unique_lock lock(mutex_);
+                while (queue_.empty() && !stopping_) {
+                    if (staged.empty()) {
+                        available_.wait(lock, [this] {
+                            return stopping_ || !queue_.empty();
+                        });
+                    } else {
+                        available_.wait_until(lock, staged.front().deadline);
+                        if (std::chrono::steady_clock::now() >=
+                            staged.front().deadline) {
+                            break;
+                        }
+                    }
+                }
+                if (!queue_.empty()) {
+                    operation = std::move(queue_.front());
+                    queue_.pop_front();
+                } else if (stopping_) {
+                    finish = true;
+                }
+            }
+
+            if (operation) {
+                if (operation->kind == QueuedOperation::Kind::clear) {
+                    staged.clear();
+                    continue;
+                }
+
+                if (operation->kind == QueuedOperation::Kind::discard) {
+                    const auto found = std::find_if(
+                        staged.begin(), staged.end(), [&](const auto& candidate) {
+                            return candidate.event.session_id == operation->session_id &&
+                                   candidate.event.sequence == operation->sequence;
+                        });
+                    if (found != staged.end() &&
+                        operation->queued_at <= found->deadline) {
+                        staged.erase(found);
+                    }
+                    continue;
+                }
+
+                auto previous = std::find_if(
+                    staged.begin(), staged.end(), [&](const auto& candidate) {
+                        return candidate.event.session_id ==
+                               operation->event.session_id;
+                    });
+                if (previous != staged.end()) {
+                    auto event = std::move(previous->event);
+                    staged.erase(previous);
+                    persist(std::move(event));
+                }
+                if (recording_enabled_.load(std::memory_order_acquire) &&
+                    has_bopomofo_input(operation->event)) {
+                    staged.push_back(StagedCommit{
+                        .event = std::move(operation->event),
+                        .deadline = operation->queued_at + staging_window_,
+                    });
+                }
+                continue;
+            }
+
+            if (finish) {
+                for (auto& pending : staged) {
+                    persist(std::move(pending.event));
+                }
+                break;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            while (!staged.empty() && staged.front().deadline <= now) {
+                auto event = std::move(staged.front().event);
+                staged.pop_front();
+                persist(std::move(event));
             }
         }
     } catch (const std::exception& error) {

@@ -30,7 +30,8 @@ public:
     virtual ~IEngine() {};
     virtual void ready() = 0;
     virtual void predict(const std::u16string &context, std::span<BopomofoPos> padding /* in out */) = 0;
-    virtual void record_commit(const CommitSample& sample) = 0;
+    virtual std::uint64_t record_commit(const CommitSample& sample) = 0;
+    virtual void discard_commit(std::uint64_t token) = 0;
     virtual InputMode toggle_input_mode() = 0;
     virtual InputMode current_input_mode() = 0;
 };

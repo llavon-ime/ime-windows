@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -19,10 +20,12 @@ enum class PipeCommand : uint8_t {
     GetInputMode = 3,
     Ready = 4,
     RecordCommit = 5,
+    DiscardLastCommit = 6,
 };
 
 class PipeEngine : public IEngine {
     static inline HANDLE hPipe = INVALID_HANDLE_VALUE;
+    static inline std::atomic_uint64_t next_commit_token{1};
     static constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime";
 
     static bool connect_pipe() {
@@ -190,10 +193,17 @@ public:
         }
     }
 
-    void record_commit(const CommitSample& sample) override {
-        if (sample.answer.empty() || sample.input.empty() || !ensure_pipe()) return;
+    std::uint64_t record_commit(const CommitSample& sample) override {
+        if (sample.answer.empty() || sample.input.empty() || !ensure_pipe()) return 0;
 
-        if (!write_command(PipeCommand::RecordCommit)) { disconnect(); return; }
+        if (!write_command(PipeCommand::RecordCommit)) { disconnect(); return 0; }
+
+        const std::uint64_t token = next_commit_token.fetch_add(
+            1, std::memory_order_relaxed);
+        if (token == 0 || !write_exact(token)) {
+            disconnect();
+            return 0;
+        }
 
         const auto write_string = [](std::u16string_view value) {
             const auto length = static_cast<std::uint32_t>(value.size());
@@ -203,18 +213,28 @@ public:
 
         if (!write_string(sample.context) || !write_string(sample.answer)) {
             disconnect();
-            return;
+            return 0;
         }
 
         const auto count = static_cast<std::uint32_t>(sample.input.size());
-        if (!write_exact(count)) { disconnect(); return; }
+        if (!write_exact(count)) { disconnect(); return 0; }
         for (const auto& entry : sample.input) {
             const std::uint8_t manually_selected = entry.manually_selected ? 1 : 0;
             if (!write_string(entry.reading) || !write_string(entry.output) ||
                 !write_exact(manually_selected)) {
                 disconnect();
-                return;
+                return 0;
             }
+        }
+        return token;
+    }
+
+    void discard_commit(std::uint64_t token) override {
+        if (token == 0) return;
+        if (!ensure_pipe()) return;
+        if (!write_command(PipeCommand::DiscardLastCommit) ||
+            !write_exact(token)) {
+            disconnect();
         }
     }
 

@@ -2,6 +2,7 @@
 
 #include <condition_variable>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -66,13 +67,16 @@ struct LoraTrainingRun {
 class TrainingDataWriter final {
 public:
     explicit TrainingDataWriter(
-        std::optional<std::filesystem::path> database_path = std::nullopt);
+        std::optional<std::filesystem::path> database_path = std::nullopt,
+        std::chrono::steady_clock::duration staging_window =
+            std::chrono::seconds(10));
     ~TrainingDataWriter();
 
     TrainingDataWriter(const TrainingDataWriter&) = delete;
     TrainingDataWriter& operator=(const TrainingDataWriter&) = delete;
 
     void enqueue(RawCommitEvent event);
+    void discard_staged(std::string session_id, std::uint64_t sequence);
     struct ProtectionStatus { bool configured; bool enabled; };
     ProtectionStatus protection_status() const;
     void configure_password(std::string_view password);
@@ -100,6 +104,14 @@ public:
     }
 
 private:
+    struct QueuedOperation {
+        enum class Kind { commit, discard, clear } kind = Kind::commit;
+        RawCommitEvent event;
+        std::string session_id;
+        std::uint64_t sequence = 0;
+        std::chrono::steady_clock::time_point queued_at;
+    };
+
     void worker_main() noexcept;
     void publish_pending_delta(std::ptrdiff_t delta) noexcept;
     bool mark_records(const std::vector<std::u16string>& event_ids,
@@ -110,7 +122,8 @@ private:
     std::atomic_bool recording_enabled_{false};
     std::mutex mutex_;
     std::condition_variable available_;
-    std::deque<RawCommitEvent> queue_;
+    std::deque<QueuedOperation> queue_;
+    std::chrono::steady_clock::duration staging_window_;
     std::atomic<std::size_t> pending_count_{0};
     std::mutex callback_mutex_;
     std::function<void(std::size_t)> pending_count_callback_;

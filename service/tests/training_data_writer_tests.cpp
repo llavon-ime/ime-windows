@@ -11,12 +11,67 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using llavon::service::RawCommitEvent;
 using llavon::service::RawCommitInputEntry;
 using llavon::service::TrainingDataWriter;
 using llavon::service::write_lora_numeric_dataset;
+
+int correction_staging_tests(
+    const std::filesystem::path& path, const RawCommitEvent& prototype) {
+    using namespace std::chrono_literals;
+    std::filesystem::remove(path);
+
+    auto first = prototype;
+    first.session_id = "correction";
+    first.sequence = 1;
+    first.answer = u"wrong-one";
+    auto second = prototype;
+    second.session_id = first.session_id;
+    second.sequence = 2;
+    second.answer = u"wrong-two";
+
+    // A discard is scoped to exactly the latest sequence in its session.
+    {
+        TrainingDataWriter writer(path, 200ms);
+        writer.configure_password("staging-password");
+        writer.enqueue(first);
+        writer.enqueue(second);
+        writer.discard_staged(second.session_id, second.sequence);
+    }
+    {
+        TrainingDataWriter writer(path, 200ms);
+        const auto items = writer.pending_items("staging-password");
+        if (items.size() != 1 || items.front().event_id != u"correction:1" ||
+            items.front().answer != first.answer) {
+            return 62;
+        }
+    }
+
+    // Once the staging deadline has passed, a late Backspace cannot remove it.
+    auto expired = prototype;
+    expired.session_id = "expired";
+    expired.sequence = 1;
+    expired.answer = u"stable";
+    {
+        TrainingDataWriter writer(path, 30ms);
+        writer.enqueue(expired);
+        std::this_thread::sleep_for(80ms);
+        writer.discard_staged(expired.session_id, expired.sequence);
+    }
+    {
+        TrainingDataWriter writer(path, 200ms);
+        const auto items = writer.pending_items("staging-password");
+        if (items.size() != 2 || items.back().event_id != u"expired:1") {
+            return 63;
+        }
+    }
+
+    std::filesystem::remove(path);
+    return 0;
+}
 
 int protection_tests(const std::filesystem::path& path, RawCommitEvent event) {
     using namespace llavon::service;
@@ -401,5 +456,11 @@ int main() {
     DeleteFileW(malformed_shm_path.c_str());
     auto protection_path = path;
     protection_path += L".protection.sqlite3";
+    auto correction_path = path;
+    correction_path += L".correction.sqlite3";
+    if (const int result = correction_staging_tests(correction_path, event);
+        result != 0) {
+        return result;
+    }
     return protection_tests(protection_path, event);
 }

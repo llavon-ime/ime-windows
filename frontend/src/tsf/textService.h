@@ -125,7 +125,10 @@ private:
     bool composition_belongs_to(ITfContext* context) const;
     bool has_composition_state() const;
     void clear_composition_state();
-    void record_commit(CommitSample sample, bool private_input_scope) noexcept;
+    void record_commit(CommitSample sample, bool private_input_scope,
+                       ITfContext* context) noexcept;
+    void forget_recent_commit() noexcept;
+    void discard_recent_commit(ITfContext* context) noexcept;
     // Multifunctional shortcut handling
     std::optional<std::u16string> multifuntional_shortcut(WPARAM wParam);
 
@@ -151,6 +154,10 @@ private:
     std::u16string collection_context_;
     bool commit_reported_ = false;
     bool private_input_scope_ = false;
+    winrt::com_ptr<ITfContext> recent_commit_context_;
+    std::optional<std::chrono::steady_clock::time_point> recent_commit_time_;
+    std::u16string recent_commit_tail_;
+    std::uint64_t recent_commit_token_ = 0;
     // Multifunctional shortcut handling
     bool backtick_used_as_modifier_ = false;
 };
