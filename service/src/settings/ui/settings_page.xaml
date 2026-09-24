@@ -57,7 +57,7 @@
       <StackPanel Spacing="8" Margin="0,0,0,24">
         <TextBlock x:Name="PendingSummary" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
         <StackPanel Orientation="Horizontal" Spacing="12">
-          <CheckBox x:Name="EncryptedRecording" Content="啟用加密記錄" IsChecked="False" />
+          <CheckBox x:Name="EncryptedRecording" Content="啟用資料蒐集(加密保存)" IsChecked="False" />
           <TextBlock x:Name="PasswordStatus" Text="密碼未設定" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
         </StackPanel>
         <Button x:Name="LoraButton" Content="使用我的輸入改進模型" MinWidth="196" MinHeight="32" FontSize="14" HorizontalAlignment="Left" />
