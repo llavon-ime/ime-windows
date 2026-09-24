@@ -215,7 +215,26 @@ LoraTrainingManager::~LoraTrainingManager() {
     if (worker_.joinable()) worker_.join();
 }
 
-LoraOperationStatus LoraTrainingManager::status() const {
+LoraOperationStatus LoraTrainingManager::status() {
+    // The model may have appeared after the service was started (for example,
+    // while an installer was replacing files). Keep the UI's cached status in
+    // sync with the local files without requiring a network request.
+    if (!busy_.load(std::memory_order_acquire)) {
+        std::string revision;
+        if (installed_model_is_complete(&revision)) {
+            std::lock_guard lock(status_mutex_);
+            if (!status_.model_available) {
+                status_.model_available = true;
+                status_.model_update_available = false;
+                status_.model_revision = utf8::utf8to16(revision);
+                if (status_.stage == LoraOperationStage::idle) {
+                    status_.stage = LoraOperationStage::model_ready;
+                    status_.progress = 1;
+                    status_.message = u"基礎模型已下載";
+                }
+            }
+        }
+    }
     std::lock_guard lock(status_mutex_);
     return status_;
 }
@@ -357,9 +376,15 @@ bool LoraTrainingManager::installed_model_is_complete(std::string* revision) con
 
 void LoraTrainingManager::check_model_worker() {
     set_status(LoraOperationStage::checking_model, 0, u"正在檢查基礎模型更新…");
-    const std::string remote = resolve_remote_revision();
     std::string local;
     const bool available = installed_model_is_complete(&local);
+    {
+        std::lock_guard lock(status_mutex_);
+        status_.model_available = available;
+        status_.model_update_available = false;
+        status_.model_revision = available ? utf8::utf8to16(local) : std::u16string{};
+    }
+    const std::string remote = resolve_remote_revision();
     std::lock_guard lock(status_mutex_);
     status_.model_available = available;
     status_.model_update_available = !available || local != remote;

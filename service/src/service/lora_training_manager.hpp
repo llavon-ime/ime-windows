@@ -69,7 +69,7 @@ public:
     LoraTrainingManager(const LoraTrainingManager&) = delete;
     LoraTrainingManager& operator=(const LoraTrainingManager&) = delete;
 
-    LoraOperationStatus status() const;
+    LoraOperationStatus status();
     bool check_model_async();
     bool download_model_async();
     bool start_training_async(std::vector<std::u16string> event_ids,

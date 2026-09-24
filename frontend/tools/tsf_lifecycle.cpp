@@ -1,5 +1,6 @@
 #include <msctf.h>
 #include <objbase.h>
+#include <sddl.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include <windows.h>
@@ -19,6 +20,10 @@ constexpr wchar_t service_shutdown_message[] = L"LlavonIme.SafeShutdownV2";
 constexpr LRESULT shutdown_acknowledged = 0x4c4c4156;
 constexpr DWORD graceful_shutdown_timeout_ms = 30000;
 constexpr DWORD forced_shutdown_timeout_ms = 5000;
+constexpr DWORD update_guard_ready_timeout_ms = 30000;
+constexpr DWORD update_guard_lifetime_ms = 15 * 60 * 1000;
+constexpr wchar_t update_guard_ready_event[] = L"Local\\LlavonImeBackendUpdateReady";
+constexpr wchar_t update_guard_done_event[] = L"Local\\LlavonImeBackendUpdateDone";
 
 class ComApartment {
 public:
@@ -74,6 +79,101 @@ private:
 
     HANDLE handle_ = nullptr;
 };
+
+class ScopedLaunchMutex {
+public:
+    ScopedLaunchMutex() noexcept {
+        handle_ = UniqueHandle(OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE,
+                                          tsf::service_launch_mutex_name));
+        if (!handle_) {
+            PSECURITY_DESCRIPTOR descriptor = nullptr;
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    L"D:(A;;GA;;;WD)S:(ML;;NW;;;LW)", SDDL_REVISION_1,
+                    &descriptor, nullptr)) {
+                return;
+            }
+            SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
+            handle_ = UniqueHandle(CreateMutexW(&security, FALSE,
+                                                tsf::service_launch_mutex_name));
+            LocalFree(descriptor);
+        }
+        if (handle_) {
+            const DWORD result = WaitForSingleObject(handle_.get(), 30000);
+            owns_ = result == WAIT_OBJECT_0 || result == WAIT_ABANDONED;
+        }
+    }
+
+    ~ScopedLaunchMutex() {
+        if (owns_) ReleaseMutex(handle_.get());
+    }
+
+    ScopedLaunchMutex(const ScopedLaunchMutex&) = delete;
+    ScopedLaunchMutex& operator=(const ScopedLaunchMutex&) = delete;
+
+    bool owns() const noexcept { return owns_; }
+
+private:
+    UniqueHandle handle_;
+    bool owns_ = false;
+};
+
+int hold_update_guard() noexcept {
+    ScopedLaunchMutex launch_mutex;
+    if (!launch_mutex.owns()) return ERROR_TIMEOUT;
+
+    UniqueHandle ready(OpenEventW(EVENT_MODIFY_STATE, FALSE, update_guard_ready_event));
+    UniqueHandle done(OpenEventW(SYNCHRONIZE, FALSE, update_guard_done_event));
+    if (!ready || !done || !SetEvent(ready.get())) return ERROR_FUNCTION_FAILED;
+
+    const DWORD result = WaitForSingleObject(done.get(), update_guard_lifetime_ms);
+    return result == WAIT_OBJECT_0 || result == WAIT_TIMEOUT
+               ? ERROR_SUCCESS
+               : ERROR_FUNCTION_FAILED;
+}
+
+void end_update_guard() noexcept {
+    UniqueHandle done(OpenEventW(EVENT_MODIFY_STATE, FALSE, update_guard_done_event));
+    if (done) SetEvent(done.get());
+}
+
+HRESULT begin_update_guard(std::wstring_view service_path) {
+    UniqueHandle ready(CreateEventW(nullptr, TRUE, FALSE, update_guard_ready_event));
+    UniqueHandle done(CreateEventW(nullptr, TRUE, FALSE, update_guard_done_event));
+    if (!ready || !done || !ResetEvent(ready.get()) || !ResetEvent(done.get())) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    std::wstring executable(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD copied = GetModuleFileNameW(
+            nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+        if (copied == 0) return HRESULT_FROM_WIN32(GetLastError());
+        if (copied < executable.size() - 1) {
+            executable.resize(copied);
+            break;
+        }
+        executable.resize(executable.size() * 2);
+    }
+
+    std::wstring command = L"\"" + executable + L"\" guard-update \"" +
+                           std::wstring(service_path) + L"\"";
+    STARTUPINFOW startup{sizeof(startup)};
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr,
+                        FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    UniqueHandle child(process.hProcess);
+    UniqueHandle thread(process.hThread);
+
+    const DWORD result = WaitForSingleObject(ready.get(), update_guard_ready_timeout_ms);
+    if (result != WAIT_OBJECT_0) {
+        SetEvent(done.get());
+        return result == WAIT_TIMEOUT ? HRESULT_FROM_WIN32(ERROR_TIMEOUT)
+                                      : HRESULT_FROM_WIN32(GetLastError());
+    }
+    return S_OK;
+}
 
 struct ServiceProcess {
     DWORD id;
@@ -272,7 +372,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if (!arguments || argument_count != 3 ||
         (std::wstring_view(arguments[1]) != L"prepare-update" &&
          std::wstring_view(arguments[1]) != L"prepare-uninstall" &&
-         std::wstring_view(arguments[1]) != L"start-service")) {
+         std::wstring_view(arguments[1]) != L"start-service" &&
+         std::wstring_view(arguments[1]) != L"restart-service" &&
+         std::wstring_view(arguments[1]) != L"end-update" &&
+         std::wstring_view(arguments[1]) != L"guard-update")) {
         if (arguments) {
             LocalFree(arguments);
         }
@@ -289,15 +392,40 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                    : ERROR_PROCESS_ABORTED;
     }
 
+    if (operation == L"guard-update") return hold_update_guard();
+
+    if (operation == L"end-update") {
+        end_update_guard();
+        return ERROR_SUCCESS;
+    }
+
+    const bool updating = operation == L"prepare-update";
+    if (updating) {
+        const HRESULT guard_result = begin_update_guard(service_path);
+        if (FAILED(guard_result)) return exit_code_from_hresult(guard_result);
+    }
+
     const HRESULT stop_result = stop_service(service_path);
     if (FAILED(stop_result)) {
+        if (updating || operation == L"restart-service") end_update_guard();
         return exit_code_from_hresult(stop_result);
+    }
+
+    if (operation == L"restart-service") {
+        // An input request can relaunch the old service while MSI is replacing
+        // files. Stop that process before starting the newly installed binary.
+        const bool launched = tsf::launch_process_with_shell_parent(service_path);
+        end_update_guard();
+        return launched ? ERROR_SUCCESS : ERROR_PROCESS_ABORTED;
     }
 
     ComApartment apartment;
     if (FAILED(apartment.result())) {
+        if (updating) end_update_guard();
         return exit_code_from_hresult(apartment.result());
     }
 
-    return exit_code_from_hresult(release_text_service());
+    const HRESULT release_result = release_text_service();
+    if (FAILED(release_result) && updating) end_update_guard();
+    return exit_code_from_hresult(release_result);
 }

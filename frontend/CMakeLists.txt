@@ -68,6 +68,7 @@ target_link_libraries(llavon-ime PRIVATE
     utf8cpp::utf8cpp
 )
 target_link_libraries(llavon-ime-lifecycle PRIVATE
+    advapi32
     ole32
     shell32
     uuid

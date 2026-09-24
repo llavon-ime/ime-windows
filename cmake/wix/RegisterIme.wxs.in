@@ -24,6 +24,13 @@
       Impersonate="yes"
       Return="ignore" />
     <CustomAction
+      Id="ClearLlavonImeUpdateGateOnRollback"
+      BinaryRef="LlavonImeLifecycleHelper"
+      ExeCommand="end-update &quot;[INSTALL_ROOT]bin\llavon-ime-service.exe&quot;"
+      Execute="rollback"
+      Impersonate="yes"
+      Return="ignore" />
+    <CustomAction
       Id="RegisterLlavonIme"
       Directory="INSTALL_ROOT"
       Execute="deferred"
@@ -40,12 +47,14 @@
     <CustomAction
       Id="RestartLlavonImeService"
       BinaryRef="LlavonImeLifecycleHelper"
-      ExeCommand="start-service &quot;[INSTALL_ROOT]bin\llavon-ime-service.exe&quot;"
+      ExeCommand="restart-service &quot;[INSTALL_ROOT]bin\llavon-ime-service.exe&quot;"
       Execute="immediate"
       Impersonate="yes"
       Return="check" />
     <InstallExecuteSequence>
       <Custom Action="ReleaseLlavonImeForUpgrade" After="InstallValidate"
+              Condition="WIX_UPGRADE_DETECTED" />
+      <Custom Action="ClearLlavonImeUpdateGateOnRollback" After="InstallInitialize"
               Condition="WIX_UPGRADE_DETECTED" />
       <Custom Action="ReleaseLlavonImeForUninstall" After="ReleaseLlavonImeForUpgrade"
               Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
