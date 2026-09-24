@@ -94,6 +94,10 @@ the dialog is opened. All records start checked. Starting a run changes every
 unchecked pending record to `excluded`; records successfully written into the
 trainer dataset change to `trained` only after both training and GGUF export
 complete. Records that cannot be converted stay `pending`.
+Trainable records with a manual candidate selection contribute three samples;
+other records contribute one. The trainer shuffles the combined samples each
+epoch when shuffling is enabled (the default). Training history counts the
+original records, without the extra samples.
 
 The dialog supplies non-empty defaults derived from
 `lora-trainer/docs/step-search-results.md`: rank/alpha 8/16, dropout 0, batch

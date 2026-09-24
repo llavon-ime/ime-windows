@@ -150,11 +150,42 @@ int main() {
         const std::string numeric_row{
             std::istreambuf_iterator<char>(dataset_input),
             std::istreambuf_iterator<char>()};
-        DeleteFileW(config_path.c_str());
-        DeleteFileW(dataset_path.c_str());
+        dataset_input.close();
         if (dataset.written != 1 || dataset.pad_token_id != 0 ||
             numeric_row.find(R"("candidate_masks")") == std::string::npos) {
             return 7;
+        }
+        auto selected_record = records.front();
+        selected_record.event_id = u"selected:1";
+        selected_record.context = u"a";
+        selected_record.revice = true;
+        const auto weighted = write_lora_numeric_dataset(
+            {records.front(), selected_record},
+            std::filesystem::path(LLAVON_TEST_TABLES_DIR),
+            config_path, dataset_path, 384);
+        std::ifstream weighted_input(dataset_path, std::ios::binary);
+        std::string line;
+        std::string selected_row;
+        std::size_t normal_count = 0;
+        std::size_t selected_count = 0;
+        while (std::getline(weighted_input, line)) {
+            if (line == numeric_row.substr(0, numeric_row.size() - 1)) {
+                ++normal_count;
+            } else if (selected_row.empty() || line == selected_row) {
+                selected_row = line;
+                ++selected_count;
+            } else {
+                return 23;
+            }
+        }
+        weighted_input.close();
+        DeleteFileW(config_path.c_str());
+        DeleteFileW(dataset_path.c_str());
+        if (weighted.written != 2 || weighted.skipped != 0 ||
+            weighted.included_event_ids !=
+                std::vector<std::u16string>{u"train:1", u"selected:1"} ||
+            normal_count != 1 || selected_count != 3 || selected_row.empty()) {
+            return 23;
         }
         if (!writer.exclude_unselected(
                 {u"session:7"}, {u"session:7", u"s:1", u"train:1"})) return 8;

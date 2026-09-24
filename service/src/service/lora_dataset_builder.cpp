@@ -283,7 +283,10 @@ LoraDatasetBuildResult write_lora_numeric_dataset(
         for (const auto& record : records) {
             std::string row;
             if (build_row(record, tables, maximum_sequence_length, row)) {
-                output << row;
+                // Give explicit candidate choices three samples per epoch.
+                for (int copy = 0; copy < (record.revice ? 3 : 1); ++copy) {
+                    output << row;
+                }
                 ++result.written;
                 result.included_event_ids.push_back(record.event_id);
             } else {
