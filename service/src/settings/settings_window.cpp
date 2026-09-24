@@ -790,8 +790,31 @@ void SettingsWindow::build_page() {
 
     pending_summary_ = named<TextBlock>(shell_, L"PendingSummary");
     set_pending_count(configuration_.training_items.size());
+    lora_note_ = named<TextBlock>(shell_, L"LoraNote");
     named<Button>(shell_, L"LoraButton").Click(
-        [this](const auto&, const auto&) { show_lora_training_dialog(); });
+        [this](const auto&, const auto&) {
+            const auto report_error = [this] {
+                lora_note_.Text(L"無法開啟訓練設定，請稍後再試。");
+                lora_note_.Visibility(Visibility::Visible);
+                if (lora_dialog_timer_) lora_dialog_timer_.Stop();
+                lora_dialog_timer_ = nullptr;
+            };
+            try {
+                show_lora_training_dialog();
+                lora_note_.Visibility(Visibility::Collapsed);
+            } catch (const winrt::hresult_error& error) {
+                OutputDebugStringW((L"[settings-ui] unable to open LoRA dialog: " +
+                                    std::wstring(error.message()) + L"\n").c_str());
+                report_error();
+            } catch (const std::exception& error) {
+                OutputDebugStringW((L"[settings-ui] unable to open LoRA dialog: " +
+                                    std::wstring(winrt::to_hstring(error.what())) + L"\n").c_str());
+                report_error();
+            } catch (...) {
+                OutputDebugStringW(L"[settings-ui] unable to open LoRA dialog: unknown error\n");
+                report_error();
+            }
+        });
 
     const std::wstring build_label =
         L"目前：" + build_identity(UpdateChecker::installed_version(),
@@ -806,6 +829,8 @@ void SettingsWindow::build_page() {
 }
 
 void SettingsWindow::show_lora_training_dialog() {
+    if (lora_dialog_open_) return;
+
     if (configuration_.refresh_training_items_callback) {
         std::size_t count = 0;
         if (configuration_.refresh_training_items_callback(
@@ -835,7 +860,11 @@ void SettingsWindow::show_lora_training_dialog() {
     }
 
     struct DialogState {
-        ContentDialog dialog{nullptr};
+        Grid overlay{nullptr};
+        ContentControl content{nullptr};
+        TextBlock title{nullptr};
+        Button primary_button{nullptr};
+        Button secondary_button{nullptr};
         std::vector<TrainingDataOption> items;
         std::vector<std::u16string> item_ids;
         std::vector<bool> selected_items;
@@ -892,9 +921,20 @@ void SettingsWindow::show_lora_training_dialog() {
     auto state = std::make_shared<DialogState>();
     state->items = configuration_.training_items;
     state->selected_items.assign(state->items.size(), true);
-    state->dialog = load_xaml_resource(IDR_LORA_DIALOG_XAML).as<ContentDialog>();
-    state->dialog.IsPrimaryButtonEnabled(false);
-    const auto dialog_root = state->dialog.as<FrameworkElement>();
+    state->overlay = load_xaml_resource(IDR_LORA_DIALOG_XAML).as<Grid>();
+    const auto dialog_root = state->overlay.as<FrameworkElement>();
+    state->content = named<ContentControl>(dialog_root, L"DialogContent");
+    state->title = named<TextBlock>(dialog_root, L"DialogTitle");
+    state->primary_button = named<Button>(dialog_root, L"DialogPrimaryButton");
+    state->secondary_button = named<Button>(dialog_root, L"DialogSecondaryButton");
+    const auto dialog_card = named<Border>(dialog_root, L"DialogCard");
+    const bool dark_dialog = system_uses_dark_theme();
+    dialog_card.Background(dark_dialog ? solid_brush(32, 32, 32)
+                                       : solid_brush(255, 255, 255));
+    dialog_card.BorderBrush(dark_dialog ? solid_brush(64, 64, 64)
+                                        : solid_brush(210, 210, 210));
+    state->primary_button.Background(solid_brush(0, 120, 212));
+    state->primary_button.Foreground(solid_brush(255, 255, 255));
     state->main_page = named<ScrollViewer>(dialog_root, L"MainScroll");
     state->model_status_card = named<Border>(dialog_root, L"ModelStatusBorder");
     state->model_status_card.BorderBrush(
@@ -1121,11 +1161,11 @@ void SettingsWindow::show_lora_training_dialog() {
         (*render_page)();
         state->training_data_button.Click([state](const auto&, const auto&) {
             state->selecting_training_data = true;
-            state->dialog.Content(state->training_data_page);
-            state->dialog.Title(winrt::box_value(L"選擇訓練資料"));
-            state->dialog.PrimaryButtonText(L"完成");
-            state->dialog.SecondaryButtonText(L"");
-            state->dialog.IsPrimaryButtonEnabled(true);
+            state->content.Content(state->training_data_page);
+            state->title.Text(L"選擇訓練資料");
+            state->primary_button.Content(winrt::box_value(L"完成"));
+            state->secondary_button.Visibility(Visibility::Collapsed);
+            state->primary_button.IsEnabled(true);
         });
     }
 
@@ -1200,7 +1240,7 @@ void SettingsWindow::show_lora_training_dialog() {
         if (state->selection_count) {
             state->selection_count.Text(selection_label);
         }
-        state->dialog.IsPrimaryButtonEnabled(
+        state->primary_button.IsEnabled(
             state->selecting_training_data ||
             (!state->busy && state->model_available && selected != 0));
         refresh_estimated_steps();
@@ -1364,24 +1404,39 @@ void SettingsWindow::show_lora_training_dialog() {
     state->timer.Tick([refresh_status](const auto&, const auto&) { refresh_status(); });
     refresh_status();
     state->timer.Start();
-    state->dialog.Closed([weak_state = std::weak_ptr<DialogState>(state)](
-                             const auto&, const auto&) {
-        if (const auto current = weak_state.lock()) {
-            current->closed = true;
-            if (current->timer) current->timer.Stop();
+    lora_dialog_timer_ = state->timer;
+    const auto close_dialog = [this, state] {
+        if (state->closed) return;
+        state->closed = true;
+        state->timer.Stop();
+        lora_dialog_timer_ = nullptr;
+        const auto children = shell_.Children();
+        std::uint32_t index = 0;
+        if (children.IndexOf(state->overlay, index)) {
+            children.RemoveAt(index);
+        }
+        lora_dialog_open_ = false;
+    };
+    state->secondary_button.Click([close_dialog](const auto&, const auto&) {
+        close_dialog();
+    });
+    state->overlay.KeyDown([close_dialog](
+        const auto&, const winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs& args) {
+        if (static_cast<int>(args.Key()) == VK_ESCAPE) {
+            args.Handled(true);
+            close_dialog();
         }
     });
 
-    state->dialog.PrimaryButtonClick(
+    state->primary_button.Click(
         [this, state, refresh_training_selection](
-            const ContentDialog&, const ContentDialogButtonClickEventArgs& args) {
-            args.Cancel(true);
+            const auto&, const auto&) {
             if (state->selecting_training_data) {
                 state->selecting_training_data = false;
-                state->dialog.Content(state->main_page);
-                state->dialog.Title(winrt::box_value(L"訓練個人化模型"));
-                state->dialog.PrimaryButtonText(L"開始訓練");
-                state->dialog.SecondaryButtonText(L"關閉");
+                state->content.Content(state->main_page);
+                state->title.Text(L"訓練個人化模型");
+                state->primary_button.Content(winrt::box_value(L"開始訓練"));
+                state->secondary_button.Visibility(Visibility::Visible);
                 refresh_training_selection();
                 return;
             }
@@ -1471,7 +1526,7 @@ void SettingsWindow::show_lora_training_dialog() {
                           selected_pointers.data(), selected_pointers.size(), &options)
                     : ERROR_INVALID_FUNCTION;
                 if (result == ERROR_SUCCESS) {
-                    state->dialog.IsPrimaryButtonEnabled(false);
+                    state->primary_button.IsEnabled(false);
                     state->status.Text(L"訓練已啟動，關閉視窗後仍會在背景繼續。");
                 } else {
                     state->progress.Visibility(Visibility::Collapsed);
@@ -1483,8 +1538,8 @@ void SettingsWindow::show_lora_training_dialog() {
             }
         });
 
-    if (shell_.XamlRoot()) state->dialog.XamlRoot(shell_.XamlRoot());
-    state->dialog.ShowAsync();
+    shell_.Children().Append(state->overlay);
+    lora_dialog_open_ = true;
 }
 
 void SettingsWindow::add_custom_name_row(
@@ -2034,6 +2089,10 @@ void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
 }
 
 void SettingsWindow::close_xaml() noexcept {
+    if (lora_dialog_timer_) {
+        lora_dialog_timer_.Stop();
+        lora_dialog_timer_ = nullptr;
+    }
     // Detach the visual tree while both the source and its manager are alive.
     // The host closes this method again from WM_DESTROY, so keep it idempotent.
     if (xaml_source_) {
@@ -2062,6 +2121,8 @@ void SettingsWindow::close_xaml() noexcept {
     custom_names_note_ = nullptr;
     pending_summary_ = nullptr;
     shell_ = nullptr;
+    lora_dialog_open_ = false;
+    lora_note_ = nullptr;
     if (xaml_source_) {
         try {
             xaml_source_.Close();

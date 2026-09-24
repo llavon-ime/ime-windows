@@ -1,8 +1,17 @@
-<ContentDialog xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-               Title="訓練個人化模型" PrimaryButtonText="開始訓練"
-               SecondaryButtonText="關閉" DefaultButton="Primary" Width="560">
-  <ScrollViewer x:Name="MainScroll" MaxHeight="620" VerticalScrollBarVisibility="Auto">
+<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      Background="#66000000">
+  <Border x:Name="DialogCard" Width="530" MaxHeight="700" Margin="16" VerticalAlignment="Stretch"
+          HorizontalAlignment="Center" BorderThickness="1" Padding="24,20,24,16">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+      <TextBlock x:Name="DialogTitle" Text="訓練個人化模型" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,16"/>
+      <ContentControl x:Name="DialogContent" Grid.Row="1">
+        <ScrollViewer x:Name="MainScroll" VerticalScrollBarVisibility="Auto">
     <StackPanel Width="480" Spacing="16">
       <TextBlock Text="基礎模型&#10;tony65535/llavon-ime-llama-250m · 約 1 GB · CC-BY-NC-4.0"
                  FontSize="12" TextWrapping="Wrap" />
@@ -88,5 +97,15 @@
               HorizontalAlignment="Left" Visibility="Collapsed"/>
       <TextBlock x:Name="EstimatedSteps" Text="預計 steps：0" FontSize="12" TextWrapping="Wrap"/>
     </StackPanel>
-  </ScrollViewer>
-</ContentDialog>
+        </ScrollViewer>
+      </ContentControl>
+      <Grid Grid.Row="2" Margin="0,16,0,0" ColumnSpacing="4">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Button x:Name="DialogPrimaryButton" Grid.Column="0" Content="開始訓練" MinHeight="32"
+                HorizontalAlignment="Stretch" IsEnabled="False"/>
+        <Button x:Name="DialogSecondaryButton" Grid.Column="1" Content="關閉" MinHeight="32"
+                HorizontalAlignment="Stretch"/>
+      </Grid>
+    </Grid>
+  </Border>
+</Grid>

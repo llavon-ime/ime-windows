@@ -57,6 +57,7 @@
         <TextBlock Text="檢查尚未訓練的輸入紀錄，選擇要用於本機微調的資料。取消勾選的紀錄會標記為已排除。" FontSize="14" TextWrapping="Wrap" />
         <TextBlock x:Name="PendingSummary" FontSize="12" />
         <Button x:Name="LoraButton" Content="使用我的輸入改進模型" MinWidth="196" MinHeight="32" FontSize="14" HorizontalAlignment="Left" />
+        <TextBlock x:Name="LoraNote" FontSize="12" TextWrapping="Wrap" Visibility="Collapsed" />
       </StackPanel>
 
       <TextBlock Text="軟體更新" FontSize="20" FontWeight="SemiBold" Margin="0,6,0,18" />

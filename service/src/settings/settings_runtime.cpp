@@ -9,8 +9,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 #include <winrt/base.h>
 
@@ -27,6 +30,29 @@ constexpr UINT stop_message = WM_APP + 3;
 constexpr UINT show_context_menu_message = WM_APP + 4;
 constexpr UINT pending_count_message = WM_APP + 5;
 constexpr DWORD shutdown_timeout_ms = 10000;
+
+void report_settings_error(std::wstring_view message) noexcept {
+    try {
+        const std::wstring detail(message);
+        OutputDebugStringW((L"[settings-ui] " + detail + L"\n").c_str());
+        const DWORD path_length = GetEnvironmentVariableW(
+            L"LLAVON_IME_TEST_ERROR_LOG", nullptr, 0);
+        if (path_length != 0 && path_length < 32768) {
+            std::wstring path(path_length, L'\0');
+            const DWORD copied = GetEnvironmentVariableW(
+                L"LLAVON_IME_TEST_ERROR_LOG", path.data(), path_length);
+            if (copied != 0 && copied < path_length) {
+                path.resize(copied);
+                std::ofstream log(std::filesystem::path(path), std::ios::app);
+                log << winrt::to_string(winrt::hstring(detail)) << '\n';
+            }
+            return;
+        }
+        MessageBoxW(nullptr, detail.c_str(), L"Llavon IME Settings", MB_OK | MB_ICONERROR);
+    } catch (...) {
+        OutputDebugStringW(L"[settings-ui] unable to report settings error\n");
+    }
+}
 
 struct UiThreadState {
     HANDLE thread = nullptr;
@@ -484,11 +510,10 @@ private:
                 return 0;
             }
         } catch (const winrt::hresult_error& error) {
-            MessageBoxW(nullptr, error.message().c_str(), L"Llavon IME Settings", MB_OK | MB_ICONERROR);
+            report_settings_error(error.message());
             return 0;
         } catch (...) {
-            MessageBoxW(nullptr, L"Unable to open the settings window.", L"Llavon IME Settings",
-                        MB_OK | MB_ICONERROR);
+            report_settings_error(L"Unable to open the settings window.");
             return 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);

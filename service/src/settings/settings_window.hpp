@@ -81,6 +81,9 @@ private:
     winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
     winrt::com_ptr<IDesktopWindowXamlSourceNative2> island_native_;
     winrt::Windows::UI::Xaml::Controls::Grid shell_{nullptr};
+    bool lora_dialog_open_ = false;
+    winrt::Windows::UI::Xaml::DispatcherTimer lora_dialog_timer_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBlock lora_note_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBox model_path_{nullptr};
     winrt::Windows::UI::Xaml::Controls::Button browse_model_button_{nullptr};
     winrt::Windows::UI::Xaml::Controls::Button save_model_button_{nullptr};
