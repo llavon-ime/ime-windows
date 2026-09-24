@@ -4,11 +4,11 @@
 #include "update_checker.hpp"
 
 #include <windows.h>
-#include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
+#include <winrt/Microsoft.UI.Content.h>
 
 #include <winrt/Windows.Foundation.Collections.h>
-#include <winrt/Windows.UI.Xaml.Controls.h>
-#include <winrt/Windows.UI.Xaml.Hosting.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/base.h>
 
 #include <memory>
@@ -30,7 +30,6 @@ public:
     void set_pending_count(std::size_t count);
     void hide() const noexcept;
     void destroy() noexcept;
-    bool pretranslate(MSG& message) const;
 
 private:
     struct CustomNameEntry;
@@ -48,9 +47,9 @@ private:
     void add_custom_name_row(
         std::u16string name = {}, std::vector<std::u16string> readings = {});
     void remove_custom_name_row(
-        const winrt::Windows::UI::Xaml::Controls::Button& remove_button);
+        const winrt::Microsoft::UI::Xaml::Controls::Button& remove_button);
     void refresh_custom_name_pronunciations(
-        const winrt::Windows::UI::Xaml::Controls::TextBox& name_box);
+        const winrt::Microsoft::UI::Xaml::Controls::TextBox& name_box);
     void save_custom_names();
     void update_custom_names_save_state();
     void show_lora_training_dialog();
@@ -77,29 +76,27 @@ private:
 
     HWND window_ = nullptr;
     HWND island_window_ = nullptr;
-    winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager xaml_manager_{nullptr};
-    winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
-    winrt::com_ptr<IDesktopWindowXamlSourceNative2> island_native_;
-    winrt::Windows::UI::Xaml::Controls::Grid shell_{nullptr};
+    winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Grid shell_{nullptr};
     bool lora_dialog_open_ = false;
-    winrt::Windows::UI::Xaml::DispatcherTimer lora_dialog_timer_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::TextBlock lora_note_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::TextBox model_path_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::Button browse_model_button_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::Button save_model_button_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::TextBlock model_note_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::TextBlock active_device_status_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::ComboBox inference_device_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::Button save_inference_button_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::Button update_button_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::TextBlock update_status_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::HyperlinkButton update_download_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::TextBlock note_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::StackPanel custom_names_panel_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::Button add_custom_name_button_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::Button save_custom_names_button_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::TextBlock custom_names_note_{nullptr};
-    winrt::Windows::UI::Xaml::Controls::TextBlock pending_summary_{nullptr};
+    winrt::Microsoft::UI::Xaml::DispatcherTimer lora_dialog_timer_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock lora_note_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBox model_path_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button browse_model_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button save_model_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock model_note_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock active_device_status_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::ComboBox inference_device_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button save_inference_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button update_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock update_status_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::HyperlinkButton update_download_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock note_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::StackPanel custom_names_panel_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button add_custom_name_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button save_custom_names_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock custom_names_note_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock pending_summary_{nullptr};
     UpdateStatusTone update_status_tone_ = UpdateStatusTone::secondary;
     bool dark_theme_ = false;
     SettingsConfiguration configuration_;
@@ -113,11 +110,11 @@ private:
     };
 
     struct CustomNameRow {
-        winrt::Windows::UI::Xaml::Controls::Grid container{nullptr};
-        winrt::Windows::UI::Xaml::Controls::TextBox name{nullptr};
-        winrt::Windows::UI::Xaml::Controls::StackPanel pronunciations{nullptr};
-        winrt::Windows::UI::Xaml::Controls::Button remove_button{nullptr};
-        std::vector<winrt::Windows::UI::Xaml::Controls::ComboBox> reading_choices;
+        winrt::Microsoft::UI::Xaml::Controls::Grid container{nullptr};
+        winrt::Microsoft::UI::Xaml::Controls::TextBox name{nullptr};
+        winrt::Microsoft::UI::Xaml::Controls::StackPanel pronunciations{nullptr};
+        winrt::Microsoft::UI::Xaml::Controls::Button remove_button{nullptr};
+        std::vector<winrt::Microsoft::UI::Xaml::Controls::ComboBox> reading_choices;
         bool missing_pronunciation = false;
     };
 

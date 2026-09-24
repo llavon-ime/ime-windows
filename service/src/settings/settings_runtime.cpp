@@ -3,6 +3,7 @@
 #include "settings_configuration.hpp"
 #include "settings_menu_window.hpp"
 #include "settings_window.hpp"
+#include "winui_runtime.hpp"
 
 #include <commctrl.h>
 #include <windows.h>
@@ -16,6 +17,7 @@
 #include <string_view>
 
 #include <winrt/base.h>
+#include <microsoft.ui.dispatching.interop.h>
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -23,7 +25,6 @@ namespace llavon::settings {
 namespace {
 
 constexpr wchar_t settings_command_window_class[] = L"LlavonImeSettingsUiCommandWindow";
-constexpr wchar_t menu_command_window_class[] = L"LlavonImeSettingsMenuCommandWindow";
 constexpr UINT show_message = WM_APP + 1;
 constexpr UINT hide_message = WM_APP + 2;
 constexpr UINT stop_message = WM_APP + 3;
@@ -106,7 +107,7 @@ public:
                       llavon_settings_cancel_lora_callback cancel_lora_callback,
                       void* cancel_lora_context) {
         std::lock_guard lock(mutex_);
-        if (settings_thread_.thread || menu_thread_.thread) {
+        if (settings_thread_.thread) {
             return ERROR_BUSY;
         }
         if ((device_count != 0 && !devices) || !active_device || !save_callback ||
@@ -204,36 +205,24 @@ public:
 
     int32_t start() {
         std::lock_guard lock(mutex_);
-        if (settings_thread_.thread && menu_thread_.thread) {
+        if (settings_thread_.thread) {
             return 0;
         }
 
         thread_configuration_ = configuration_;
-        const int32_t settings_result = start_thread(settings_thread_, settings_thread_entry);
-        if (settings_result != 0) {
-            return settings_result;
-        }
-
-        const int32_t menu_result = start_thread(menu_thread_, menu_thread_entry);
-        if (menu_result != 0) {
-            stop_thread(settings_thread_);
-            return menu_result;
-        }
-        return 0;
+        return start_thread(settings_thread_, settings_thread_entry);
     }
 
     void show() const noexcept {
-        post(menu_thread_, hide_message);
         post(settings_thread_, show_message);
     }
 
     void hide() const noexcept {
-        post(menu_thread_, hide_message);
         post(settings_thread_, hide_message);
     }
 
     void show_context_menu(std::int32_t screen_x, std::int32_t screen_y) const noexcept {
-        const HWND command_window = menu_thread_.command_window.load(std::memory_order_acquire);
+        const HWND command_window = settings_thread_.command_window.load(std::memory_order_acquire);
         if (command_window) {
             PostMessageW(command_window, show_context_menu_message,
                          static_cast<WPARAM>(static_cast<std::uint32_t>(screen_x)),
@@ -243,17 +232,12 @@ public:
 
     int32_t stop() {
         std::lock_guard lock(mutex_);
-        if (!settings_thread_.thread && !menu_thread_.thread) {
+        if (!settings_thread_.thread) {
             return 0;
         }
 
-        // Each thread owns a XAML island. Finish tearing down one island
-        // before asking the other thread to close its XAML manager.
-        post(menu_thread_, stop_message);
-        const int32_t menu_result = join_thread(menu_thread_);
         post(settings_thread_, stop_message);
-        const int32_t settings_result = join_thread(settings_thread_);
-        return menu_result != 0 ? menu_result : settings_result;
+        return join_thread(settings_thread_);
     }
 
 private:
@@ -261,10 +245,6 @@ private:
 
     static DWORD WINAPI settings_thread_entry(void* context) noexcept {
         return static_cast<Runtime*>(context)->settings_thread_main();
-    }
-
-    static DWORD WINAPI menu_thread_entry(void* context) noexcept {
-        return static_cast<Runtime*>(context)->menu_thread_main();
     }
 
     int32_t start_thread(UiThreadState& state, ThreadEntry entry) {
@@ -316,11 +296,6 @@ private:
         return 0;
     }
 
-    static void stop_thread(UiThreadState& state) noexcept {
-        post(state, stop_message);
-        (void)join_thread(state);
-    }
-
     DWORD settings_thread_main() noexcept {
         bool apartment_initialized = false;
         bool ready_signaled = false;
@@ -342,8 +317,11 @@ private:
                 throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
             }
 
+            WinuiRuntime winui_runtime;
             SettingsWindow settings_window(thread_configuration_);
+            SettingsMenuWindow settings_menu([this] { show(); });
             settings_window_ = &settings_window;
+            settings_menu_ = &settings_menu;
             const HWND command_window = CreateWindowExW(
                 0, settings_command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
                 instance, this);
@@ -358,20 +336,22 @@ private:
 
             MSG message{};
             while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-                if (settings_window.pretranslate(message)) {
+                if (settings_menu.pretranslate(message) || ContentPreTranslateMessage(&message)) {
                     continue;
                 }
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
 
+            settings_menu.destroy();
             settings_window.destroy();
             drain_messages();
             settings_window_ = nullptr;
+            settings_menu_ = nullptr;
             settings_thread_.command_window.store(nullptr, std::memory_order_release);
             exit_code = 0;
         } catch (const winrt::hresult_error& error) {
-            OutputDebugStringW((L"[settings-ui] " + std::wstring(error.message()) + L"\n").c_str());
+            report_settings_error(error.message());
             settings_thread_.start_result.store(static_cast<int32_t>(error.code().value),
                                                 std::memory_order_relaxed);
             if (!ready_signaled) {
@@ -386,77 +366,8 @@ private:
         }
 
         settings_window_ = nullptr;
-        settings_thread_.command_window.store(nullptr, std::memory_order_release);
-        if (apartment_initialized) {
-            winrt::uninit_apartment();
-        }
-        return exit_code;
-    }
-
-    DWORD menu_thread_main() noexcept {
-        bool apartment_initialized = false;
-        bool ready_signaled = false;
-        const HANDLE ready_event = menu_thread_.ready_event;
-        DWORD exit_code = ERROR_GEN_FAILURE;
-        try {
-            winrt::init_apartment(winrt::apartment_type::single_threaded);
-            apartment_initialized = true;
-
-            const HINSTANCE instance = reinterpret_cast<HINSTANCE>(&__ImageBase);
-            WNDCLASSEXW window_class{sizeof(window_class)};
-            window_class.lpfnWndProc = menu_command_window_proc;
-            window_class.hInstance = instance;
-            window_class.lpszClassName = menu_command_window_class;
-            if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-                throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
-            }
-
-            SettingsMenuWindow settings_menu([this] { show(); });
-            settings_menu_ = &settings_menu;
-            const HWND command_window = CreateWindowExW(
-                0, menu_command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
-                instance, this);
-            if (!command_window) {
-                throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
-            }
-
-            menu_thread_.command_window.store(command_window, std::memory_order_release);
-            menu_thread_.start_result.store(0, std::memory_order_relaxed);
-            SetEvent(ready_event);
-            ready_signaled = true;
-
-            MSG message{};
-            while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-                if (settings_menu.pretranslate(message)) {
-                    continue;
-                }
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
-
-            settings_menu.destroy();
-            drain_messages();
-            settings_menu_ = nullptr;
-            menu_thread_.command_window.store(nullptr, std::memory_order_release);
-            exit_code = 0;
-        } catch (const winrt::hresult_error& error) {
-            OutputDebugStringW(
-                (L"[settings-menu] " + std::wstring(error.message()) + L"\n").c_str());
-            menu_thread_.start_result.store(static_cast<int32_t>(error.code().value),
-                                            std::memory_order_relaxed);
-            if (!ready_signaled) {
-                SetEvent(ready_event);
-            }
-        } catch (...) {
-            OutputDebugStringW(L"[settings-menu] unhandled UI thread error\n");
-            menu_thread_.start_result.store(ERROR_GEN_FAILURE, std::memory_order_relaxed);
-            if (!ready_signaled) {
-                SetEvent(ready_event);
-            }
-        }
-
         settings_menu_ = nullptr;
-        menu_thread_.command_window.store(nullptr, std::memory_order_release);
+        settings_thread_.command_window.store(nullptr, std::memory_order_release);
         if (apartment_initialized) {
             winrt::uninit_apartment();
         }
@@ -485,12 +396,27 @@ private:
 
         try {
             if (message == show_message) {
+                if (self->settings_menu_) self->settings_menu_->hide();
                 self->show_on_thread();
                 return 0;
             }
             if (message == hide_message) {
+                if (self->settings_menu_) self->settings_menu_->hide();
                 if (self->settings_window_) {
                     self->settings_window_->hide();
+                }
+                return 0;
+            }
+            if (message == show_context_menu_message) {
+                if (self->settings_menu_) {
+                    const POINT anchor{
+                        static_cast<LONG>(static_cast<DWORD>(wparam)),
+                        static_cast<LONG>(static_cast<DWORD>(lparam)),
+                    };
+                    if (!self->settings_menu_->show(
+                            reinterpret_cast<HINSTANCE>(&__ImageBase), anchor)) {
+                        report_settings_error(L"Unable to open the settings menu.");
+                    }
                 }
                 return 0;
             }
@@ -502,6 +428,7 @@ private:
                 return 0;
             }
             if (message == stop_message) {
+                if (self->settings_menu_) self->settings_menu_->destroy();
                 if (self->settings_window_) {
                     self->settings_window_->destroy();
                 }
@@ -514,43 +441,6 @@ private:
             return 0;
         } catch (...) {
             report_settings_error(L"Unable to open the settings window.");
-            return 0;
-        }
-        return DefWindowProcW(window, message, wparam, lparam);
-    }
-
-    static LRESULT CALLBACK menu_command_window_proc(HWND window, UINT message,
-                                                     WPARAM wparam, LPARAM lparam) {
-        Runtime* self = get_runtime(window, message, lparam);
-        if (!self) {
-            return DefWindowProcW(window, message, wparam, lparam);
-        }
-
-        if (message == hide_message) {
-            if (self->settings_menu_) {
-                self->settings_menu_->hide();
-            }
-            return 0;
-        }
-        if (message == show_context_menu_message) {
-            if (self->settings_menu_) {
-                const POINT anchor{
-                    static_cast<LONG>(static_cast<DWORD>(wparam)),
-                    static_cast<LONG>(static_cast<DWORD>(lparam)),
-                };
-                if (!self->settings_menu_->show(reinterpret_cast<HINSTANCE>(&__ImageBase),
-                                                anchor)) {
-                    OutputDebugStringW(L"[settings-menu] unable to create the XAML menu\n");
-                }
-            }
-            return 0;
-        }
-        if (message == stop_message) {
-            if (self->settings_menu_) {
-                self->settings_menu_->destroy();
-            }
-            DestroyWindow(window);
-            PostQuitMessage(0);
             return 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);
@@ -587,7 +477,6 @@ private:
 
     mutable std::mutex mutex_;
     UiThreadState settings_thread_;
-    UiThreadState menu_thread_;
     SettingsWindow* settings_window_ = nullptr;
     SettingsMenuWindow* settings_menu_ = nullptr;
     SettingsConfiguration configuration_;

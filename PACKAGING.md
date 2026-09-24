@@ -8,13 +8,37 @@ this build as a normal static-library target.
 
 ## Prerequisites
 
-- CMake 3.30 or newer.
+- CMake 3.31 or newer.
 - Visual Studio Build Tools with the C++ workload.
 - .NET SDK with `dotnet` available on `PATH`.
 
 CMake restores WiX from NuGet into `build/windows/.wix-tools` before
 packaging. It also installs the WiX UI extension into a build-local extension
 cache, so no global WiX installation is required.
+
+Settings and the tray settings menu use native WinUI 3 XAML Islands. Candidate
+windows continue to use the OS-provided UWP XAML Islands. `cmake/WinUI3.cmake`
+uses Microsoft's experimental Windows App SDK CMake targets and the pinned
+NuGetCMakePackage helper; package versions and content hashes are recorded in
+`cmake/winui3.packages.lock.json`. No handwritten solution/project files or
+project-owned PowerShell build scripts are needed. Microsoft's package helper
+may internally invoke PowerShell for manifest transformation.
+
+The first configure restores the NuGet packages. WinUI depends on WebView2
+metadata for C++ projection generation, but these UIs contain only native XAML
+controls and neither instantiate nor deploy a WebView2 browser runtime.
+The settings DLL activates its embedded manifest on its own STA and resolves
+the native control PRI explicitly. CMake copies and installs the self-contained
+Windows App SDK DLLs, PRI files, assets and language resources beside the
+service, so users do not need to install a Windows App Runtime separately.
+
+XAML sources live under `service/src/settings/ui/` and are embedded into the
+settings DLL as resources. The runtime API and settings callbacks remain the
+same. Build just these UI targets with:
+
+```powershell
+cmake --build build/windows --config Release --target llavon-ime-settings-ui llavon-ime-candidate-ui --parallel
+```
 
 ## Choose the Correct Build Command
 

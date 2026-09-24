@@ -7,7 +7,7 @@
     <Button x:Name="ClearAllButton" Content="全部取消" MinHeight="32" />
   </StackPanel>
   <TextBlock x:Name="SelectionCount" FontSize="12" />
-  <Border x:Name="TrainingItemsBorder" BorderBrush="#FFE1E1E1"
+  <Border x:Name="TrainingItemsBorder" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
           BorderThickness="1" CornerRadius="4">
     <ListView x:Name="TrainingItems" Height="330"
               SelectionMode="Multiple" IsMultiSelectCheckBoxEnabled="True"

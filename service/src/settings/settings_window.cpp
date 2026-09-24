@@ -2,9 +2,11 @@
 
 #include "../resource.h"
 #include "settings_resources.h"
+#include "xaml_resource.hpp"
 
 #include <dwmapi.h>
 #include <shobjidl_core.h>
+#include <winrt/Microsoft.UI.Interop.h>
 #include <rfl/json.hpp>
 #include <utf8/cpp20.h>
 
@@ -34,13 +36,13 @@
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.ViewManagement.h>
-#include <winrt/Windows.UI.Xaml.Automation.h>
-#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
-#include <winrt/Windows.UI.Xaml.Data.h>
-#include <winrt/Windows.UI.Xaml.Input.h>
-#include <winrt/Windows.UI.Xaml.Markup.h>
-#include <winrt/Windows.UI.Xaml.Media.h>
-#include <winrt/Windows.UI.Xaml.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.Data.h>
+#include <winrt/Microsoft.UI.Xaml.Input.h>
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
+#include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Windows.UI.h>
 
 namespace llavon::settings {
@@ -55,10 +57,10 @@ struct SettingsWindow::UpdateNotificationTarget {
 namespace {
 
 using namespace winrt::Windows::UI::Text;
-using namespace winrt::Windows::UI::Xaml;
-using namespace winrt::Windows::UI::Xaml::Controls;
-using namespace winrt::Windows::UI::Xaml::Controls::Primitives;
-using namespace winrt::Windows::UI::Xaml::Media;
+using namespace winrt::Microsoft::UI::Xaml;
+using namespace winrt::Microsoft::UI::Xaml::Controls;
+using namespace winrt::Microsoft::UI::Xaml::Controls::Primitives;
+using namespace winrt::Microsoft::UI::Xaml::Media;
 
 constexpr wchar_t window_class_name[] = L"LlavonImeSettingsWindow";
 constexpr UINT update_result_message = WM_APP + 10;
@@ -79,7 +81,7 @@ SolidColorBrush solid_brush(std::uint8_t red, std::uint8_t green, std::uint8_t b
 TextBlock make_text(const wchar_t* value, double size, FontWeight weight = FontWeights::Normal()) {
     TextBlock block;
     block.Text(value);
-    block.FontFamily(FontFamily(L"Segoe UI Variable Text, Microsoft JhengHei UI"));
+    block.FontFamily(FontFamily(L"Microsoft JhengHei UI"));
     block.FontSize(size);
     block.FontWeight(weight);
     block.TextWrapping(TextWrapping::Wrap);
@@ -102,28 +104,11 @@ std::wstring utc8_timestamp(std::u16string_view value) {
         std::chrono::floor<std::chrono::minutes>(utc + std::chrono::hours{8}));
 }
 
-winrt::Windows::Foundation::IInspectable load_xaml_resource(int id) {
-    const auto module = reinterpret_cast<HINSTANCE>(&__ImageBase);
-    const HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(id), RT_RCDATA);
-    if (!resource) winrt::throw_last_error();
-    const HGLOBAL loaded = LoadResource(module, resource);
-    if (!loaded) winrt::throw_last_error();
-    const auto* bytes = static_cast<const char*>(LockResource(loaded));
-    const DWORD length = SizeofResource(module, resource);
-    if (!bytes || length == 0) winrt::throw_hresult(E_FAIL);
-    return winrt::Windows::UI::Xaml::Markup::XamlReader::Load(
-        winrt::to_hstring(std::string_view(bytes, length)));
-}
-
 template <typename T>
 T named(const FrameworkElement& root, const wchar_t* name) {
     const auto element = root.FindName(name);
     if (!element) winrt::throw_hresult(E_INVALIDARG);
     return element.as<T>();
-}
-
-SolidColorBrush transparent_brush() {
-    return SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0});
 }
 
 bool system_uses_dark_theme() {
@@ -507,6 +492,14 @@ void SettingsWindow::show() noexcept {
     }
     ShowWindow(window_, IsIconic(window_) ? SW_RESTORE : SW_SHOWNORMAL);
     SetForegroundWindow(window_);
+    try {
+        if (xaml_source_ && !xaml_source_.HasFocus()) {
+            xaml_source_.NavigateFocus(Hosting::XamlSourceFocusNavigationRequest(
+                Hosting::XamlSourceFocusNavigationReason::First));
+        }
+    } catch (...) {
+        OutputDebugStringW(L"[settings-ui] unable to focus WinUI island\n");
+    }
     begin_update_check();
 }
 
@@ -536,15 +529,6 @@ void SettingsWindow::destroy() noexcept {
             window_ = nullptr;
         }
     }
-}
-
-bool SettingsWindow::pretranslate(MSG& message) const {
-    if (!island_native_) {
-        return false;
-    }
-    BOOL handled = FALSE;
-    winrt::check_hresult(island_native_->PreTranslateMessage(&message, &handled));
-    return handled != FALSE;
 }
 
 LRESULT CALLBACK SettingsWindow::window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -608,17 +592,15 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
 }
 
 void SettingsWindow::initialize_xaml_island() {
-    xaml_manager_ = Hosting::WindowsXamlManager::InitializeForCurrentThread();
     xaml_source_ = Hosting::DesktopWindowXamlSource();
-    island_native_ = xaml_source_.as<IDesktopWindowXamlSourceNative2>();
-    winrt::check_hresult(island_native_->AttachToWindow(window_));
-    winrt::check_hresult(island_native_->get_WindowHandle(&island_window_));
+    xaml_source_.Initialize(winrt::Microsoft::UI::GetWindowIdFromWindow(window_));
+    island_window_ = winrt::Microsoft::UI::GetWindowFromWindowId(
+        xaml_source_.SiteBridge().WindowId());
     resize_island();
 }
 
 void SettingsWindow::build_page() {
     shell_ = load_xaml_resource(IDR_SETTINGS_PAGE_XAML).as<Grid>();
-    shell_.Background(transparent_brush());
 
     model_path_ = named<TextBox>(shell_, L"ModelPath");
     model_path_.Text(to_hstring(configuration_.model_path));
@@ -927,21 +909,9 @@ void SettingsWindow::show_lora_training_dialog() {
     state->title = named<TextBlock>(dialog_root, L"DialogTitle");
     state->primary_button = named<Button>(dialog_root, L"DialogPrimaryButton");
     state->secondary_button = named<Button>(dialog_root, L"DialogSecondaryButton");
-    const auto dialog_card = named<Border>(dialog_root, L"DialogCard");
-    const bool dark_dialog = system_uses_dark_theme();
-    dialog_card.Background(dark_dialog ? solid_brush(32, 32, 32)
-                                       : solid_brush(255, 255, 255));
-    dialog_card.BorderBrush(dark_dialog ? solid_brush(64, 64, 64)
-                                        : solid_brush(210, 210, 210));
-    state->primary_button.Background(solid_brush(0, 120, 212));
-    state->primary_button.Foreground(solid_brush(255, 255, 255));
     state->main_page = named<ScrollViewer>(dialog_root, L"MainScroll");
     state->model_status_card = named<Border>(dialog_root, L"ModelStatusBorder");
-    state->model_status_card.BorderBrush(
-        system_uses_dark_theme() ? solid_brush(64, 64, 64) : solid_brush(225, 225, 225));
     state->model_status_icon = named<FontIcon>(dialog_root, L"ModelStatusIcon");
-    state->model_status_icon.Foreground(
-        system_uses_dark_theme() ? solid_brush(96, 205, 255) : solid_brush(0, 120, 212));
     state->model_status_title = named<TextBlock>(dialog_root, L"ModelStatusTitle");
     state->model_status_detail = named<TextBlock>(dialog_root, L"ModelStatusDetail");
     state->download_progress = named<ProgressBar>(dialog_root, L"DownloadProgress");
@@ -1115,7 +1085,7 @@ void SettingsWindow::show_lora_training_dialog() {
                        state->selected_items[begin + local]) ++local;
                 if (first != local) {
                     state->training_items.SelectRange(
-                        winrt::Windows::UI::Xaml::Data::ItemIndexRange(
+                        winrt::Microsoft::UI::Xaml::Data::ItemIndexRange(
                             static_cast<std::int32_t>(first),
                             static_cast<std::uint32_t>(local - first)));
                 }
@@ -1415,13 +1385,15 @@ void SettingsWindow::show_lora_training_dialog() {
         if (children.IndexOf(state->overlay, index)) {
             children.RemoveAt(index);
         }
+        children.GetAt(0).as<Control>().IsEnabled(true);
+        named<Button>(shell_, L"LoraButton").Focus(FocusState::Programmatic);
         lora_dialog_open_ = false;
     };
     state->secondary_button.Click([close_dialog](const auto&, const auto&) {
         close_dialog();
     });
     state->overlay.KeyDown([close_dialog](
-        const auto&, const winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs& args) {
+        const auto&, const winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs& args) {
         if (static_cast<int>(args.Key()) == VK_ESCAPE) {
             args.Handled(true);
             close_dialog();
@@ -1538,6 +1510,10 @@ void SettingsWindow::show_lora_training_dialog() {
             }
         });
 
+    state->overlay.Loaded([button = state->secondary_button](const auto&, const auto&) {
+        button.Focus(FocusState::Programmatic);
+    });
+    shell_.Children().GetAt(0).as<Control>().IsEnabled(false);
     shell_.Children().Append(state->overlay);
     lora_dialog_open_ = true;
 }
@@ -2010,8 +1986,13 @@ void SettingsWindow::resize_island() const noexcept {
     }
     RECT client{};
     GetClientRect(window_, &client);
-    SetWindowPos(island_window_, nullptr, 0, 0, client.right - client.left, client.bottom - client.top,
-                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+    try {
+        xaml_source_.SiteBridge().MoveAndResize({
+            0, 0, client.right - client.left, client.bottom - client.top});
+        xaml_source_.SiteBridge().Show();
+    } catch (...) {
+        OutputDebugStringW(L"[settings-ui] unable to resize WinUI island\n");
+    }
 }
 
 void SettingsWindow::update_theme() {
@@ -2029,31 +2010,16 @@ void SettingsWindow::update_theme() {
     DwmSetWindowAttribute(window_, 20, &dark, sizeof(dark));
 
     const DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_MAINWINDOW;
-    const HRESULT backdrop_result = DwmSetWindowAttribute(
+    DwmSetWindowAttribute(
         window_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
 
     if (shell_) {
         shell_.RequestedTheme(dark_theme_ ? ElementTheme::Dark : ElementTheme::Light);
-        shell_.Background(
-            SUCCEEDED(backdrop_result)
-                ? transparent_brush()
-                : (dark_theme_ ? solid_brush(32, 32, 32) : solid_brush(248, 244, 235)));
     }
     apply_theme_colors();
 }
 
 void SettingsWindow::apply_theme_colors() {
-    if (note_) {
-        note_.Foreground(dark_theme_ ? solid_brush(190, 190, 190) : solid_brush(96, 96, 96));
-    }
-    if (custom_names_note_) {
-        custom_names_note_.Foreground(
-            dark_theme_ ? solid_brush(190, 190, 190) : solid_brush(96, 96, 96));
-    }
-    if (update_download_) {
-        update_download_.Foreground(
-            dark_theme_ ? solid_brush(255, 153, 164) : solid_brush(210, 36, 36));
-    }
     set_update_status_tone(update_status_tone_);
 }
 
@@ -2066,7 +2032,7 @@ void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
     switch (tone) {
         case UpdateStatusTone::update_available:
             update_status_.Foreground(
-                dark_theme_ ? solid_brush(255, 153, 164) : solid_brush(210, 36, 36));
+                dark_theme_ ? solid_brush(96, 205, 255) : solid_brush(0, 95, 184));
             break;
         case UpdateStatusTone::success:
             update_status_.Foreground(
@@ -2082,8 +2048,7 @@ void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
             break;
         case UpdateStatusTone::secondary:
         default:
-            update_status_.Foreground(
-                dark_theme_ ? solid_brush(190, 190, 190) : solid_brush(96, 96, 96));
+            update_status_.ClearValue(TextBlock::ForegroundProperty());
             break;
     }
 }
@@ -2102,7 +2067,6 @@ void SettingsWindow::close_xaml() noexcept {
         }
     }
     island_window_ = nullptr;
-    island_native_ = nullptr;
     model_path_ = nullptr;
     browse_model_button_ = nullptr;
     save_model_button_ = nullptr;
@@ -2129,13 +2093,6 @@ void SettingsWindow::close_xaml() noexcept {
         } catch (...) {
         }
         xaml_source_ = nullptr;
-    }
-    if (xaml_manager_) {
-        try {
-            xaml_manager_.Close();
-        } catch (...) {
-        }
-        xaml_manager_ = nullptr;
     }
 }
 

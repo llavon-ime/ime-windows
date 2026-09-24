@@ -51,25 +51,34 @@ add_library(llavon-ime-candidate-ui SHARED
 add_library(llavon-ime-settings-ui SHARED
     src/settings/settings_ui.rc
     src/settings/settings_resources.h
-    src/settings/settings_page.xaml
-    src/settings/lora_dialog.xaml
-    src/settings/lora_selection.xaml
-    src/settings/lora_ruby_cell.xaml
-    src/settings/lora_item_tooltip.xaml
-    src/settings/lora_training_item.xaml
-    src/settings/custom_name_row.xaml
-    src/settings/custom_name_reading.xaml
-    src/settings/custom_name_warning.xaml
+    src/settings/ui/settings_page.xaml
+    src/settings/ui/settings_menu.xaml
+    src/settings/ui/theme.xaml
+    src/settings/ui/lora_dialog.xaml
+    src/settings/ui/lora_selection.xaml
+    src/settings/ui/lora_ruby_cell.xaml
+    src/settings/ui/lora_item_tooltip.xaml
+    src/settings/ui/lora_training_item.xaml
+    src/settings/ui/custom_name_row.xaml
+    src/settings/ui/custom_name_reading.xaml
+    src/settings/ui/custom_name_warning.xaml
     src/settings/settings_configuration.hpp
     src/settings/settings_menu_window.cpp
     src/settings/settings_menu_window.hpp
     src/settings/settings_runtime.cpp
     src/settings/settings_ui_api.h
+    src/settings/winui_runtime.cpp
+    src/settings/winui_runtime.hpp
+    src/settings/winui_platform.hpp
+    src/settings/xaml_resource.hpp
     src/settings/settings_window.cpp
     src/settings/settings_window.hpp
     src/settings/update_checker.cpp
     src/settings/update_checker.hpp
 )
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/WinUI3.cmake")
+llavon_target_winui3(llavon-ime-settings-ui)
 
 target_compile_features(llavon-ime-service PRIVATE cxx_std_23)
 target_compile_features(llavon-ime-candidate-ui PRIVATE cxx_std_23)
@@ -129,6 +138,7 @@ target_compile_options(llavon-ime-settings-ui PRIVATE
     /WX
     /utf-8
     /permissive-
+    /FI"${CMAKE_CURRENT_SOURCE_DIR}/src/settings/winui_platform.hpp"
 )
 target_compile_options(llavon-ime-candidate-ui PRIVATE
     /W4
@@ -160,7 +170,6 @@ target_link_libraries(llavon-ime-service PRIVATE
     ws2_32
 )
 target_link_libraries(llavon-ime-settings-ui PRIVATE
-    Microsoft::CppWinRT
     WindowsApp
     reflectcpp::reflectcpp
     utf8cpp::utf8cpp

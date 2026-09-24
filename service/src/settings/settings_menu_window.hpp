@@ -1,13 +1,13 @@
 #pragma once
 
 #include <windows.h>
-#include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
+#include <winrt/Microsoft.UI.Content.h>
 
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.UI.Xaml.Controls.h>
-#include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
-#include <winrt/Windows.UI.Xaml.Hosting.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/base.h>
 
 #include <functional>
@@ -40,10 +40,8 @@ private:
 
     HWND window_ = nullptr;
     HWND island_window_ = nullptr;
-    winrt::Windows::UI::Xaml::Hosting::WindowsXamlManager xaml_manager_{nullptr};
-    winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
-    winrt::com_ptr<IDesktopWindowXamlSourceNative2> island_native_;
-    winrt::Windows::UI::Xaml::Controls::Button settings_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button settings_button_{nullptr};
     std::function<void()> open_settings_;
 };
 

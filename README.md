@@ -89,7 +89,7 @@
 
 - Windows 10 或更新版本（x64）
 - Visual Studio 2022 Build Tools，並安裝「使用 C++ 的桌面開發」工作負載
-- CMake 3.30 或更新版本
+- CMake 3.31 或更新版本
 - .NET 8 SDK
 - Git
 
