@@ -325,6 +325,7 @@ int main(int argc, char* argv[]) {
                 case LLAVON_PROTECTION_ENABLE: writer->set_recording_enabled(true); return 0;
                 case LLAVON_PROTECTION_DISABLE: writer->set_recording_enabled(false); return 0;
                 case LLAVON_PROTECTION_CLEANUP: return lora_training.discard_plaintext_datasets();
+                case LLAVON_PROTECTION_RESET: lora_training.reset_conversation_data(); return 0;
                 default: throw std::invalid_argument("unknown protection action");
                 }
             });

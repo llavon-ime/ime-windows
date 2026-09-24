@@ -81,6 +81,7 @@ public:
     ProtectionStatus protection_status() const;
     void configure_password(std::string_view password);
     void set_recording_enabled(bool enabled);
+    void reset_conversation_data();
     std::size_t pending_count() const noexcept {
         return pending_count_.load(std::memory_order_acquire);
     }
@@ -110,6 +111,7 @@ private:
         std::string session_id;
         std::uint64_t sequence = 0;
         std::chrono::steady_clock::time_point queued_at;
+        std::uint64_t generation = 0;
     };
 
     void worker_main() noexcept;
@@ -120,6 +122,7 @@ private:
     std::filesystem::path database_path_;
     mutable std::mutex protection_mutex_;
     std::atomic_bool recording_enabled_{false};
+    std::atomic<std::uint64_t> generation_{0};
     std::mutex mutex_;
     std::condition_variable available_;
     std::deque<QueuedOperation> queue_;

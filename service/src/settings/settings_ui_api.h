@@ -147,6 +147,7 @@ enum llavon_settings_protection_action {
     LLAVON_PROTECTION_DISABLE = 3,
     LLAVON_PROTECTION_CLEANUP = 4,
     LLAVON_PROTECTION_CLEAR_VIEW = 5,
+    LLAVON_PROTECTION_RESET = 6,
 };
 // STATUS: bit 0 = configured, bit 1 = enabled. CLEANUP: deleted file count.
 typedef int32_t (*llavon_settings_protection_callback)(

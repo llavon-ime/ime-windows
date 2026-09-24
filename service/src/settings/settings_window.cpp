@@ -870,22 +870,61 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
         : L"請輸入密碼以解密對話資料。", body_text_size);
     description.TextWrapping(TextWrapping::Wrap);
     content.Children().Append(description);
-    if (setup) {
-        auto note = make_text(L"0000 保護力較低。密碼不會被保存，忘記後無法還原資料。", caption_text_size);
-        note.TextWrapping(TextWrapping::Wrap);
-        content.Children().Append(note);
-    }
+    auto note = make_text(L"密碼不會被系統保存，忘記將無法還原。", caption_text_size);
+    note.TextWrapping(TextWrapping::Wrap);
+    content.Children().Append(note);
     PasswordBox password;
     password.PlaceholderText(L"密碼");
     content.Children().Append(password);
     PasswordBox confirmation;
-    if (setup) {
-        confirmation.PlaceholderText(L"再次輸入密碼");
-        content.Children().Append(confirmation);
-    }
+    confirmation.PlaceholderText(L"再次輸入密碼");
+    confirmation.Visibility(setup ? Visibility::Visible : Visibility::Collapsed);
+    content.Children().Append(confirmation);
+    struct PasswordDialogState { bool setup; bool confirming_reset = false; };
+    auto dialog_state = std::make_shared<PasswordDialogState>(PasswordDialogState{setup});
+    Button reset;
+    reset.Content(winrt::box_value(L"忘記密碼，清除所有對話資料"));
+    content.Children().Append(reset);
     TextBlock status;
     status.TextWrapping(TextWrapping::Wrap);
     content.Children().Append(status);
+    // The second click is an explicit destructive-action confirmation. It does
+    // not require the forgotten password and never touches model files.
+    reset.Click([this, weak_dialog = winrt::make_weak(dialog), dialog_state, password, confirmation, description, status](const auto& sender, const auto&) {
+        const auto reset = sender.as<Button>();
+        const auto dialog = weak_dialog.get();
+        if (!dialog) return;
+        if (!dialog_state->confirming_reset) {
+            dialog_state->confirming_reset = true;
+            dialog.IsPrimaryButtonEnabled(false);
+            reset.Content(winrt::box_value(L"確認清除所有對話資料"));
+            status.Text(L"所有對話記錄及訓練暫存資料將永久刪除，LoRA 模型檔會保留。請再次按下確認清除，或按取消離開。");
+            return;
+        }
+        std::size_t result = 0;
+        const auto callback = configuration_.protection_callback;
+        if (!callback || callback(configuration_.protection_context,
+                LLAVON_PROTECTION_RESET, nullptr, &result) != ERROR_SUCCESS) {
+            status.Text(L"清除未完成，請先結束訓練並確認檔案權限後重試。LoRA 模型檔不會被刪除。");
+            return;
+        }
+        if (const auto close = close_lora_dialog_) close();
+        configuration_.training_items.clear();
+        set_pending_count(0);
+        refresh_protection_controls();
+        password.Password(L"");
+        confirmation.Password(L"");
+        confirmation.Visibility(Visibility::Visible);
+        dialog_state->setup = true;
+        dialog_state->confirming_reset = false;
+        dialog.Title(winrt::box_value(L"設定密碼"));
+        dialog.PrimaryButtonText(L"設定並開啟");
+        dialog.IsPrimaryButtonEnabled(true);
+        description.Text(L"設定密碼以保護對話資料，如果不知道要設什麼建議 0000。");
+        reset.Content(winrt::box_value(L"忘記密碼，清除所有對話資料"));
+        status.Text(L"已清除所有對話資料，LoRA 模型檔已保留。請設定新密碼。");
+        password.Focus(FocusState::Programmatic);
+    });
     dialog.Content(content);
     dialog.Opened([this, setup, clean_datasets, status, password](const auto& sender, const auto&) {
         password.Focus(FocusState::Programmatic);
@@ -902,14 +941,25 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
                         L" 個檔案；這些暫存資料不會再用於訓練。");
         }
     });
-    dialog.PrimaryButtonClick([setup, password, confirmation, status, action = std::move(action)](
+    dialog.PrimaryButtonClick([this, dialog_state, password, confirmation, status, action = std::move(action)](
         const auto&, const ContentDialogButtonClickEventArgs& args) {
         auto secret = to_utf16(password.Password());
         auto repeated = to_utf16(confirmation.Password());
-        const bool valid = !secret.empty() && (!setup || secret == repeated);
+        const bool valid = !dialog_state->confirming_reset && !secret.empty() &&
+            (!dialog_state->setup || secret == repeated);
         bool ok = false;
         if (valid) {
-            try { ok = action(secret.c_str()); } catch (...) {}
+            try {
+                if (dialog_state->setup) {
+                    std::size_t result = 0;
+                    ok = configuration_.protection_callback && configuration_.protection_callback(
+                        configuration_.protection_context, LLAVON_PROTECTION_SETUP,
+                        secret.c_str(), &result) == ERROR_SUCCESS;
+                    refresh_protection_controls();
+                } else {
+                    ok = action(secret.c_str());
+                }
+            } catch (...) {}
         }
         if (!secret.empty()) SecureZeroMemory(secret.data(), secret.size() * sizeof(char16_t));
         if (!repeated.empty()) SecureZeroMemory(repeated.data(), repeated.size() * sizeof(char16_t));
@@ -1540,7 +1590,9 @@ void SettingsWindow::show_lora_training_dialog() {
         children.GetAt(0).as<Control>().IsEnabled(true);
         named<Button>(shell_, L"LoraButton").Focus(FocusState::Programmatic);
         lora_dialog_open_ = false;
+        close_lora_dialog_ = {};
     };
+    close_lora_dialog_ = close_dialog;
     state->secondary_button.Click([close_dialog](const auto&, const auto&) {
         close_dialog();
     });
@@ -2240,6 +2292,7 @@ void SettingsWindow::close_xaml() noexcept {
     pending_summary_ = nullptr;
     shell_ = nullptr;
     lora_dialog_open_ = false;
+    close_lora_dialog_ = {};
     lora_note_ = nullptr;
     if (xaml_source_) {
         try {

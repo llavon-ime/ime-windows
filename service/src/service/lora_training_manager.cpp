@@ -300,6 +300,15 @@ std::size_t LoraTrainingManager::discard_plaintext_datasets() {
     return discard_plaintext_training_datasets(assets_root_ / L"runs");
 }
 
+void LoraTrainingManager::reset_conversation_data() {
+    std::lock_guard operation_lock(operation_mutex_);
+    if (busy_.load(std::memory_order_acquire)) throw std::runtime_error("training is busy");
+    (void)discard_plaintext_training_datasets(assets_root_ / L"runs");
+    training_data_->reset_conversation_data();
+    pending_records_.clear();
+    pending_event_ids_.clear();
+}
+
 bool LoraTrainingManager::launch(Operation operation) {
     std::lock_guard operation_lock(operation_mutex_);
     if (busy_.load(std::memory_order_acquire)) return false;

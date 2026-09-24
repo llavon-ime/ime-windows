@@ -420,6 +420,7 @@ void TrainingDataWriter::enqueue(RawCommitEvent event) {
             .kind = QueuedOperation::Kind::commit,
             .event = std::move(event),
             .queued_at = std::chrono::steady_clock::now(),
+            .generation = generation_.load(std::memory_order_acquire),
         });
     }
     available_.notify_one();
@@ -506,6 +507,35 @@ void TrainingDataWriter::set_recording_enabled(bool enabled) {
         });
     }
     available_.notify_one();
+}
+
+void TrainingDataWriter::reset_conversation_data() {
+    std::lock_guard protection_lock(protection_mutex_);
+    recording_enabled_.store(false, std::memory_order_release);
+    {
+        std::lock_guard lock(mutex_);
+        generation_.fetch_add(1, std::memory_order_acq_rel);
+        queue_.clear();
+        queue_.push_back(QueuedOperation{.kind = QueuedOperation::Kind::clear});
+    }
+    available_.notify_one();
+    Database database(database_path_);
+    database.execute("PRAGMA secure_delete=ON");
+    database.execute("BEGIN IMMEDIATE");
+    try {
+        database.execute("DELETE FROM training_commits");
+        database.execute("DELETE FROM commit_protection");
+        database.execute("COMMIT");
+    } catch (...) {
+        try { database.execute("ROLLBACK"); } catch (...) {}
+        throw;
+    }
+    publish_pending_delta(-static_cast<std::ptrdiff_t>(pending_count()));
+    database.execute("VACUUM");
+    if (sqlite3_wal_checkpoint_v2(database.get(), nullptr, SQLITE_CHECKPOINT_TRUNCATE,
+                                 nullptr, nullptr) != SQLITE_OK) {
+        throw_sqlite(database.get(), "clear conversation journal");
+    }
 }
 
 void TrainingDataWriter::configure_password(std::string_view password) {
@@ -850,6 +880,7 @@ void TrainingDataWriter::worker_main() noexcept {
     try {
         Database database(database_path_);
         std::optional<commit_crypto::PublicParameters> public_parameters;
+        std::uint64_t public_generation = 0;
         Statement insert(
             database.get(),
             "INSERT OR IGNORE INTO training_commits("
@@ -860,14 +891,20 @@ void TrainingDataWriter::worker_main() noexcept {
         struct StagedCommit {
             RawCommitEvent event;
             std::chrono::steady_clock::time_point deadline;
+            std::uint64_t generation = 0;
         };
         std::list<StagedCommit> staged;
 
-        const auto persist = [&](RawCommitEvent event) {
+        const auto persist = [&](RawCommitEvent event, std::uint64_t generation) {
             try {
                 if (!has_bopomofo_input(event)) return;
                 std::lock_guard protection_lock(protection_mutex_);
                 if (!recording_enabled_.load(std::memory_order_acquire)) return;
+                if (generation != generation_.load(std::memory_order_acquire)) return;
+                if (public_generation != generation) {
+                    public_parameters.reset();
+                    public_generation = generation;
+                }
                 if (!public_parameters) public_parameters = read_parameters(database);
                 const auto& parameters = *public_parameters;
                 const std::string event_id =
@@ -950,14 +987,16 @@ void TrainingDataWriter::worker_main() noexcept {
                     });
                 if (previous != staged.end()) {
                     auto event = std::move(previous->event);
+                    const auto generation = previous->generation;
                     staged.erase(previous);
-                    persist(std::move(event));
+                    persist(std::move(event), generation);
                 }
                 if (recording_enabled_.load(std::memory_order_acquire) &&
                     has_bopomofo_input(operation->event)) {
                     staged.push_back(StagedCommit{
                         .event = std::move(operation->event),
                         .deadline = operation->queued_at + staging_window_,
+                        .generation = operation->generation,
                     });
                 }
                 continue;
@@ -965,7 +1004,7 @@ void TrainingDataWriter::worker_main() noexcept {
 
             if (finish) {
                 for (auto& pending : staged) {
-                    persist(std::move(pending.event));
+                    persist(std::move(pending.event), pending.generation);
                 }
                 break;
             }
@@ -973,8 +1012,9 @@ void TrainingDataWriter::worker_main() noexcept {
             const auto now = std::chrono::steady_clock::now();
             while (!staged.empty() && staged.front().deadline <= now) {
                 auto event = std::move(staged.front().event);
+                const auto generation = staged.front().generation;
                 staged.pop_front();
-                persist(std::move(event));
+                persist(std::move(event), generation);
             }
         }
     } catch (const std::exception& error) {

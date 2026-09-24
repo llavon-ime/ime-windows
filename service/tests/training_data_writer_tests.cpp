@@ -19,6 +19,84 @@ using llavon::service::RawCommitInputEntry;
 using llavon::service::TrainingDataWriter;
 using llavon::service::write_lora_numeric_dataset;
 
+int reset_tests(const std::filesystem::path& path, RawCommitEvent event) {
+    using namespace std::chrono_literals;
+    const auto model = path.wstring() + L".gguf";
+    { std::ofstream file(model, std::ios::binary); file << "preserved-model"; }
+    {
+        TrainingDataWriter writer(path, 10s);
+        writer.configure_password("forgotten-password");
+        event.session_id = "reset";
+        event.sequence = 1;
+        writer.enqueue(event);
+        event.sequence = 2;
+        writer.enqueue(event); // Flush the first record, stage the second.
+        for (int attempt = 0; attempt < 200 && writer.pending_count() != 1; ++attempt) {
+            std::this_thread::sleep_for(5ms);
+        }
+        if (writer.pending_count() != 1) return 70;
+        const llavon::service::LoraTrainingRun run{
+            .base_model_revision = "reset-test",
+            .adapter_path = model,
+            .output_model_path = model,
+            .completed_at_utc = "2026-09-24T00:00:00Z",
+            .record_count = 1,
+            .cumulative_record_count = 1,
+            .optimizer_steps = 1,
+            .rank = 8,
+            .alpha = 16,
+            .target_modules = u"q_proj,v_proj",
+        };
+        if (!writer.complete_lora_training(run, {u"reset:1"})) return 71;
+        event.sequence = 3;
+        writer.enqueue(event);
+        for (int attempt = 0; attempt < 200 && writer.pending_count() != 1; ++attempt) {
+            std::this_thread::sleep_for(5ms);
+        }
+        if (!writer.exclude_unselected({}, {u"reset:2"})) return 72;
+        // This operation requires no password and must also discard staged input.
+        writer.reset_conversation_data();
+        if (writer.pending_count() != 0 || !writer.pending_items().empty() ||
+            writer.protection_status().configured || writer.protection_status().enabled ||
+            writer.lora_training_history().size() != 1) return 73;
+        sqlite3* database = nullptr;
+        if (sqlite3_open16(path.c_str(), &database) != SQLITE_OK) return 74;
+        sqlite3_stmt* statement = nullptr;
+        if (sqlite3_prepare_v2(database, "SELECT COUNT(*) FROM training_commits", -1,
+                              &statement, nullptr) != SQLITE_OK) return 75;
+        const bool empty = sqlite3_step(statement) == SQLITE_ROW && sqlite3_column_int(statement, 0) == 0;
+        sqlite3_finalize(statement);
+        sqlite3_close(database);
+        if (!empty) return 76;
+        writer.configure_password("new-password");
+        event.sequence = 4;
+        writer.enqueue(event);
+        event.sequence = 5;
+        writer.enqueue(event);
+        for (int attempt = 0; attempt < 200 && writer.pending_count() != 1; ++attempt) {
+            std::this_thread::sleep_for(5ms);
+        }
+        const auto items = writer.pending_items("new-password");
+        if (items.size() != 1 || items.front().event_id != u"reset:4") return 77;
+        try { (void)writer.pending_items("forgotten-password"); return 78; } catch (const std::exception&) {}
+    }
+    {
+        TrainingDataWriter writer(path);
+        const auto items = writer.pending_items("new-password");
+        if (items.size() != 2 || items.back().event_id != u"reset:5" ||
+            writer.lora_training_history().size() != 1) return 79;
+    }
+    {
+        std::ifstream file(model, std::ios::binary);
+        std::string text;
+        file >> text;
+        if (text != "preserved-model") return 80;
+    }
+    std::filesystem::remove(model);
+    std::filesystem::remove(path);
+    return 0;
+}
+
 int correction_staging_tests(
     const std::filesystem::path& path, const RawCommitEvent& prototype) {
     using namespace std::chrono_literals;
@@ -456,6 +534,9 @@ int main() {
     DeleteFileW(malformed_shm_path.c_str());
     auto protection_path = path;
     protection_path += L".protection.sqlite3";
+    auto reset_path = path;
+    reset_path += L".reset.sqlite3";
+    if (const int result = reset_tests(reset_path, event); result != 0) return result;
     auto correction_path = path;
     correction_path += L".correction.sqlite3";
     if (const int result = correction_staging_tests(correction_path, event);

@@ -59,6 +59,7 @@ private:
     void show_password_dialog(bool setup, std::function<bool(const char16_t*)> action,
                               bool clean_datasets = false);
     bool updating_protection_ = false;
+    std::function<void()> close_lora_dialog_;
     bool collect_custom_names(std::vector<CustomNameEntry>& entries) const;
     const std::vector<std::u16string>& lookup_bopomofo(char32_t character) const;
     void begin_update_check();

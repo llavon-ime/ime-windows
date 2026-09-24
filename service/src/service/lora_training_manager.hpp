@@ -76,6 +76,7 @@ public:
                               const std::vector<std::u16string>& reviewed_event_ids,
                               LoraTrainingOptions options, std::string_view password);
     std::size_t discard_plaintext_datasets();
+    void reset_conversation_data();
     void cancel() noexcept;
 
 private:

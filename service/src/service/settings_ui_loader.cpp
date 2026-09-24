@@ -343,6 +343,10 @@ std::int32_t SettingsUiLoader::protection_trampoline(
         } else {
             TransientPassword secret(password);
             *result = self->protection_action_(action, secret.value);
+            if (action == LLAVON_PROTECTION_RESET) {
+                self->training_items_.clear();
+                self->reviewed_event_ids_.clear();
+            }
         }
         return ERROR_SUCCESS;
     } catch (...) { return ERROR_ACCESS_DENIED; }
