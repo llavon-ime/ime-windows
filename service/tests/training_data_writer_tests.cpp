@@ -25,7 +25,9 @@ using llavon::service::write_lora_numeric_dataset;
 
 struct NumericTrainingRow {
     std::vector<std::int64_t> tokens;
+    std::vector<std::int64_t> labels;
     std::vector<std::int64_t> loss_weights;
+    std::vector<std::int64_t> attention_mask;
     std::vector<std::optional<std::vector<std::int64_t>>> candidate_masks;
 };
 
@@ -484,6 +486,8 @@ int main() {
             !parsed_mixed) return 62;
         const auto& mixed_row = parsed_mixed.value();
         if (mixed_row.tokens.size() != 12 ||
+            mixed_row.labels != mixed_row.tokens ||
+            mixed_row.attention_mask != std::vector<std::int64_t>(12, 1) ||
             mixed_row.loss_weights !=
                 std::vector<std::int64_t>{0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1} ||
             mixed_row.candidate_masks.size() != mixed_row.tokens.size() ||

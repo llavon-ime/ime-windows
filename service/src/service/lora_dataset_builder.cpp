@@ -4,7 +4,6 @@
 #include <rfl/json.hpp>
 #include <utf8/cpp20.h>
 
-#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -27,31 +26,19 @@ struct PaddingEntry {
     std::optional<std::string> literal;
 };
 
+struct NumericTrainingRow {
+    std::vector<std::int64_t> tokens;
+    std::vector<std::int64_t> labels;
+    std::vector<std::int64_t> loss_weights;
+    std::vector<std::int64_t> attention_mask;
+    std::vector<std::optional<std::vector<std::int64_t>>> candidate_masks;
+};
+
 std::string read_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("unable to open JSON file");
     return std::string(std::istreambuf_iterator<char>(input),
                        std::istreambuf_iterator<char>());
-}
-
-void append_integer_array(std::string& output,
-                          const std::vector<std::int64_t>& values) {
-    output.push_back('[');
-    for (std::size_t index = 0; index < values.size(); ++index) {
-        if (index != 0) output.push_back(',');
-        output += std::to_string(values[index]);
-    }
-    output.push_back(']');
-}
-
-void append_repeated_array(std::string& output, std::size_t count,
-                           std::int64_t value) {
-    output.push_back('[');
-    for (std::size_t index = 0; index < count; ++index) {
-        if (index != 0) output.push_back(',');
-        output += std::to_string(value);
-    }
-    output.push_back(']');
 }
 
 std::string reading_with_tone(const PaddingEntry& entry) {
@@ -102,10 +89,11 @@ bool build_row(const TrainingDataRecord& record, const ime::core::EncodingTables
     }
     const std::size_t prompt_length = tokens.size();
 
-    std::vector<std::optional<std::vector<std::int64_t>>> candidate_masks;
-    candidate_masks.reserve(answer.size());
-    std::vector<std::int64_t> loss_weights;
-    loss_weights.reserve(answer.size());
+    std::vector<std::optional<std::vector<std::int64_t>>> candidate_masks(prompt_length);
+    candidate_masks.reserve(prompt_length + answer.size());
+    std::vector<std::int64_t> loss_weights(prompt_length, 0);
+    loss_weights.reserve(prompt_length + answer.size());
+    bool has_trainable_position = false;
     for (const auto& [reading, character] : std::views::zip(readings, answer)) {
         if (!reading) {
             tokens.push_back(tables.token_for_character(character));
@@ -127,40 +115,19 @@ bool build_row(const TrainingDataRecord& record, const ime::core::EncodingTables
         tokens.push_back(answer_token);
         candidate_masks.push_back(std::move(mask));
         loss_weights.push_back(1);
+        has_trainable_position = true;
     }
-    if (std::find(loss_weights.begin(), loss_weights.end(), 1) == loss_weights.end()) return false;
+    if (!has_trainable_position) return false;
     if (tokens.size() > static_cast<std::size_t>(maximum_sequence_length)) return false;
 
-    output += R"({"tokens":)";
-    append_integer_array(output, tokens);
-    output += R"(,"labels":)";
-    append_integer_array(output, tokens);
-    output += R"(,"loss_weights":)";
-    output.push_back('[');
-    for (std::size_t index = 0; index < prompt_length; ++index) {
-        if (index != 0) output.push_back(',');
-        output.push_back('0');
-    }
-    for (const auto weight : loss_weights) {
-        output.push_back(',');
-        output += std::to_string(weight);
-    }
-    output += R"(],"attention_mask":)";
-    append_repeated_array(output, tokens.size(), 1);
-    output += R"(,"candidate_masks":[)";
-    for (std::size_t index = 0; index < prompt_length; ++index) {
-        if (index != 0) output.push_back(',');
-        output += "null";
-    }
-    for (const auto& mask : candidate_masks) {
-        output.push_back(',');
-        if (mask) {
-            append_integer_array(output, *mask);
-        } else {
-            output += "null";
-        }
-    }
-    output += "]}\n";
+    NumericTrainingRow row{
+        .tokens = std::move(tokens),
+        .loss_weights = std::move(loss_weights),
+        .candidate_masks = std::move(candidate_masks),
+    };
+    row.labels = row.tokens;
+    row.attention_mask.assign(row.tokens.size(), 1);
+    output = rfl::json::write(row) + '\n';
     return true;
 }
 
