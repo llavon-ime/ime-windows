@@ -76,6 +76,16 @@
       <TextBlock x:Name="EmptyTrainingItems" Text="目前沒有尚未訓練的資料。請先使用輸入法提交一些文字。"
                  FontSize="14" TextWrapping="Wrap" Visibility="Collapsed"/>
       <TextBlock Text="訓練設定" FontSize="14" FontWeight="SemiBold"/>
+      <ComboBox x:Name="TrainingStrength" Header="訓練強度" SelectedIndex="1" MinHeight="32">
+        <ComboBoxItem Content="極低"/>
+        <ComboBoxItem Content="低"/>
+        <ComboBoxItem Content="中"/>
+        <ComboBoxItem Content="高"/>
+        <ComboBoxItem Content="進階"/>
+      </ComboBox>
+      <TextBlock x:Name="StrengthDescription" FontSize="12" TextWrapping="Wrap"/>
+      <ToggleSwitch x:Name="OnlySelectedSentences" Header="只訓練曾手動選字的句子" IsOn="True"/>
+      <StackPanel x:Name="AdvancedTrainingSettings" Visibility="Collapsed" Spacing="8">
       <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -119,8 +129,9 @@
         </ComboBox>
       </Grid>
       <ToggleSwitch x:Name="Shuffle" Header="Shuffle training data" IsOn="True"/>
+      </StackPanel>
       <ProgressBar x:Name="TrainingProgress" Minimum="0" Maximum="100" Visibility="Collapsed"/>
-      <TextBlock x:Name="Status" Text="所有欄位都已填入建議預設值。" FontSize="12" TextWrapping="Wrap"/>
+      <TextBlock x:Name="Status" Text="請選擇訓練強度與資料範圍。" FontSize="12" TextWrapping="Wrap"/>
       <Button x:Name="ReloadModelButton" Content="立即套用" MinHeight="32"
               HorizontalAlignment="Left" Visibility="Collapsed"/>
       <TextBlock x:Name="EstimatedSteps" Text="預計 steps：0" FontSize="12" TextWrapping="Wrap"/>

@@ -10,6 +10,7 @@
 #include <utf8/cpp20.h>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <map>
 #include <charconv>
@@ -547,13 +548,62 @@ bool LoraTrainingManager::start_training_async(
     std::vector<std::u16string> event_ids,
     const std::vector<std::u16string>& reviewed_event_ids,
     LoraTrainingOptions options, std::string_view password) {
+    if (options.strength < LoraTrainingStrength::ultra_low ||
+        options.strength > LoraTrainingStrength::advanced) return false;
+    if (options.strength != LoraTrainingStrength::advanced) {
+        const auto strength = options.strength;
+        const bool only_selected = options.only_manually_selected;
+        options = LoraTrainingOptions{};
+        const auto preset = lora_training_preset(strength);
+        options.strength = strength;
+        options.learning_rate = preset.learning_rate;
+        options.epochs = preset.epochs;
+        options.only_manually_selected = only_selected;
+    }
+    if (options.rank <= 0 || !std::isfinite(options.alpha) || options.alpha <= 0 ||
+        !std::isfinite(options.dropout) || options.dropout < 0 ||
+        options.dropout >= 1 || options.batch_size <= 0 ||
+        options.gradient_accumulation <= 0 || options.epochs <= 0 ||
+        options.max_steps == 0 || options.max_steps < -1 ||
+        !std::isfinite(options.learning_rate) || options.learning_rate <= 0 ||
+        !std::isfinite(options.weight_decay) || options.weight_decay < 0 ||
+        options.warmup_steps < 0 || !std::isfinite(options.max_gradient_norm) ||
+        options.max_gradient_norm < 0 || options.save_every < 0 ||
+        options.device < 0 || options.device > 2 ||
+        options.max_sequence_length <= 1 || options.target_modules.empty() ||
+        (options.dtype != u"float32" && options.dtype != u"bfloat16")) {
+        return false;
+    }
     {
         std::lock_guard operation_lock(operation_mutex_);
         if (busy_.load(std::memory_order_acquire)) return false;
         if (worker_.joinable()) worker_.join();
+        if (const auto previous = training_data_->latest_lora_training_run()) {
+            if (options.strength != LoraTrainingStrength::advanced) {
+                options.rank = previous->rank;
+                options.alpha = previous->alpha;
+                options.dropout = previous->dropout;
+                options.target_modules = previous->target_modules;
+            } else if (previous->rank != options.rank ||
+                       previous->alpha != options.alpha ||
+                       previous->dropout != options.dropout ||
+                       previous->target_modules != options.target_modules) {
+                return false;
+            }
+        }
         auto records = training_data_->pending_records(event_ids, password);
         if (records.empty() || records.size() != event_ids.size()) return false;
-        if (!training_data_->exclude_unselected(event_ids, reviewed_event_ids)) return false;
+        if (options.only_manually_selected) {
+            std::erase_if(records, [](const TrainingDataRecord& record) {
+                return !record.revice;
+            });
+            if (records.empty()) return false;
+            event_ids.clear();
+            event_ids.reserve(records.size());
+            for (const auto& record : records) event_ids.push_back(record.event_id);
+        } else if (!training_data_->exclude_unselected(event_ids, reviewed_event_ids)) {
+            return false;
+        }
         pending_records_ = std::move(records);
         pending_event_ids_ = std::move(event_ids);
         pending_options_ = std::move(options);
@@ -1142,11 +1192,113 @@ void LoraTrainingManager::training_worker() {
     const auto dataset = write_lora_numeric_dataset(
         records, tables_directory_, config_path, dataset_path,
         pending_options_.max_sequence_length);
+    const auto batches_per_epoch =
+        (dataset.samples + static_cast<std::size_t>(pending_options_.batch_size) - 1) /
+        static_cast<std::size_t>(pending_options_.batch_size);
+    const auto updates_per_epoch =
+        (batches_per_epoch +
+         static_cast<std::size_t>(pending_options_.gradient_accumulation) - 1) /
+        static_cast<std::size_t>(pending_options_.gradient_accumulation);
+    if (pending_options_.max_steps > 0 &&
+        static_cast<std::size_t>(pending_options_.max_steps) < updates_per_epoch) {
+        throw std::invalid_argument(
+            "max steps must cover at least one full epoch so every selected record is trained");
+    }
+    const auto total_updates = static_cast<std::uint64_t>(updates_per_epoch) *
+        static_cast<std::uint64_t>(pending_options_.epochs);
+    if (static_cast<std::uint64_t>(pending_options_.warmup_steps) >
+        (pending_options_.max_steps > 0
+             ? std::min(total_updates,
+                        static_cast<std::uint64_t>(pending_options_.max_steps))
+             : total_updates)) {
+        throw std::invalid_argument("warmup steps exceed the training update count");
+    }
+    const auto training_request = run_directory / L"training_request.json";
+    {
+        struct TrainingRequest {
+            std::int32_t preset_version;
+            std::int32_t strength;
+            bool only_manually_selected;
+            std::int64_t parent_id;
+            std::string base_model_revision;
+            std::string trainer_commit;
+            std::string trainer_version;
+            std::string trainer_backend;
+            std::size_t record_count;
+            std::size_t skipped_record_count;
+            std::size_t sample_count;
+            std::size_t supervised_positions;
+            std::int32_t rank;
+            double alpha;
+            double dropout;
+            std::int32_t batch_size;
+            std::int32_t gradient_accumulation;
+            std::int32_t epochs;
+            std::int32_t max_steps;
+            double learning_rate;
+            double weight_decay;
+            std::int32_t warmup_steps;
+            double max_gradient_norm;
+            std::int32_t save_every;
+            std::int32_t device;
+            std::int32_t seed;
+            bool shuffle;
+            std::int32_t max_sequence_length;
+            std::string dtype;
+            std::string target_modules;
+        };
+        std::string installed_trainer_version;
+        std::string installed_trainer_backend;
+        {
+            std::lock_guard lock(status_mutex_);
+            installed_trainer_version = utf8::utf16to8(status_.trainer_version);
+            installed_trainer_backend = utf8::utf16to8(status_.trainer_backend);
+        }
+        const TrainingRequest request{
+            .preset_version = 1,
+            .strength = static_cast<std::int32_t>(pending_options_.strength),
+            .only_manually_selected = pending_options_.only_manually_selected,
+            .parent_id = previous_run ? previous_run->id : 0,
+            .base_model_revision = revision,
+            .trainer_commit = trainer_commit,
+            .trainer_version = std::move(installed_trainer_version),
+            .trainer_backend = std::move(installed_trainer_backend),
+            .record_count = dataset.written,
+            .skipped_record_count = dataset.skipped,
+            .sample_count = dataset.samples,
+            .supervised_positions = dataset.supervised_positions,
+            .rank = pending_options_.rank,
+            .alpha = pending_options_.alpha,
+            .dropout = pending_options_.dropout,
+            .batch_size = pending_options_.batch_size,
+            .gradient_accumulation = pending_options_.gradient_accumulation,
+            .epochs = pending_options_.epochs,
+            .max_steps = pending_options_.max_steps,
+            .learning_rate = pending_options_.learning_rate,
+            .weight_decay = pending_options_.weight_decay,
+            .warmup_steps = pending_options_.warmup_steps,
+            .max_gradient_norm = pending_options_.max_gradient_norm,
+            .save_every = pending_options_.save_every,
+            .device = pending_options_.device,
+            .seed = pending_options_.seed,
+            .shuffle = pending_options_.shuffle,
+            .max_sequence_length = pending_options_.max_sequence_length,
+            .dtype = utf8::utf16to8(pending_options_.dtype),
+            .target_modules = utf8::utf16to8(pending_options_.target_modules),
+        };
+        std::ofstream output(training_request, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("unable to save LoRA training parameters");
+        output << rfl::json::write(request) << '\n';
+        output.flush();
+        if (!output) throw std::runtime_error("unable to save LoRA training parameters");
+    }
 
     throw_if_cancelled(cancelling_);
     set_status(LoraOperationStage::training, 0.05,
                u"已準備 " + std::u16string(utf8::utf8to16(
-                   std::to_string(dataset.written))) + u" 筆資料，正在啟動訓練…");
+                   std::to_string(dataset.written))) + u" 筆紀錄、" +
+               std::u16string(utf8::utf8to16(std::to_string(dataset.samples))) +
+               u" 個樣本，正在啟動訓練…");
     std::vector<std::wstring> train_arguments{
         L"train",
         L"--model-config", config_path.wstring(),

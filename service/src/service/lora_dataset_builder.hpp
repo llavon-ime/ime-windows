@@ -3,14 +3,19 @@
 #include "training_data_writer.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <vector>
 
 namespace llavon::service {
 
+inline constexpr std::size_t manually_selected_record_copies = 3;
+
 struct LoraDatasetBuildResult {
     std::size_t written = 0;
     std::size_t skipped = 0;
+    std::size_t samples = 0;
+    std::size_t supervised_positions = 0;
     std::int64_t pad_token_id = 0;
     std::int64_t vocabulary_size = 0;
     std::int64_t model_max_sequence_length = 0;

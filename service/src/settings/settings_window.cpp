@@ -3,6 +3,8 @@
 #include "../resource.h"
 #include "settings_resources.h"
 #include "xaml_resource.hpp"
+#include "../service/lora_training_presets.hpp"
+#include "../service/lora_dataset_builder.hpp"
 
 #include <dwmapi.h>
 #include <shobjidl_core.h>
@@ -1075,6 +1077,10 @@ void SettingsWindow::show_lora_training_dialog() {
         StackPanel training_data_page{nullptr};
         ScrollViewer main_page{nullptr};
         bool selecting_training_data = false;
+        ComboBox training_strength{nullptr};
+        TextBlock strength_description{nullptr};
+        ToggleSwitch only_selected_sentences{nullptr};
+        StackPanel advanced_settings{nullptr};
         TextBox rank{nullptr};
         TextBox alpha{nullptr};
         TextBox dropout{nullptr};
@@ -1399,6 +1405,10 @@ void SettingsWindow::show_lora_training_dialog() {
         });
     }
 
+    state->training_strength = named<ComboBox>(dialog_root, L"TrainingStrength");
+    state->strength_description = named<TextBlock>(dialog_root, L"StrengthDescription");
+    state->only_selected_sentences = named<ToggleSwitch>(dialog_root, L"OnlySelectedSentences");
+    state->advanced_settings = named<StackPanel>(dialog_root, L"AdvancedTrainingSettings");
     state->rank = named<TextBox>(dialog_root, L"Rank");
     state->alpha = named<TextBox>(dialog_root, L"Alpha");
     state->dropout = named<TextBox>(dialog_root, L"Dropout");
@@ -1424,7 +1434,58 @@ void SettingsWindow::show_lora_training_dialog() {
     state->reload_model = named<Button>(dialog_root, L"ReloadModelButton");
     state->estimated_steps = named<TextBlock>(dialog_root, L"EstimatedSteps");
 
-    const auto refresh_estimated_steps = [state] {
+    const auto apply_training_strength = [state] {
+        const auto strength = static_cast<llavon::service::LoraTrainingStrength>(
+            state->training_strength.SelectedIndex());
+        const bool advanced = strength == llavon::service::LoraTrainingStrength::advanced;
+        state->advanced_settings.Visibility(
+            advanced ? Visibility::Visible : Visibility::Collapsed);
+        state->strength_description.Text(advanced
+            ? L"可自行調整訓練參數。"
+            : L"訓練強度越高，個人化效果與原有選字能力的變化都可能增加。");
+        if (advanced) return;
+
+        const auto preset = llavon::service::lora_training_preset(strength);
+        state->rank.Text(L"8");
+        state->alpha.Text(L"16");
+        state->dropout.Text(L"0");
+        state->batch_size.Text(L"1");
+        state->gradient_accumulation.Text(L"1");
+        state->epochs.Text(std::to_wstring(preset.epochs));
+        state->max_steps.Text(L"-1");
+        state->learning_rate.Text(std::format(L"{:.8g}", preset.learning_rate));
+        state->weight_decay.Text(L"0");
+        state->warmup_steps.Text(L"0");
+        state->max_gradient_norm.Text(L"1");
+        state->save_every.Text(L"0");
+        state->seed.Text(L"42");
+        state->max_sequence_length.Text(L"384");
+        state->target_modules.Text(L"q_proj,v_proj");
+        state->device.SelectedIndex(0);
+        state->dtype.SelectedIndex(0);
+        state->shuffle.IsOn(true);
+    };
+    state->training_strength.SelectionChanged(
+        [apply_training_strength](const auto&, const auto&) {
+            apply_training_strength();
+        });
+    apply_training_strength();
+
+    const auto eligible_training_count = [state] {
+        std::size_t records = 0;
+        std::size_t samples = 0;
+        for (std::size_t index = 0; index < state->items.size(); ++index) {
+            const auto& item = state->items[index];
+            if (state->deleted_items[index] ||
+                (state->only_selected_sentences.IsOn() && !item.revice)) continue;
+            ++records;
+            samples += item.revice
+                ? llavon::service::manually_selected_record_copies : 1;
+        }
+        return std::pair{records, samples};
+    };
+
+    const auto refresh_estimated_steps = [state, eligible_training_count] {
         const auto parse_integer = [](const TextBox& box) -> std::optional<std::int64_t> {
             try {
                 const std::wstring value = box.Text().c_str();
@@ -1447,7 +1508,8 @@ void SettingsWindow::show_lora_training_dialog() {
             return;
         }
 
-        const std::uint64_t selected = static_cast<std::uint64_t>(state->active_count);
+        const std::uint64_t selected = static_cast<std::uint64_t>(
+            eligible_training_count().second);
         const std::uint64_t batch = static_cast<std::uint64_t>(*batch_size);
         const std::uint64_t gradient = static_cast<std::uint64_t>(*accumulation);
         const std::uint64_t batches = (selected + batch - 1) / batch;
@@ -1458,19 +1520,28 @@ void SettingsWindow::show_lora_training_dialog() {
             ? std::min(epoch_steps, static_cast<std::uint64_t>(*max_steps))
             : epoch_steps;
         state->estimated_steps.Text(
-            L"預計 steps：" + std::to_wstring(estimated));
+            L"預估最多 " + std::to_wstring(estimated) + L" steps（有效資料可能較少）");
     };
 
-    const auto refresh_training_selection = [state, refresh_estimated_steps] {
-        state->training_summary.Text(training_count_label(state->active_count));
+    const auto refresh_training_selection = [state, refresh_estimated_steps,
+                                             eligible_training_count] {
+        const auto eligible = eligible_training_count().first;
+        state->training_summary.Text(state->only_selected_sentences.IsOn()
+            ? L"符合條件 " + std::to_wstring(eligible) + L" / 共 " +
+                  std::to_wstring(state->active_count) + L" 筆"
+            : training_count_label(state->active_count));
         state->training_data_button.IsEnabled(state->active_count != 0);
         state->primary_button.IsEnabled(
             state->selecting_training_data ||
             (!state->busy && state->model_available && state->trainer_available &&
-             state->active_count != 0));
+             eligible != 0));
         refresh_estimated_steps();
     };
     *refresh_training_count = refresh_training_selection;
+    state->only_selected_sentences.Toggled(
+        [refresh_training_selection](const auto&, const auto&) {
+            refresh_training_selection();
+        });
     for (const auto& field : {state->batch_size, state->gradient_accumulation,
                               state->epochs, state->max_steps}) {
         field.TextChanged([refresh_estimated_steps](const auto&, const auto&) {
@@ -1834,6 +1905,8 @@ void SettingsWindow::show_lora_training_dialog() {
                     .max_sequence_length = parse_integer(state->max_sequence_length),
                     .dtype = nullptr,
                     .target_modules = nullptr,
+                    .strength = state->training_strength.SelectedIndex(),
+                    .only_manually_selected = state->only_selected_sentences.IsOn() ? 1 : 0,
                 };
                 const std::u16string dtype = state->dtype.SelectedIndex() == 1
                     ? u"bfloat16"
@@ -1856,9 +1929,14 @@ void SettingsWindow::show_lora_training_dialog() {
 
                 std::vector<std::u16string> selected;
                 for (std::size_t index = 0; index < state->items.size(); ++index) {
-                    if (!state->deleted_items[index]) {
+                    if (!state->deleted_items[index] &&
+                        (!options.only_manually_selected || state->items[index].revice)) {
                         selected.push_back(state->items[index].event_id);
                     }
+                }
+                if (selected.empty()) {
+                    state->status.Text(L"目前沒有符合條件的訓練資料。");
+                    return;
                 }
                 show_password_dialog(false, [this, state, options, dtype, target_modules,
                                              selected, refresh_apply_state](

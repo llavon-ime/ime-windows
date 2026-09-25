@@ -1,6 +1,7 @@
 #pragma once
 
 #include "training_data_writer.hpp"
+#include "lora_training_presets.hpp"
 #include "winrt_http.hpp"
 
 #include <windows.h>
@@ -37,9 +38,9 @@ struct LoraTrainingOptions {
     double dropout = 0;
     std::int32_t batch_size = 1;
     std::int32_t gradient_accumulation = 1;
-    std::int32_t epochs = 5;
+    std::int32_t epochs = lora_training_preset(LoraTrainingStrength::low).epochs;
     std::int32_t max_steps = -1;
-    double learning_rate = 1e-4;
+    double learning_rate = lora_training_preset(LoraTrainingStrength::low).learning_rate;
     double weight_decay = 0;
     std::int32_t warmup_steps = 0;
     double max_gradient_norm = 1;
@@ -50,6 +51,8 @@ struct LoraTrainingOptions {
     std::int32_t max_sequence_length = 384;
     std::u16string dtype = u"float32";
     std::u16string target_modules = u"q_proj,v_proj";
+    LoraTrainingStrength strength = LoraTrainingStrength::low;
+    bool only_manually_selected = true;
 };
 
 struct LoraOperationStatus {

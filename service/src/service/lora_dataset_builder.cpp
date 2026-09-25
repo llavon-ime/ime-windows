@@ -4,6 +4,7 @@
 #include <rfl/json.hpp>
 #include <utf8/cpp20.h>
 
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -56,7 +57,8 @@ std::string reading_with_tone(const PaddingEntry& entry) {
 }
 
 bool build_row(const TrainingDataRecord& record, const ime::core::EncodingTables& tables,
-               std::int32_t maximum_sequence_length, std::string& output) {
+               std::int32_t maximum_sequence_length, std::string& output,
+               std::size_t& supervised_positions) {
     const auto padding = rfl::json::read<std::vector<PaddingEntry>>(record.padding_json);
     if (!padding) return false;
     const std::u32string answer = utf8::utf8to32(utf8::utf16to8(record.answer));
@@ -127,6 +129,8 @@ bool build_row(const TrainingDataRecord& record, const ime::core::EncodingTables
     };
     row.labels = row.tokens;
     row.attention_mask.assign(row.tokens.size(), 1);
+    supervised_positions = static_cast<std::size_t>(
+        std::ranges::count(row.loss_weights, 1));
     output = rfl::json::write(row) + '\n';
     return true;
 }
@@ -174,12 +178,18 @@ LoraDatasetBuildResult write_lora_numeric_dataset(
         if (!output) throw std::runtime_error("unable to create numeric training dataset");
         for (const auto& record : records) {
             std::string row;
-            if (build_row(record, tables, maximum_sequence_length, row)) {
+            std::size_t supervised_positions = 0;
+            if (build_row(record, tables, maximum_sequence_length, row,
+                          supervised_positions)) {
                 // Give explicit candidate choices three samples per epoch.
-                for (int copy = 0; copy < (record.revice ? 3 : 1); ++copy) {
+                const std::size_t copies = record.revice
+                    ? manually_selected_record_copies : 1;
+                for (std::size_t copy = 0; copy < copies; ++copy) {
                     output << row;
                 }
                 ++result.written;
+                result.samples += copies;
+                result.supervised_positions += supervised_positions * copies;
                 result.included_event_ids.push_back(record.event_id);
             } else {
                 ++result.skipped;

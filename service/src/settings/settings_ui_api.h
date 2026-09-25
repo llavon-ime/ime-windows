@@ -109,8 +109,6 @@ struct llavon_settings_lora_history_item {
     int64_t optimizer_steps;
 };
 
-// Defaults are derived from lora-trainer/docs/step-search-results.md. Keeping
-// the values in the ABI lets the service remain the authority for training.
 struct llavon_settings_lora_options {
     int32_t rank;
     double alpha;
@@ -130,6 +128,8 @@ struct llavon_settings_lora_options {
     int32_t max_sequence_length;
     const llavon_char16_t* dtype;
     const llavon_char16_t* target_modules;
+    int32_t strength;
+    int32_t only_manually_selected;
 };
 
 typedef int32_t (*llavon_settings_save_inference_callback)(

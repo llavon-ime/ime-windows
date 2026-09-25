@@ -330,6 +330,8 @@ int main(int argc, char* argv[]) {
                     .target_modules = source.target_modules
                         ? source.target_modules
                         : u"q_proj,v_proj",
+                    .strength = static_cast<llavon::service::LoraTrainingStrength>(source.strength),
+                    .only_manually_selected = source.only_manually_selected != 0,
                 };
                 return lora_training.start_training_async(
                     selected_event_ids, reviewed_event_ids, std::move(options), password);

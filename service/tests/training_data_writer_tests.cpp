@@ -436,7 +436,8 @@ int main() {
             std::istreambuf_iterator<char>(dataset_input),
             std::istreambuf_iterator<char>()};
         dataset_input.close();
-        if (dataset.written != 1 || dataset.pad_token_id != 0 ||
+        if (dataset.written != 1 || dataset.samples != 1 ||
+            dataset.supervised_positions != 1 || dataset.pad_token_id != 0 ||
             numeric_row.find(R"("candidate_masks")") == std::string::npos) {
             return 7;
         }
@@ -514,7 +515,8 @@ int main() {
             mixed_row.tokens[10] != mixed_row.tokens[4]) return 64;
         DeleteFileW(config_path.c_str());
         DeleteFileW(dataset_path.c_str());
-        if (weighted.written != 2 || weighted.skipped != 0 ||
+        if (weighted.written != 2 || weighted.samples != 4 ||
+            weighted.supervised_positions != 4 || weighted.skipped != 0 ||
             weighted.included_event_ids !=
                 std::vector<std::u16string>{u"train:1", u"selected:1"} ||
             normal_count != 1 || selected_count != 3 || selected_row.empty()) {
