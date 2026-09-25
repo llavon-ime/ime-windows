@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace llavon::service {
 namespace {
@@ -354,7 +355,7 @@ std::string sha256_file(const std::filesystem::path& path) {
         BCRYPT_HASH_HANDLE value;
         ~CloseHash() { BCryptDestroyHash(value); }
     } close_hash{hash};
-    std::array<char, 1024 * 1024> buffer{};
+    std::vector<char> buffer(1024 * 1024);
     while (input) {
         input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
         const auto count = input.gcount();
