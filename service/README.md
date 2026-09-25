@@ -92,8 +92,8 @@ including pre-existing pending literal-only rows when the service starts. The
 `training_state` column is constrained to `pending`, `excluded`, or `trained`.
 `event_id`, `event_type`, and nullable `revision_of` are also stored; the last
 column reserves space for future typo/backspace/retype correction detection.
-During dataset conversion, literal characters use the same fixed character
-tokens as inference and provide context for later positions without loss.
+During dataset conversion, ime-core supplies the same tokens and candidates as
+inference. Literal characters provide context for later positions without loss.
 Records still need at least one complete, trainable Bopomofo reading; incomplete
 `rawReading` entries remain untrainable.
 

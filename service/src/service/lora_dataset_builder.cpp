@@ -1,5 +1,6 @@
 #include "lora_dataset_builder.hpp"
 
+#include <ime-core/encoding_tables.hpp>
 #include <rfl/json.hpp>
 #include <utf8/cpp20.h>
 
@@ -7,17 +8,13 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <ranges>
 #include <stdexcept>
 #include <string>
-#include <string_view>
-#include <unordered_map>
 #include <unordered_set>
 
 namespace llavon::service {
 namespace {
-
-using TokenMap = std::unordered_map<std::string, std::int64_t>;
-using CandidateMap = std::unordered_map<std::string, std::vector<std::string>>;
 
 struct ModelConfig {
     std::int64_t vocab_size;
@@ -35,30 +32,6 @@ std::string read_file(const std::filesystem::path& path) {
     if (!input) throw std::runtime_error("unable to open JSON file");
     return std::string(std::istreambuf_iterator<char>(input),
                        std::istreambuf_iterator<char>());
-}
-
-std::int64_t required_token(const TokenMap& map, std::string_view name) {
-    const auto found = map.find(std::string(name));
-    if (found == map.end()) {
-        throw std::runtime_error("IME token table is missing a required token");
-    }
-    return found->second;
-}
-
-bool is_latin(char32_t value) {
-    return value >= U'a' && value <= U'z' || value >= U'A' && value <= U'Z' ||
-           value >= U'0' && value <= U'9' || value == U'-' || value == U'_' ||
-           value == U'+';
-}
-
-char lower_ascii(char32_t value) {
-    return static_cast<char>(value >= U'A' && value <= U'Z' ? value ^ 0x20 : value);
-}
-
-std::string code_point_utf8(char32_t value) {
-    std::string result;
-    utf8::append(value, result);
-    return result;
 }
 
 void append_integer_array(std::string& output,
@@ -81,88 +54,6 @@ void append_repeated_array(std::string& output, std::size_t count,
     output.push_back(']');
 }
 
-struct RuntimeTables {
-    TokenMap characters;
-    TokenMap latin;
-    TokenMap special;
-    TokenMap bopomofo;
-    CandidateMap candidates;
-    std::int64_t pad = 0;
-    std::int64_t bos = 0;
-    std::int64_t sep = 0;
-    std::int64_t unknown = 0;
-    std::int64_t space = 0;
-    std::int64_t latin_unknown = 0;
-};
-
-RuntimeTables load_tables(const std::filesystem::path& directory,
-                          std::int64_t vocabulary_size) {
-    const auto tokens = directory / L"tokens";
-    RuntimeTables tables{
-        .characters = rfl::json::load<TokenMap>((tokens / L"chars.json").string()).value(),
-        .latin = rfl::json::load<TokenMap>((tokens / L"latin.json").string()).value(),
-        .special = rfl::json::load<TokenMap>(
-            (tokens / L"special_tokens.json").string()).value(),
-        .bopomofo = rfl::json::load<TokenMap>((tokens / L"bpmf.json").string()).value(),
-        .candidates = rfl::json::load<CandidateMap>(
-            (directory / L"bopomofo_char.json").string()).value(),
-    };
-    tables.pad = required_token(tables.special, "<PAD>");
-    tables.bos = required_token(tables.special, "<BOS>");
-    tables.sep = required_token(tables.special, "<SEP>");
-    tables.unknown = required_token(tables.special, "<UNK>");
-    tables.space = required_token(tables.special, "<SP>");
-    tables.latin_unknown = required_token(tables.special, "<LATIN>");
-
-    for (const auto* map : {&tables.characters, &tables.latin,
-                            &tables.special, &tables.bopomofo}) {
-        for (const auto& [name, id] : *map) {
-            static_cast<void>(name);
-            if (id < 0 || id >= vocabulary_size) {
-                throw std::runtime_error("IME token ID is outside the model vocabulary");
-            }
-        }
-    }
-    return tables;
-}
-
-std::vector<std::int64_t> tokenize_context(const std::u16string& context,
-                                           const RuntimeTables& tables) {
-    const std::u32string characters = utf8::utf8to32(utf8::utf16to8(context));
-    std::vector<std::int64_t> result;
-    result.reserve(characters.size());
-    for (std::size_t index = 0; index < characters.size(); ++index) {
-        const char32_t value = characters[index];
-        if (value == U' ') {
-            result.push_back(tables.space);
-            continue;
-        }
-        const auto character = tables.characters.find(code_point_utf8(value));
-        if (character != tables.characters.end()) {
-            result.push_back(character->second);
-            continue;
-        }
-        if (is_latin(value)) {
-            std::string word;
-            while (index < characters.size() && is_latin(characters[index])) {
-                word.push_back(lower_ascii(characters[index]));
-                ++index;
-            }
-            --index;
-            const auto latin = tables.latin.find(word);
-            result.push_back(latin == tables.latin.end()
-                                 ? tables.latin_unknown
-                                 : latin->second);
-            continue;
-        }
-        result.push_back(tables.unknown);
-    }
-    const auto first_known = std::find_if(result.begin(), result.end(),
-        [&](std::int64_t token) { return token != tables.unknown; });
-    result.erase(result.begin(), first_known);
-    return result;
-}
-
 std::string reading_with_tone(const PaddingEntry& entry) {
     if (!entry.syllable || !entry.tone) return {};
     std::string result = *entry.syllable;
@@ -177,65 +68,60 @@ std::string reading_with_tone(const PaddingEntry& entry) {
     return result;
 }
 
-bool build_row(const TrainingDataRecord& record, const RuntimeTables& tables,
+bool build_row(const TrainingDataRecord& record, const ime::core::EncodingTables& tables,
                std::int32_t maximum_sequence_length, std::string& output) {
     const auto padding = rfl::json::read<std::vector<PaddingEntry>>(record.padding_json);
     if (!padding) return false;
     const std::u32string answer = utf8::utf8to32(utf8::utf16to8(record.answer));
     if (answer.empty() || answer.size() != padding->size()) return false;
 
-    std::vector<std::int64_t> tokens{tables.bos};
-    auto context_tokens = tokenize_context(record.context, tables);
-    tokens.insert(tokens.end(), context_tokens.begin(), context_tokens.end());
-    std::vector<std::string> readings;
+    std::vector<ime::core::PaddingEntry> core_padding;
+    core_padding.reserve(padding->size());
+    std::vector<std::optional<std::u16string>> readings;
     readings.reserve(padding->size());
-    for (std::size_t position = 0; position < padding->size(); ++position) {
-        const auto& entry = (*padding)[position];
+    for (const auto& [entry, character] : std::views::zip(*padding, answer)) {
         if (entry.literal && !entry.syllable && !entry.tone) {
             const auto characters = utf8::utf8to32(*entry.literal);
-            if (characters.size() != 1 || characters.front() != answer[position]) return false;
-            const auto token = tables.characters.find(*entry.literal);
-            tokens.push_back(token == tables.characters.end() ? tables.unknown : token->second);
-            readings.emplace_back();
+            if (characters.size() != 1 || characters.front() != character) return false;
+            core_padding.push_back({.chosen = true, .chosen_char = characters.front()});
+            readings.push_back(std::nullopt);
             continue;
         }
         if (entry.literal) return false;
         const std::string reading = reading_with_tone(entry);
         if (reading.empty()) return false;
-        const auto token = tables.bopomofo.find("<" + reading + ">");
-        if (token == tables.bopomofo.end()) return false;
-        tokens.push_back(token->second);
-        readings.push_back(reading);
+        const auto reading16 = utf8::utf8to16(reading);
+        core_padding.push_back({.bopomofo = reading16});
+        readings.push_back(reading16);
     }
-    tokens.push_back(tables.sep);
+    std::vector<std::int64_t> tokens;
+    try {
+        tokens = tables.tokenize(record.context, core_padding);
+    } catch (const std::logic_error&) {
+        return false;
+    }
     const std::size_t prompt_length = tokens.size();
 
     std::vector<std::optional<std::vector<std::int64_t>>> candidate_masks;
     candidate_masks.reserve(answer.size());
     std::vector<std::int64_t> loss_weights;
     loss_weights.reserve(answer.size());
-    for (std::size_t position = 0; position < answer.size(); ++position) {
-        if (readings[position].empty()) {
-            const auto token = tables.characters.find(code_point_utf8(answer[position]));
-            tokens.push_back(token == tables.characters.end() ? tables.unknown : token->second);
+    for (const auto& [reading, character] : std::views::zip(readings, answer)) {
+        if (!reading) {
+            tokens.push_back(tables.token_for_character(character));
             candidate_masks.push_back(std::nullopt);
             loss_weights.push_back(0);
             continue;
         }
-        const auto candidates = tables.candidates.find(readings[position]);
-        if (candidates == tables.candidates.end()) return false;
+        const auto candidates = tables.candidates_for_reading(*reading);
+        if (candidates.empty()) return false;
         std::vector<std::int64_t> mask;
         std::unordered_set<std::int64_t> seen;
         std::int64_t answer_token = -1;
-        for (const auto& candidate_text : candidates->second) {
-            const std::u32string candidate = utf8::utf8to32(candidate_text);
-            if (candidate.empty()) continue;
-            const auto token = tables.characters.find(code_point_utf8(candidate.front()));
-            if (token == tables.characters.end() || !seen.insert(token->second).second) {
-                continue;
-            }
-            mask.push_back(token->second);
-            if (candidate.front() == answer[position]) answer_token = token->second;
+        for (const auto& [candidate, token] : candidates) {
+            if (!seen.insert(token).second) continue;
+            mask.push_back(token);
+            if (candidate == character) answer_token = token;
         }
         if (answer_token < 0 || mask.empty()) return false;
         tokens.push_back(answer_token);
@@ -298,7 +184,10 @@ LoraDatasetBuildResult write_lora_numeric_dataset(
         maximum_sequence_length > model_maximum) {
         throw std::invalid_argument("training sequence length exceeds the model configuration");
     }
-    const RuntimeTables tables = load_tables(tables_directory, vocabulary_size);
+    const ime::core::EncodingTables tables(tables_directory);
+    if (!tables.tokens_fit_vocabulary(vocabulary_size)) {
+        throw std::runtime_error("IME token ID is outside the model vocabulary");
+    }
 
     if (!destination.parent_path().empty()) {
         std::filesystem::create_directories(destination.parent_path());
@@ -309,7 +198,7 @@ LoraDatasetBuildResult write_lora_numeric_dataset(
     std::filesystem::remove(partial, error);
 
     LoraDatasetBuildResult result{
-        .pad_token_id = tables.pad,
+        .pad_token_id = tables.pad_token_id(),
         .vocabulary_size = vocabulary_size,
         .model_max_sequence_length = model_maximum,
     };

@@ -251,6 +251,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     target_link_libraries(training-data-writer-tests PRIVATE
+        ime-core::ime-core
         utf8::cpp
         utf8cpp::utf8cpp
         reflectcpp::reflectcpp
