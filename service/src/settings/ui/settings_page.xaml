@@ -24,7 +24,6 @@
           <TextBlock x:Name="ActiveDeviceStatus" Grid.Column="0" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
           <TextBlock x:Name="ActiveBackend" Grid.Column="1" FontSize="12" Margin="16,2,0,0" />
         </Grid>
-        <TextBlock Text="下次啟動設定" FontSize="14" />
         <ComboBox x:Name="InferenceDevice" MaxWidth="540" MinHeight="32" FontSize="14" HorizontalAlignment="Stretch" />
         <Grid MaxWidth="540" HorizontalAlignment="Stretch">
           <Button x:Name="SaveInferenceButton" Style="{StaticResource AccentButtonStyle}" Content="儲存裝置設定" MinWidth="132" MinHeight="32" FontSize="14" HorizontalAlignment="Right" IsEnabled="False" />
