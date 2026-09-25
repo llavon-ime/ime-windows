@@ -10,6 +10,8 @@
 
 打包前，CMake 會從 NuGet 還原 WiX 至 `build/windows/.wix-tools`，並將 WiX UI 擴充套件安裝至建置目錄內的快取，因此不需要安裝全域的 WiX。
 
+本專案使用 WiX 7 建置安裝檔。WiX 7 要求建置者明確接受其 [EULA 與維護費條款](https://docs.firegiant.com/wix/osmf/)；確認條款後，打包時在 CMake 設定指令加入 `-DLLAVON_IME_WIX_ACCEPT_EULA=ON`。此設定會在還原 WiX 時執行 `wix eula accept wix7`。專案的 GitHub Actions 已設定接受條款。
+
 設定介面與系統匣設定選單使用原生 WinUI 3 XAML Islands。候選字視窗繼續使用作業系統提供的 UWP XAML Islands。`cmake/WinUI3.cmake` 使用 Microsoft 實驗性 Windows App SDK CMake 目標與固定版本的 NuGetCMakePackage 輔助程式；套件版本和內容雜湊記錄於 `cmake/winui3.packages.lock.json`。專案不需要手寫 Visual Studio 方案或專案檔，也不需要自行維護 PowerShell 建置指令碼。Microsoft 的套件輔助程式可能會在內部呼叫 PowerShell 轉換資訊清單。
 
 第一次執行 CMake 設定時會還原 NuGet 套件。WinUI 產生 C++ 投影程式碼時需要 WebView2 中繼資料，但這些介面只使用原生 XAML 控制項，不會建立或部署 WebView2 瀏覽器執行階段。設定介面的 DLL 會在自己的 STA 啟用內嵌資訊清單，並明確解析原生控制項的 PRI。CMake 會將可獨立部署的 Windows App SDK DLL、PRI 檔案、資產及語言資源複製並安裝在後端程式旁邊，使用者不必另外安裝 Windows App Runtime。
@@ -36,14 +38,14 @@ cmake --build --preset windows --parallel
 建置獨立 MSI：
 
 ```powershell
-cmake --preset windows
+cmake --preset windows -DLLAVON_IME_WIX_ACCEPT_EULA=ON
 cmake --build --preset package --parallel
 ```
 
 建置內含 MSI、並可下載預設模型的網路安裝程式：
 
 ```powershell
-cmake --preset windows
+cmake --preset windows -DLLAVON_IME_WIX_ACCEPT_EULA=ON
 cmake --build build/windows --config Release --target llavon-ime-setup --parallel
 ```
 
@@ -57,14 +59,14 @@ CI 會將固定的模型修訂版本、SHA-256 和檔案大小提供給安裝程
 獨立 MSI 包含應用程式與授權文件，但不含 GGUF 模型。一般安裝請使用網路安裝程式。若以受管理方式部署 MSI，必須另外提供 GGUF 模型，或在設定中指定模型路徑。
 
 ```powershell
-cmake --preset windows
+cmake --preset windows -DLLAVON_IME_WIX_ACCEPT_EULA=ON
 cmake --build --preset package
 ```
 
 標準建置預設停用 CUDA，因此不需要 CUDA Toolkit。若要讓 `ime-core` 使用 CUDA 後端，請在建置前啟用 CUDA 設定：
 
 ```powershell
-cmake --preset windows -DLLAVON_IME_ENABLE_CUDA=ON
+cmake --preset windows -DLLAVON_IME_ENABLE_CUDA=ON -DLLAVON_IME_WIX_ACCEPT_EULA=ON
 cmake --build --preset package
 ```
 
@@ -95,9 +97,9 @@ GitHub Actions 會以亞洲／台北時區的 `YYYY.MM.DD.<1000+GITHUB_RUN_NUMBE
 
 設定頁面開啟時會檢查 `latest.json`，但只有使用者點擊「立即更新」才會開始安裝。第 1 版資訊清單也記錄安裝程式資產在版本化發行版中的網址、位元組大小及 SHA-256。網址取自實際發布的資產名稱，因此更改安裝程式執行檔名稱不需要修改更新程式。設定介面的 DLL 會將安裝程式下載至使用者的 LocalAppData，驗證大小與 SHA-256，再以 `runas` 啟動 WiX Burn 安裝套件，並傳入 `-quiet -norestart`。Windows 可能顯示 UAC 提示；WiX 不會顯示安裝介面。
 
-在 MSI 開始計算檔案占用狀態前，生命週期輔助程式會停止後端，並要求 TSF 釋放輸入處理器。Burn 安裝套件會向 MSI 傳入 `MSIRESTARTMANAGERCONTROL=Disable`，避免 Restart Manager 關閉仍載入 TSF DLL 的其他應用程式。如果應用程式仍持有舊 DLL，Windows Installer 可能將檔案替換延後至下次重新啟動 Windows。MSI 停止正在執行的後端後，已下載的安裝程式仍會繼續執行。
+在 MSI 開始計算檔案占用狀態前，生命週期輔助程式會停止後端，並要求 TSF 釋放輸入處理器。MSI 和 Burn 安裝套件都設定 `MSIRESTARTMANAGERCONTROL=DisableShutdown`，讓 Restart Manager 偵測檔案占用，但不要求它關閉仍載入 TSF DLL 的其他應用程式。先前使用 `Disable` 時，Windows Installer 會改用較慢的內建 FilesInUse 掃描；一次更新的紀錄顯示 `InstallValidate` 兩次各停留約 99 秒。如果應用程式仍持有舊 DLL，Windows Installer 可能將檔案替換延後至下次重新啟動 Windows。MSI 停止正在執行的後端後，已下載的安裝程式仍會繼續執行。
 
-上述不顯示安裝提示的行為適用於設定頁面的靜默更新流程；以互動模式直接執行 MSI 或安裝程式時，仍可能出現檔案使用中的對話框。下載中斷或檔案不符時，不會啟動安裝程式。更新資訊經 HTTPS 取自專案的 GitHub Release，並信任該來源；資訊清單沒有另外簽章。
+設定頁面的靜默更新不顯示安裝介面。以互動模式直接執行 `*-setup.exe` 時，Burn 也會略過「檔案使用中」對話框；被占用的檔案可能等到重新啟動 Windows 後才替換。直接執行獨立 MSI 時仍可能看到該對話框。下載中斷或檔案不符時，不會啟動安裝程式。更新資訊經 HTTPS 取自專案的 GitHub Release，並信任該來源；資訊清單沒有另外簽章。
 
 `*-setup.exe` bundle 內含核心 MSI 與小型模型下載輔助程式。輔助程式會下載建置時指定的 GGUF，驗證大小與 SHA-256，然後儲存至 `%ProgramData%\Llavon IME\models\<revision>`。後續安裝或更新時，會驗證並重複使用現有檔案。模型位於 MSI 安裝目錄之外，因此 MSI 升級不會移除模型。
 

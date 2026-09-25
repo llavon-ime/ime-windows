@@ -84,6 +84,16 @@ if(NOT _wix_version_output VERSION_EQUAL "${LLAVON_IME_WIX_VERSION}")
     message(FATAL_ERROR "Expected WiX ${LLAVON_IME_WIX_VERSION}, got ${_wix_version_output}")
 endif()
 
+if(LLAVON_IME_WIX_ACCEPT_EULA AND LLAVON_IME_WIX_VERSION VERSION_GREATER_EQUAL "7")
+    execute_process(
+        COMMAND "${LLAVON_IME_WIX_EXE}" eula accept wix7
+        RESULT_VARIABLE _wix_eula_result
+    )
+    if(NOT _wix_eula_result EQUAL 0)
+        message(FATAL_ERROR "Failed to accept the WiX 7 EULA")
+    endif()
+endif()
+
 if(NOT EXISTS "${LLAVON_IME_WIX_MARKER}")
     execute_process(
         COMMAND
@@ -107,11 +117,11 @@ if(NOT EXISTS "${LLAVON_IME_WIX_BAL_MARKER}")
             "${CMAKE_COMMAND}" -E env
                 "WIX_EXTENSIONS=${LLAVON_IME_WIX_EXTENSIONS_DIR}"
                 "${LLAVON_IME_WIX_EXE}" extension add --global
-                "WixToolset.Bal.wixext/${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}"
+                "WixToolset.BootstrapperApplications.wixext/${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}"
         RESULT_VARIABLE _wix_extension_result
     )
     if(NOT _wix_extension_result EQUAL 0)
-        message(FATAL_ERROR "Failed to install WixToolset.Bal.wixext/${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}")
+        message(FATAL_ERROR "Failed to install WixToolset.BootstrapperApplications.wixext/${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}")
     endif()
     file(WRITE "${LLAVON_IME_WIX_BAL_MARKER}" "")
 endif()

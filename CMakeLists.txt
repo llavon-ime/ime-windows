@@ -103,9 +103,10 @@ set(LLAVON_IME_MODEL_FILENAME "llavon-ime-llama-250m-Q4_K_M.gguf")
 set(LLAVON_IME_MODEL_SHA256 "" CACHE STRING "Pinned GGUF SHA-256 for the web setup")
 set(LLAVON_IME_MODEL_SIZE "" CACHE STRING "Pinned GGUF size for the web setup")
 
-set(LLAVON_IME_WIX_VERSION "4.0.4" CACHE STRING "WiX .NET tool version used by CPack")
-set(LLAVON_IME_WIX_UI_EXTENSION_VERSION "4.0.4" CACHE STRING "WiX UI extension version used by CPack")
-set(LLAVON_IME_WIX_BAL_EXTENSION_VERSION "4.0.4" CACHE STRING "WiX bootstrapper extension version")
+set(LLAVON_IME_WIX_VERSION "7.0.0" CACHE STRING "WiX .NET tool version used by CPack")
+set(LLAVON_IME_WIX_UI_EXTENSION_VERSION "7.0.0" CACHE STRING "WiX UI extension version used by CPack")
+set(LLAVON_IME_WIX_BAL_EXTENSION_VERSION "7.0.0" CACHE STRING "WiX bootstrapper extension version")
+option(LLAVON_IME_WIX_ACCEPT_EULA "Accept the WiX 7 EULA for packaging" OFF)
 set(LLAVON_IME_WIX_TOOLS_DIR
     "${CMAKE_CURRENT_BINARY_DIR}/.wix-tools"
     CACHE PATH
@@ -121,7 +122,7 @@ set(LLAVON_IME_WIX_MARKER
     "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.UI.wixext-${LLAVON_IME_WIX_UI_EXTENSION_VERSION}.stamp"
 )
 set(LLAVON_IME_WIX_BAL_MARKER
-    "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.Bal.wixext-${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}.stamp"
+    "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.BootstrapperApplications.wixext-${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}.stamp"
 )
 
 # The service resolves the matching release from this pinned gitlink commit.
@@ -215,6 +216,7 @@ add_custom_command(
             "-DLLAVON_IME_WIX_VERSION=${LLAVON_IME_WIX_VERSION}"
             "-DLLAVON_IME_WIX_UI_EXTENSION_VERSION=${LLAVON_IME_WIX_UI_EXTENSION_VERSION}"
             "-DLLAVON_IME_WIX_BAL_EXTENSION_VERSION=${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}"
+            "-DLLAVON_IME_WIX_ACCEPT_EULA=${LLAVON_IME_WIX_ACCEPT_EULA}"
             "-DLLAVON_IME_WIX_TOOLS_DIR=${LLAVON_IME_WIX_TOOLS_DIR}"
             "-DLLAVON_IME_WIX_EXTENSIONS_DIR=${LLAVON_IME_WIX_EXTENSIONS_DIR}"
             "-DLLAVON_IME_WIX_EXE=${LLAVON_IME_WIX_EXE}"
@@ -277,7 +279,7 @@ add_custom_target(llavon-ime-setup
         "WIX_EXTENSIONS=${LLAVON_IME_WIX_EXTENSIONS_DIR}"
         "${LLAVON_IME_WIX_EXE}" build
         -arch x64
-        -ext "WixToolset.Bal.wixext/${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}"
+        -ext "WixToolset.BootstrapperApplications.wixext/${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}"
         -o "${LLAVON_IME_SETUP_PATH}"
         "${LLAVON_IME_BUNDLE_OUTPUT}"
     DEPENDS
@@ -337,6 +339,7 @@ set(CPACK_PACKAGE_INSTALL_DIRECTORY "Llavon IME")
 set(CPACK_PACKAGING_INSTALL_PREFIX "")
 set(CPACK_RESOURCE_FILE_LICENSE "${LLAVON_IME_PACKAGE_LICENSE}")
 set(CPACK_PACKAGE_FILE_NAME "llavon-ime-${LLAVON_IME_VERSION}-windows")
+# CPack uses "4" for the WiX v4+ CLI and authoring format, including WiX 7.
 set(CPACK_WIX_VERSION "4")
 set(CPACK_WIX_EXTENSIONS "WixToolset.UI.wixext")
 set(CPACK_WIX_CULTURES "zh-TW")

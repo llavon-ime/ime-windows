@@ -31,14 +31,16 @@
           DetectCondition="0"
           InstallArguments="--install-model @LLAVON_IME_MODEL_REVISION@ @LLAVON_IME_MODEL_SHA256@ @LLAVON_IME_MODEL_SIZE@" />
 
+      <!-- Keep using the installer when loaded TSF DLLs must be replaced at reboot. -->
       <MsiPackage
           Id="LlavonImeMsi"
           SourceFile="@LLAVON_IME_MSI_PATH@"
           Compressed="yes"
-          Visible="no">
-        <!-- Residual TSF DLL references must not make Restart Manager close
+          Visible="no"
+          bal:DisplayFilesInUseDialogCondition="0">
+        <!-- Detect locked TSF DLLs with Restart Manager, but do not shut down
              unrelated apps such as browsers or document editors. -->
-        <MsiProperty Name="MSIRESTARTMANAGERCONTROL" Value="Disable" />
+        <MsiProperty Name="MSIRESTARTMANAGERCONTROL" Value="DisableShutdown" />
       </MsiPackage>
 
     </Chain>

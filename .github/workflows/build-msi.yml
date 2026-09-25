@@ -116,6 +116,7 @@ jobs:
         run: >-
           cmake --preset windows
           -DVCPKG_TARGET_TRIPLET=x64-windows-cpu-dispatch
+          -DLLAVON_IME_WIX_ACCEPT_EULA=ON
           "-DLLAVON_IME_MODEL_REVISION=${{ steps.model.outputs.revision }}"
           "-DLLAVON_IME_MODEL_SHA256=${{ steps.model.outputs.sha256 }}"
           "-DLLAVON_IME_MODEL_SIZE=${{ steps.model.outputs.size }}"
