@@ -154,10 +154,11 @@ installation is:
 %ProgramFiles%\Llavon IME\tools\lora\llavon-lora.exe
 ```
 
-The training dialog checks for the LoRA Trainer release whose manifest
-`commit` matches this build's pinned `lora-trainer` submodule. It shows the
-installed version and shows CPU, CUDA, and ROCm choices. Download is enabled
-when that exact release contains the corresponding Windows asset. The automatic upstream
+The pinned LoRA Trainer submodule commit is embedded during CMake configure.
+The training dialog requests its `commit-<SHA>` manifest directly and checks
+the manifest `commit` against the pinned submodule. It shows the installed
+version and CPU, CUDA, and ROCm choices. Download is enabled when that exact
+release contains the corresponding Windows asset. The automatic upstream
 release currently contains Windows CPU; CUDA and ROCm require matching Windows
 assets in that release. An in-app install downloads the selected ZIP, verifies
 its size and SHA-256, checks the archive paths, then extracts and validates its

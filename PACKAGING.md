@@ -53,6 +53,10 @@ cmake --preset windows
 cmake --build --preset windows --parallel
 ```
 
+If `build/windows` was previously configured without an explicit Visual Studio
+platform, run `cmake --fresh --preset windows` once. The Windows App SDK CMake
+targets need `CMAKE_GENERATOR_PLATFORM=x64` to locate their import libraries.
+
 Build the standalone MSI:
 
 ```powershell
@@ -132,8 +136,10 @@ The helper downloads the GGUF pinned at build time, verifies its size and
 SHA-256, and stores it in `%ProgramData%\Llavon IME\models\<revision>`.
 It verifies and reuses an existing copy on subsequent installs or updates.
 The model is outside the MSI installation tree, so MSI upgrades do not remove
-it. The training dialog independently installs the LoRA Trainer ZIP for the
-release matching this build's pinned submodule commit; users can choose CPU,
+it. CMake embeds only the pinned LoRA Trainer submodule commit and makes no
+LoRA release API request. On demand, the training dialog fetches the manifest
+from the `commit-<SHA>` release, verifies its commit, and installs the matching
+LoRA Trainer ZIP; users can choose CPU,
 CUDA, or ROCm when the release provides the corresponding Windows asset.
 
 CI builds one CPU package using loadable ggml CPU backends. At runtime ggml

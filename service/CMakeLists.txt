@@ -120,7 +120,6 @@ set_target_properties(llavon-ime-candidate-ui PROPERTIES
 target_compile_definitions(llavon-ime-service PRIVATE
     LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
     LLAVON_LORA_SUBMODULE_COMMIT="${LLAVON_LORA_SUBMODULE_COMMIT}"
-    LLAVON_LORA_RELEASE_VERSION="${LLAVON_LORA_VERSION}"
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     UNICODE

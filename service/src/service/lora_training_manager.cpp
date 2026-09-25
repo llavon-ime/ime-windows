@@ -33,7 +33,6 @@ namespace {
 constexpr wchar_t assets_path_environment[] = L"LLAVON_IME_LORA_ASSETS_DIR";
 constexpr wchar_t trainer_path_environment[] = L"LLAVON_IME_LORA_CLI_PATH";
 constexpr char trainer_commit[] = LLAVON_LORA_SUBMODULE_COMMIT;
-constexpr char packaged_trainer_version[] = LLAVON_LORA_RELEASE_VERSION;
 constexpr wchar_t trainer_release_root[] =
     L"https://github.com/llavon-ime/lora-trainer/releases/download/";
 constexpr char model_repository[] = "tony65535/llavon-ime-llama-250m";
@@ -216,11 +215,6 @@ struct ModelRevision {
     std::string sha;
 };
 
-struct TrainerReleaseEntry {
-    std::string tag_name;
-    std::string target_commitish;
-};
-
 struct TrainerReleaseAsset {
     std::string name;
     std::string url;
@@ -252,45 +246,14 @@ std::string download_text(WinrtHttpTransfer& transfer, std::wstring url);
 TrainerReleaseManifest resolve_trainer_release(WinrtHttpTransfer& transfer) {
     if (!valid_revision(trainer_commit))
         throw std::runtime_error("LoRA submodule commit is unavailable in this build");
-    const auto load_version = [&transfer](std::string_view version)
-        -> std::optional<TrainerReleaseManifest> {
-        if (!valid_calver(version)) return std::nullopt;
-        const auto body = download_text(transfer,
-            std::wstring(trainer_release_root) + L"v" + widen(version) +
-                L"/latest.json");
-        auto manifest = rfl::json::read<TrainerReleaseManifest>(body).value();
-        if (manifest.schema != 1 || manifest.trainerApi != 1 ||
-            manifest.commit != trainer_commit || manifest.version != version)
-            return std::nullopt;
-        return manifest;
-    };
-    if (packaged_trainer_version[0]) {
-        try {
-            if (auto manifest = load_version(packaged_trainer_version))
-                return std::move(*manifest);
-        } catch (const std::exception&) {
-            // A local build can retain an older CMake cache entry. Search by
-            // gitlink commit before reporting that the release is missing.
-        }
-    }
-    for (int page = 1; page <= 10; ++page) {
-        const auto body = download_text(transfer,
-            L"https://api.github.com/repos/llavon-ime/lora-trainer/releases?per_page=100&page=" +
-                std::to_wstring(page));
-        const auto releases =
-            rfl::json::read<std::vector<TrainerReleaseEntry>>(body).value();
-        if (releases.empty()) break;
-        for (const auto& release : releases) {
-            if (release.target_commitish == trainer_commit &&
-                release.tag_name.starts_with('v') &&
-                valid_calver(std::string_view(release.tag_name).substr(1))) {
-                if (auto manifest = load_version(
-                        std::string_view(release.tag_name).substr(1)))
-                    return std::move(*manifest);
-            }
-        }
-    }
-    throw std::runtime_error("No release matches the pinned LoRA submodule commit");
+    const auto body = download_text(transfer,
+        std::wstring(trainer_release_root) + L"commit-" +
+            widen(trainer_commit) + L"/latest.json");
+    auto manifest = rfl::json::read<TrainerReleaseManifest>(body).value();
+    if (manifest.schema != 1 || manifest.trainerApi != 1 ||
+        manifest.commit != trainer_commit || !valid_calver(manifest.version))
+        throw std::runtime_error("LoRA release does not match the pinned submodule");
+    return manifest;
 }
 
 bool valid_calver(std::string_view value) {

@@ -1631,7 +1631,7 @@ void SettingsWindow::show_lora_training_dialog() {
                 L"目前 submodule 對應發行版：" +
                 wide_text(status.trainer_release_version));
         } else {
-            state->trainer_release_detail.Text(L"尚未找到目前 submodule 對應的發行版。");
+            state->trainer_release_detail.Text(L"尚未取得目前 submodule 對應的發行版資訊。");
         }
         state->trainer_progress.Visibility(trainer_busy
             ? Visibility::Visible : Visibility::Collapsed);

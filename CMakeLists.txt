@@ -124,7 +124,11 @@ set(LLAVON_IME_WIX_BAL_MARKER
     "${LLAVON_IME_WIX_EXTENSIONS_DIR}/WixToolset.Bal.wixext-${LLAVON_IME_WIX_BAL_EXTENSION_VERSION}.stamp"
 )
 
-set(LLAVON_LORA_VERSION "" CACHE STRING "LoRA Trainer CalVer matching the pinned submodule")
+# The service resolves the matching release from this pinned gitlink commit.
+# No LoRA release lookup or trainer download runs while building the IME.
+if(LLAVON_LORA_SUBMODULE_COMMIT STREQUAL "unknown")
+    message(FATAL_ERROR "Unable to identify the pinned LoRA Trainer submodule commit")
+endif()
 
 set(LLAVON_IME_SERVICE_STARTUP_LAUNCHER
     "${CMAKE_CURRENT_BINARY_DIR}/start-llavon-ime-service.vbs"

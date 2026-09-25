@@ -1,6 +1,16 @@
 include_guard(GLOBAL)
 include(FetchContent)
 
+# The experimental Windows App SDK CMake configs use this value to select
+# architecture-specific import libraries and runtime DLLs. An old CMake cache
+# without -A x64 otherwise generates broken paths that fail only at link time.
+if(CMAKE_GENERATOR MATCHES "^Visual Studio" AND
+   CMAKE_GENERATOR_PLATFORM STREQUAL "")
+    message(FATAL_ERROR
+        "Windows App SDK requires an explicit Visual Studio platform. "
+        "Run 'cmake --fresh --preset windows' before building.")
+endif()
+
 # Microsoft's experimental CMake integration, pinned to the package versions
 # used by the official Windows App SDK CMake samples (including the Base fix).
 FetchContent_Declare(NuGetCMakePackage
