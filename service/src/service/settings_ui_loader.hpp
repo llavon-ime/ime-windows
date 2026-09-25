@@ -30,11 +30,11 @@ public:
     using SaveCustomNames =
         std::function<bool(const std::vector<CustomNameSetting>&)>;
     using SaveWidthToggleSetting = std::function<bool(bool)>;
-    using LoadTrainingData = std::function<std::vector<TrainingDataItem>(std::string_view)>;
+    using LoadTrainingData = std::function<std::vector<TrainingDataItem>(
+        std::string_view, std::int64_t)>;
     using DeleteTrainingData = std::function<bool(std::u16string_view)>;
     using LoadLoraHistory = std::function<std::vector<LoraTrainingRun>()>;
     using StartLoraTraining = std::function<bool(
-        const std::vector<std::u16string>&,
         const std::vector<std::u16string>&,
         const llavon_settings_lora_options&, std::string_view)>;
     using ProtectionAction = std::function<std::size_t(int, std::string_view)>;
@@ -88,10 +88,17 @@ private:
     };
 
     struct LoraHistoryStorage {
+        std::int64_t id = 0;
+        std::int64_t parent_id = 0;
         std::u16string completed_at_utc;
+        std::u16string output_model_path;
         std::size_t record_count = 0;
         std::size_t cumulative_record_count = 0;
         std::int64_t optimizer_steps = 0;
+        std::int32_t rank = 0;
+        double alpha = 0;
+        double dropout = 0;
+        std::u16string target_modules;
     };
 
     using ConfigureFunction = std::int32_t (*)(
@@ -119,7 +126,8 @@ private:
     bool load();
     bool start();
     bool configure_module();
-    void refresh_training_items(std::string_view password = {});
+    void refresh_training_items(std::string_view password = {},
+                                std::int64_t base_run_id = 0);
     static std::int32_t save_trampoline(
         void* context, std::int32_t backend, const char16_t* device_id) noexcept;
     static std::int32_t save_custom_names_trampoline(
@@ -135,7 +143,8 @@ private:
         const llavon_settings_lora_options* options, const char16_t* password) noexcept;
     static std::int32_t refresh_training_items_trampoline(
         void* context, llavon_settings_training_item* items,
-        std::size_t item_capacity, std::size_t* item_count, const char16_t* password) noexcept;
+        std::size_t item_capacity, std::size_t* item_count, const char16_t* password,
+        std::int64_t base_run_id) noexcept;
     static std::int32_t delete_training_item_trampoline(
         void* context, const char16_t* event_id) noexcept;
     static std::int32_t protection_trampoline(void*, std::int32_t, const char16_t*, std::size_t*) noexcept;
@@ -186,7 +195,6 @@ private:
     std::u16string lora_trainer_release_version_;
     std::u16string lora_trainer_message_;
     std::vector<TrainingDataStorage> training_items_;
-    std::vector<std::u16string> reviewed_event_ids_;
     std::vector<LoraHistoryStorage> lora_history_;
     bool started_ = false;
 };

@@ -103,10 +103,17 @@ struct llavon_settings_training_item {
 };
 
 struct llavon_settings_lora_history_item {
+    int64_t id;
+    int64_t parent_id;
     const llavon_char16_t* completed_at_utc;
+    const llavon_char16_t* output_model_path;
     size_t record_count;
     size_t cumulative_record_count;
     int64_t optimizer_steps;
+    int32_t rank;
+    double alpha;
+    double dropout;
+    const llavon_char16_t* target_modules;
 };
 
 struct llavon_settings_lora_options {
@@ -130,6 +137,7 @@ struct llavon_settings_lora_options {
     const llavon_char16_t* target_modules;
     int32_t strength;
     int32_t only_manually_selected;
+    int64_t base_run_id;
 };
 
 typedef int32_t (*llavon_settings_save_inference_callback)(
@@ -147,7 +155,8 @@ typedef int32_t (*llavon_settings_start_lora_training_callback)(
     const struct llavon_settings_lora_options* options, const llavon_char16_t* password);
 typedef int32_t (*llavon_settings_refresh_training_items_callback)(
     void* context, struct llavon_settings_training_item* items,
-    size_t item_capacity, size_t* item_count, const llavon_char16_t* password);
+    size_t item_capacity, size_t* item_count, const llavon_char16_t* password,
+    int64_t base_run_id);
 typedef int32_t (*llavon_settings_delete_training_item_callback)(
     void* context, const llavon_char16_t* event_id);
 typedef int32_t (*llavon_settings_get_lora_history_callback)(
@@ -175,7 +184,7 @@ typedef int32_t (*llavon_settings_protection_callback)(
 // Supplies a snapshot of devices and the setting used for the current service
 // process. Strings and the device array are copied before this call returns.
 // This must be called before llavon_settings_ui_start.
-LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v3(
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v4(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,

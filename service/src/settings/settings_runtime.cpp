@@ -502,7 +502,7 @@ Runtime& runtime() {
 }  // namespace
 }  // namespace llavon::settings
 
-extern "C" int32_t llavon_settings_ui_configure_v3(
+extern "C" int32_t llavon_settings_ui_configure_v4(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,

@@ -239,7 +239,7 @@ bool SettingsUiLoader::load() {
     }
 
     start_ = resolve<StartFunction>(module_, "llavon_settings_ui_start");
-    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v3");
+    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v4");
     show_ = resolve<ShowFunction>(module_, "llavon_settings_ui_show");
     show_context_menu_ =
         resolve<ShowContextMenuFunction>(module_, "llavon_settings_ui_show_context_menu");
@@ -349,7 +349,6 @@ std::int32_t SettingsUiLoader::protection_trampoline(
             *result = self->protection_action_(action, secret.value);
             if (action == LLAVON_PROTECTION_RESET) {
                 self->training_items_.clear();
-                self->reviewed_event_ids_.clear();
             }
         }
         return ERROR_SUCCESS;
@@ -368,10 +367,17 @@ std::int32_t SettingsUiLoader::get_lora_history_trampoline(
         if (self->load_lora_history_) {
             for (const auto& run : self->load_lora_history_()) {
                 self->lora_history_.push_back(LoraHistoryStorage{
+                    .id = run.id,
+                    .parent_id = run.parent_id,
                     .completed_at_utc = utf8::utf8to16(run.completed_at_utc),
+                    .output_model_path = run.output_model_path.u16string(),
                     .record_count = run.record_count,
                     .cumulative_record_count = run.cumulative_record_count,
                     .optimizer_steps = run.optimizer_steps,
+                    .rank = run.rank,
+                    .alpha = run.alpha,
+                    .dropout = run.dropout,
+                    .target_modules = run.target_modules,
                 });
             }
         }
@@ -381,10 +387,17 @@ std::int32_t SettingsUiLoader::get_lora_history_trampoline(
         for (std::size_t index = 0; index < self->lora_history_.size(); ++index) {
             const auto& source = self->lora_history_[index];
             items[index] = llavon_settings_lora_history_item{
+                .id = source.id,
+                .parent_id = source.parent_id,
                 .completed_at_utc = source.completed_at_utc.c_str(),
+                .output_model_path = source.output_model_path.c_str(),
                 .record_count = source.record_count,
                 .cumulative_record_count = source.cumulative_record_count,
                 .optimizer_steps = source.optimizer_steps,
+                .rank = source.rank,
+                .alpha = source.alpha,
+                .dropout = source.dropout,
+                .target_modules = source.target_modules.c_str(),
             };
         }
         return ERROR_SUCCESS;
@@ -393,12 +406,11 @@ std::int32_t SettingsUiLoader::get_lora_history_trampoline(
     }
 }
 
-void SettingsUiLoader::refresh_training_items(std::string_view password) {
+void SettingsUiLoader::refresh_training_items(
+    std::string_view password, std::int64_t base_run_id) {
     training_items_.clear();
-    if (password.empty()) reviewed_event_ids_.clear();
     if (!load_training_data_) return;
-    for (auto& item : load_training_data_(password)) {
-        if (password.empty()) reviewed_event_ids_.push_back(item.event_id);
+    for (auto& item : load_training_data_(password, base_run_id)) {
         training_items_.push_back(TrainingDataStorage{
             .event_id = std::move(item.event_id),
             .context = std::move(item.context),
@@ -411,14 +423,15 @@ void SettingsUiLoader::refresh_training_items(std::string_view password) {
 
 std::int32_t SettingsUiLoader::refresh_training_items_trampoline(
     void* context, llavon_settings_training_item* items,
-    std::size_t item_capacity, std::size_t* item_count, const char16_t* password) noexcept {
+    std::size_t item_capacity, std::size_t* item_count, const char16_t* password,
+    std::int64_t base_run_id) noexcept {
     auto* self = static_cast<SettingsUiLoader*>(context);
     if (!self || !item_count || (item_capacity != 0 && !items)) {
         return ERROR_INVALID_PARAMETER;
     }
     try {
         TransientPassword secret(password);
-        if (!items) self->refresh_training_items(secret.value);
+        if (!items) self->refresh_training_items(secret.value, base_run_id);
         *item_count = self->training_items_.size();
         if (!items) return ERROR_SUCCESS;
         if (item_capacity < self->training_items_.size()) return ERROR_INSUFFICIENT_BUFFER;
@@ -446,10 +459,6 @@ std::int32_t SettingsUiLoader::delete_training_item_trampoline(
     }
     try {
         if (!self->delete_training_data_(event_id)) return ERROR_WRITE_FAULT;
-        const std::u16string_view deleted_id(event_id);
-        std::erase_if(self->reviewed_event_ids_, [&](const auto& id) {
-            return id == deleted_id;
-        });
         return ERROR_SUCCESS;
     } catch (...) {
         return ERROR_WRITE_FAULT;
@@ -473,7 +482,7 @@ std::int32_t SettingsUiLoader::start_lora_training_trampoline(
             selected.emplace_back(selected_event_ids[index]);
         }
         TransientPassword secret(password);
-        return self->start_lora_training_(selected, self->reviewed_event_ids_, *options, secret.value)
+        return self->start_lora_training_(selected, *options, secret.value)
             ? ERROR_SUCCESS
             : ERROR_WRITE_FAULT;
     } catch (...) {

@@ -79,6 +79,7 @@ int reset_tests(const std::filesystem::path& path, RawCommitEvent event) {
             .rank = 8,
             .alpha = 16,
             .target_modules = u"q_proj,v_proj",
+            .training_request_json = "{}",
         };
         if (!writer.complete_lora_training(run, {u"reset:1"})) return 71;
         event.sequence = 3;
@@ -127,6 +128,133 @@ int reset_tests(const std::filesystem::path& path, RawCommitEvent event) {
     }
     std::filesystem::remove(model);
     std::filesystem::remove(path);
+    return 0;
+}
+
+int branch_lineage_tests(const std::filesystem::path& path) {
+    DeleteFileW(path.c_str());
+    { TrainingDataWriter writer(path); }
+    sqlite3* database = nullptr;
+    if (sqlite3_open16(path.c_str(), &database) != SQLITE_OK) return 84;
+    const char* insert =
+        "INSERT INTO training_commits(event_id,schema_version,context,answer,"
+        "padding_json,reading,revice,committed_at_utc,training_state) VALUES "
+        "('branch:a',2,'','','','',0,'t','pending'),"
+        "('branch:b',2,'','','','',0,'t','pending'),"
+        "('branch:c',2,'','','','',0,'t','pending'),"
+        "('branch:d',2,'','','','',0,'t','pending'),"
+        "('legacy:unknown',2,'','','','',0,'t','trained')";
+    const auto inserted = sqlite3_exec(database, insert, nullptr, nullptr, nullptr);
+    sqlite3_close(database);
+    if (inserted != SQLITE_OK) return 85;
+
+    {
+        TrainingDataWriter writer(path);
+        if (writer.available_count(0) != 4 || writer.pending_count() != 4) return 86;
+        const auto make_run = [&](std::int64_t parent_id,
+                                  std::size_t record_count,
+                                  std::size_t cumulative_count) {
+            return llavon::service::LoraTrainingRun{
+                .parent_id = parent_id,
+                .base_model_revision = "test-revision",
+                .adapter_path = path.parent_path() / L"branch-adapter",
+                .output_model_path = path.parent_path() / L"branch.gguf",
+                .completed_at_utc = "2026-09-24T01:00:00Z",
+                .record_count = record_count,
+                .cumulative_record_count = cumulative_count,
+                .optimizer_steps = 1,
+                .rank = 8,
+                .alpha = 16,
+                .target_modules = u"q_proj,v_proj",
+                .training_request_json = R"({"rank":8,"epochs":1})",
+            };
+        };
+        if (!writer.complete_lora_training(make_run(0, 1, 1), {u"branch:a"})) {
+            return 87;
+        }
+        const auto a = writer.latest_lora_training_run()->id;
+        if (writer.available_count(a) != 3 ||
+            writer.pending_items({}, a).front().event_id != u"branch:b") return 88;
+        if (!writer.complete_lora_training(make_run(a, 1, 2), {u"branch:b"})) {
+            return 89;
+        }
+        const auto b = writer.latest_lora_training_run()->id;
+        if (writer.available_count(b) != 2) return 90;
+        if (!writer.complete_lora_training(make_run(a, 2, 3),
+                                           {u"branch:b", u"branch:c"})) return 91;
+        const auto c = writer.latest_lora_training_run()->id;
+        const auto b_items = writer.pending_items({}, b);
+        if (writer.available_count(0) != 4 || writer.available_count(a) != 3 ||
+            writer.available_count(b) != 2 || writer.available_count(c) != 1 ||
+            b_items.size() != 2 || b_items.front().event_id != u"branch:c" ||
+            writer.pending_count() != 1) return 92;
+        if (writer.complete_lora_training(make_run(b, 1, 3), {u"branch:a"}) ||
+            writer.complete_lora_training(make_run(9999, 1, 1), {u"branch:d"}) ||
+            writer.lora_training_history().size() != 3) return 93;
+        const auto run = writer.lora_training_run(c);
+        if (!run || run->parent_id != a ||
+            run->training_request_json != R"({"rank":8,"epochs":1})") return 94;
+    }
+    DeleteFileW(path.c_str());
+    return 0;
+}
+
+int large_commit_query_plan_tests(const std::filesystem::path& path) {
+    DeleteFileW(path.c_str());
+    { TrainingDataWriter writer(path); }
+    sqlite3* database = nullptr;
+    if (sqlite3_open16(path.c_str(), &database) != SQLITE_OK) return 95;
+    const char* populate =
+        "WITH RECURSIVE ids(value) AS (VALUES(1) UNION ALL "
+        "SELECT value+1 FROM ids WHERE value<50000) "
+        "INSERT INTO training_commits(event_id,schema_version,context,answer,"
+        "padding_json,reading,revice,committed_at_utc) "
+        "SELECT 'bulk:'||value,2,'','','','',0,'t' FROM ids";
+    if (sqlite3_exec(database, populate, nullptr, nullptr, nullptr) != SQLITE_OK) {
+        sqlite3_close(database);
+        return 96;
+    }
+    sqlite3_stmt* statement = nullptr;
+    const char* plan =
+        "EXPLAIN QUERY PLAN WITH RECURSIVE lineage(id,parent_id) AS ("
+        "SELECT id,parent_id FROM lora_training_runs WHERE id=?1 "
+        "UNION ALL SELECT parent.id,parent.parent_id FROM lora_training_runs parent "
+        "JOIN lineage child ON parent.id=child.parent_id) "
+        "SELECT id FROM training_commits WHERE training_state='pending' "
+        "AND NOT EXISTS (SELECT 1 FROM legacy_training_unknown legacy "
+        "WHERE legacy.commit_id=training_commits.id) "
+        "AND NOT EXISTS (SELECT 1 FROM lora_run_commits used "
+        "JOIN lineage ON lineage.id=used.run_id "
+        "WHERE used.commit_id=training_commits.id) AND event_id=?2";
+    if (sqlite3_prepare_v2(database, plan, -1, &statement, nullptr) != SQLITE_OK) {
+        sqlite3_close(database);
+        return 97;
+    }
+    bool indexed_point_lookup = false;
+    while (sqlite3_step(statement) == SQLITE_ROW) {
+        const auto* detail = sqlite3_column_text(statement, 3);
+        if (!detail) continue;
+        const std::string_view operation(
+            reinterpret_cast<const char*>(detail));
+        indexed_point_lookup |= operation.find("SEARCH training_commits") !=
+                std::string_view::npos &&
+            operation.find("event_id=?") != std::string_view::npos;
+    }
+    sqlite3_finalize(statement);
+    if (sqlite3_prepare_v2(database,
+            "SELECT sql FROM sqlite_schema WHERE name='lora_run_commits'",
+            -1, &statement, nullptr) != SQLITE_OK) {
+        sqlite3_close(database);
+        return 98;
+    }
+    const bool compact_relation = sqlite3_step(statement) == SQLITE_ROW &&
+        std::string_view(reinterpret_cast<const char*>(
+            sqlite3_column_text(statement, 0))).find("WITHOUT ROWID") !=
+            std::string_view::npos;
+    sqlite3_finalize(statement);
+    sqlite3_close(database);
+    DeleteFileW(path.c_str());
+    if (!indexed_point_lookup || !compact_relation) return 99;
     return 0;
 }
 
@@ -386,7 +514,8 @@ int main() {
     const char* legacy_insert =
         "INSERT INTO training_commits(event_id,context,answer,padding_json,reading,"
         "revice,committed_at_utc) VALUES "
-        "('legacy:1','','ㄅ','[{\"literal\":\"ㄅ\"}]','ㄅ',0,'t')";
+        "('legacy:1','','ㄅ','[{\"literal\":\"ㄅ\"}]','ㄅ',0,'t');"
+        "PRAGMA user_version=2";
     const int legacy_result = sqlite3_exec(
         legacy_database, legacy_insert, nullptr, nullptr, nullptr);
     sqlite3_close(legacy_database);
@@ -529,27 +658,43 @@ int main() {
         const auto remaining = writer.pending_items();
         if (remaining.size() != 2 || remaining[0].event_id != u"session:7" ||
             remaining[1].event_id != u"late:1") return 9;
-        if (!writer.mark_trained({u"session:7"}) ||
-            writer.pending_items().size() != 1) return 10;
+        const llavon::service::LoraTrainingRun first_run{
+            .base_model_revision = "0123456789012345678901234567890123456789",
+            .adapter_path = path.parent_path() / L"first-adapter",
+            .output_model_path = path.parent_path() / L"first-personalized.gguf",
+            .completed_at_utc = "2026-09-24T01:01:03.004Z",
+            .record_count = 1,
+            .cumulative_record_count = 1,
+            .optimizer_steps = 3,
+            .rank = 8,
+            .alpha = 16,
+            .target_modules = u"q_proj,v_proj",
+            .training_request_json = "{}",
+        };
+        if (!writer.complete_lora_training(first_run, {u"session:7"})) return 10;
+        const auto first_id = writer.latest_lora_training_run()->id;
+        if (writer.pending_items({}, first_id).size() != 1) return 10;
         if (writer.pending_count() != 1 ||
             changed_counts != std::vector<std::size_t>{4, 2, 1}) return 17;
         const llavon::service::LoraTrainingRun run{
+            .parent_id = first_id,
             .base_model_revision = "0123456789012345678901234567890123456789",
             .adapter_path = path.parent_path() / L"adapter",
             .output_model_path = path.parent_path() / L"personalized.gguf",
             .completed_at_utc = "2026-09-24T01:02:03.004Z",
             .record_count = 1,
-            .cumulative_record_count = 1,
+            .cumulative_record_count = 2,
             .optimizer_steps = 5,
             .rank = 8,
             .alpha = 16,
             .target_modules = u"q_proj,v_proj",
+            .training_request_json = "{}",
         };
         if (!writer.complete_lora_training(run, {u"late:1"})) return 20;
         const auto history = writer.lora_training_history();
         const auto latest = writer.latest_lora_training_run();
-        if (history.size() != 1 || !latest || latest->id != history[0].id ||
-            latest->record_count != 1 || latest->cumulative_record_count != 1 ||
+        if (history.size() != 2 || !latest || latest->id != history[1].id ||
+            latest->record_count != 1 || latest->cumulative_record_count != 2 ||
             latest->optimizer_steps != 5 || latest->rank != 8 ||
             latest->target_modules != u"q_proj,v_proj") return 21;
         if (writer.pending_count() != 0 ||
@@ -574,7 +719,8 @@ int main() {
             sqlite3_column_text(statement, 0));
         const int count = sqlite3_column_int(statement, 1);
         saw_excluded = saw_excluded || (state == "excluded" && count == 2);
-        saw_trained = saw_trained || (state == "trained" && count == 2);
+        saw_trained = saw_trained || (state == "trained");
+        saw_pending = saw_pending || (state == "pending" && count == 2);
     }
     sqlite3_finalize(statement);
     sqlite3_close(database);
@@ -585,7 +731,7 @@ int main() {
     auto shm_path = path;
     shm_path += L"-shm";
     DeleteFileW(shm_path.c_str());
-    if (!saw_excluded || !saw_trained || saw_pending) return 13;
+    if (!saw_excluded || saw_trained || !saw_pending) return 13;
 
     auto malformed_path = path;
     malformed_path += L".malformed.sqlite3";
@@ -621,6 +767,14 @@ int main() {
     reset_path += L".reset.sqlite3";
     auto delete_path = path;
     delete_path += L".delete.sqlite3";
+    auto branch_path = path;
+    branch_path += L".branch.sqlite3";
+    if (const int result = branch_lineage_tests(branch_path); result != 0) return result;
+    auto plan_path = path;
+    plan_path += L".query-plan.sqlite3";
+    if (const int result = large_commit_query_plan_tests(plan_path); result != 0) {
+        return result;
+    }
     if (const int result = delete_pending_tests(delete_path, event); result != 0) return result;
     if (const int result = reset_tests(reset_path, event); result != 0) return result;
     auto correction_path = path;

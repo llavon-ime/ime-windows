@@ -13,9 +13,11 @@
 #include <winrt/base.h>
 
 #include <memory>
+#include <atomic>
 #include <optional>
 #include <functional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -56,7 +58,8 @@ private:
     void save_custom_names();
     void update_custom_names_save_state();
     void show_lora_training_dialog();
-    bool load_training_items(const char16_t* password = nullptr);
+    bool load_training_items(const char16_t* password = nullptr,
+                             std::int64_t base_run_id = 0);
     void refresh_protection_controls();
     void show_password_dialog(bool setup, std::function<bool(const char16_t*)> action,
                               bool clean_datasets = false);
@@ -90,6 +93,10 @@ private:
     winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Grid shell_{nullptr};
     bool lora_dialog_open_ = false;
+    bool restoring_lora_model_ = false;
+    std::jthread lora_restore_worker_;
+    std::shared_ptr<std::atomic_bool> restore_ui_alive_ =
+        std::make_shared<std::atomic_bool>(true);
     winrt::Microsoft::UI::Xaml::DispatcherTimer lora_dialog_timer_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock lora_note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBox model_path_{nullptr};

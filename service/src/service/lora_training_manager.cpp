@@ -429,11 +429,74 @@ void LoraTrainingManager::on_model_applied(
     prune_obsolete_gguf_models(model_path);
 }
 
+bool LoraTrainingManager::ensure_model_exported(
+    const std::filesystem::path& model_path) {
+    if (std::filesystem::is_regular_file(model_path)) return true;
+    std::lock_guard operation_lock(operation_mutex_);
+    if (busy_.load(std::memory_order_acquire)) return false;
+    const auto history = training_data_->lora_training_history();
+    const auto selected = std::find_if(history.begin(), history.end(),
+        [&](const LoraTrainingRun& run) {
+            return run.output_model_path.lexically_normal() == model_path.lexically_normal();
+        });
+    if (selected == history.end()) return false;
+    std::error_code error;
+    const auto runs_root = std::filesystem::absolute(
+        assets_root_ / L"runs", error).lexically_normal();
+    if (error) return false;
+    const auto output = std::filesystem::absolute(
+        selected->output_model_path, error).lexically_normal();
+    if (error || output.filename() != L"personalized-Q4_K_M.gguf" ||
+        output.parent_path().parent_path() != runs_root ||
+        selected->adapter_path.lexically_normal() !=
+            selected->output_model_path.parent_path() / L"adapter") {
+        return false;
+    }
+    const auto model_directory = assets_root_ / model_repository_directory /
+        widen(selected->base_model_revision);
+    const auto config_path = model_directory / L"config.json";
+    const auto vocabulary_path = model_directory / L"ime_vocab.json";
+    if (!std::filesystem::is_regular_file(config_path) ||
+        !std::filesystem::is_regular_file(vocabulary_path) ||
+        !std::filesystem::is_regular_file(
+            selected->adapter_path / L"adapter_model.safetensors")) {
+        return false;
+    }
+    const auto trainer = trainer_executable();
+    if (!std::filesystem::is_regular_file(trainer)) return false;
+    const auto f16_path = selected->output_model_path.parent_path() /
+        L"restored-personalized-f16.gguf";
+    auto temporary = selected->output_model_path;
+    temporary += L".restoring";
+    std::filesystem::remove(temporary, error);
+    cancelling_.store(false, std::memory_order_release);
+    try {
+        run_process(trainer, {
+            L"export-gguf", L"--model-config", config_path.wstring(),
+            L"--model", model_directory.wstring(), L"--vocab-file",
+            vocabulary_path.wstring(), L"--adapter",
+            selected->adapter_path.wstring(), L"--outfile", f16_path.wstring(),
+            L"--outtype", L"f16", L"--quantize", L"Q4_K_M",
+            L"--quantized-outfile", temporary.wstring(), L"--force",
+        }, false);
+        if (!std::filesystem::is_regular_file(temporary)) {
+            throw std::runtime_error("trainer completed without restoring a GGUF model");
+        }
+        std::filesystem::rename(temporary, selected->output_model_path);
+        std::filesystem::remove(f16_path, error);
+        return true;
+    } catch (...) {
+        std::filesystem::remove(temporary, error);
+        std::filesystem::remove(f16_path, error);
+        throw;
+    }
+}
+
 void LoraTrainingManager::prune_obsolete_gguf_models(
     const std::filesystem::path& applied_model_path) const noexcept {
     try {
         const auto history = training_data_->lora_training_history();
-        if (history.size() < 2) return;
+        if (history.empty()) return;
 
         std::error_code error;
         const auto normalize = [&](const std::filesystem::path& path) {
@@ -441,16 +504,14 @@ void LoraTrainingManager::prune_obsolete_gguf_models(
         };
         const auto runs_root = normalize(assets_root_ / L"runs");
         if (error) return;
-        const auto latest = normalize(history.back().output_model_path);
-        if (error || !std::filesystem::is_regular_file(latest, error)) return;
         if (applied_model_path.empty()) return;
         const auto active = normalize(applied_model_path);
-        if (error || active != latest) return;
+        if (error || !std::filesystem::is_regular_file(active, error)) return;
 
         for (const auto& run : history) {
             const auto candidate = normalize(run.output_model_path);
             if (error) break;
-            if (candidate == latest ||
+            if (candidate == active ||
                 candidate.filename() != L"personalized-Q4_K_M.gguf" ||
                 candidate.parent_path().parent_path() != runs_root) {
                 continue;
@@ -546,21 +607,23 @@ void LoraTrainingManager::refresh_installed_trainer() {
 
 bool LoraTrainingManager::start_training_async(
     std::vector<std::u16string> event_ids,
-    const std::vector<std::u16string>& reviewed_event_ids,
     LoraTrainingOptions options, std::string_view password) {
     if (options.strength < LoraTrainingStrength::ultra_low ||
         options.strength > LoraTrainingStrength::advanced) return false;
     if (options.strength != LoraTrainingStrength::advanced) {
         const auto strength = options.strength;
         const bool only_selected = options.only_manually_selected;
+        const auto base_run_id = options.base_run_id;
         options = LoraTrainingOptions{};
+        options.base_run_id = base_run_id;
         const auto preset = lora_training_preset(strength);
         options.strength = strength;
         options.learning_rate = preset.learning_rate;
         options.epochs = preset.epochs;
         options.only_manually_selected = only_selected;
     }
-    if (options.rank <= 0 || !std::isfinite(options.alpha) || options.alpha <= 0 ||
+    if (options.base_run_id < 0 || options.rank <= 0 ||
+        !std::isfinite(options.alpha) || options.alpha <= 0 ||
         !std::isfinite(options.dropout) || options.dropout < 0 ||
         options.dropout >= 1 || options.batch_size <= 0 ||
         options.gradient_accumulation <= 0 || options.epochs <= 0 ||
@@ -578,7 +641,9 @@ bool LoraTrainingManager::start_training_async(
         std::lock_guard operation_lock(operation_mutex_);
         if (busy_.load(std::memory_order_acquire)) return false;
         if (worker_.joinable()) worker_.join();
-        if (const auto previous = training_data_->latest_lora_training_run()) {
+        const auto previous = training_data_->lora_training_run(options.base_run_id);
+        if (options.base_run_id != 0 && !previous) return false;
+        if (previous) {
             if (options.strength != LoraTrainingStrength::advanced) {
                 options.rank = previous->rank;
                 options.alpha = previous->alpha;
@@ -591,7 +656,8 @@ bool LoraTrainingManager::start_training_async(
                 return false;
             }
         }
-        auto records = training_data_->pending_records(event_ids, password);
+        auto records = training_data_->pending_records(
+            event_ids, password, options.base_run_id);
         if (records.empty() || records.size() != event_ids.size()) return false;
         if (options.only_manually_selected) {
             std::erase_if(records, [](const TrainingDataRecord& record) {
@@ -601,11 +667,10 @@ bool LoraTrainingManager::start_training_async(
             event_ids.clear();
             event_ids.reserve(records.size());
             for (const auto& record : records) event_ids.push_back(record.event_id);
-        } else if (!training_data_->exclude_unselected(event_ids, reviewed_event_ids)) {
-            return false;
         }
         pending_records_ = std::move(records);
         pending_event_ids_ = std::move(event_ids);
+        pending_base_run_ = previous;
         pending_options_ = std::move(options);
         cancelling_.store(false, std::memory_order_release);
         http_transfer_.reset();
@@ -620,10 +685,12 @@ bool LoraTrainingManager::start_training_async(
                     set_failed_unknown();
                 }
                 pending_records_.clear();
+                pending_base_run_.reset();
                 busy_.store(false, std::memory_order_release);
             });
         } catch (...) {
             pending_records_.clear();
+            pending_base_run_.reset();
             busy_.store(false, std::memory_order_release);
             throw;
         }
@@ -1147,7 +1214,7 @@ void LoraTrainingManager::training_worker() {
     if (!installed_model_is_complete(&revision)) {
         throw std::runtime_error("base training model has not been downloaded");
     }
-    const auto previous_run = training_data_->latest_lora_training_run();
+    const auto& previous_run = pending_base_run_;
     if (previous_run) {
         if (previous_run->rank != pending_options_.rank ||
             previous_run->alpha != pending_options_.alpha ||
@@ -1214,6 +1281,7 @@ void LoraTrainingManager::training_worker() {
         throw std::invalid_argument("warmup steps exceed the training update count");
     }
     const auto training_request = run_directory / L"training_request.json";
+    std::string training_request_json;
     {
         struct TrainingRequest {
             std::int32_t preset_version;
@@ -1228,6 +1296,7 @@ void LoraTrainingManager::training_worker() {
             std::size_t skipped_record_count;
             std::size_t sample_count;
             std::size_t supervised_positions;
+            std::int64_t pad_token_id;
             std::int32_t rank;
             double alpha;
             double dropout;
@@ -1267,6 +1336,7 @@ void LoraTrainingManager::training_worker() {
             .skipped_record_count = dataset.skipped,
             .sample_count = dataset.samples,
             .supervised_positions = dataset.supervised_positions,
+            .pad_token_id = dataset.pad_token_id,
             .rank = pending_options_.rank,
             .alpha = pending_options_.alpha,
             .dropout = pending_options_.dropout,
@@ -1286,9 +1356,10 @@ void LoraTrainingManager::training_worker() {
             .dtype = utf8::utf16to8(pending_options_.dtype),
             .target_modules = utf8::utf16to8(pending_options_.target_modules),
         };
+        training_request_json = rfl::json::write(request);
         std::ofstream output(training_request, std::ios::binary | std::ios::trunc);
         if (!output) throw std::runtime_error("unable to save LoRA training parameters");
-        output << rfl::json::write(request) << '\n';
+        output << training_request_json << '\n';
         output.flush();
         if (!output) throw std::runtime_error("unable to save LoRA training parameters");
     }
@@ -1369,6 +1440,7 @@ void LoraTrainingManager::training_worker() {
         .alpha = pending_options_.alpha,
         .dropout = pending_options_.dropout,
         .target_modules = pending_options_.target_modules,
+        .training_request_json = std::move(training_request_json),
     };
     if (!training_data_->complete_lora_training(
             completed_run, dataset.included_event_ids)) {

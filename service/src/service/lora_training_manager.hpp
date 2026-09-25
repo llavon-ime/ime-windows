@@ -33,6 +33,7 @@ enum class LoraOperationStage : std::int32_t {
 };
 
 struct LoraTrainingOptions {
+    std::int64_t base_run_id = 0;
     std::int32_t rank = 8;
     double alpha = 16;
     double dropout = 0;
@@ -87,9 +88,9 @@ public:
     bool check_trainer_async();
     bool install_trainer_async(std::int32_t backend);
     bool start_training_async(std::vector<std::u16string> event_ids,
-                              const std::vector<std::u16string>& reviewed_event_ids,
                               LoraTrainingOptions options, std::string_view password);
     void on_model_applied(const std::filesystem::path& model_path) const noexcept;
+    bool ensure_model_exported(const std::filesystem::path& model_path);
     std::size_t discard_plaintext_datasets();
     void reset_conversation_data();
     void cancel() noexcept;
@@ -134,6 +135,7 @@ private:
     std::vector<std::u16string> pending_event_ids_;
     std::vector<TrainingDataRecord> pending_records_;
     LoraTrainingOptions pending_options_;
+    std::optional<LoraTrainingRun> pending_base_run_;
     std::int32_t pending_trainer_backend_ = 0;
 };
 

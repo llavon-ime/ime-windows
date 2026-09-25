@@ -73,6 +73,8 @@
         </StackPanel>
         <Button x:Name="TrainingDataButton" Grid.Column="1" Content="檢視訓練資料" MinHeight="32" VerticalAlignment="Center"/>
       </Grid>
+      <ComboBox x:Name="TrainingBase" Header="訓練基底" MinHeight="32"
+                HorizontalAlignment="Stretch"/>
       <TextBlock x:Name="EmptyTrainingItems" Text="目前沒有尚未訓練的資料。請先使用輸入法提交一些文字。"
                  FontSize="14" TextWrapping="Wrap" Visibility="Collapsed"/>
       <TextBlock Text="訓練設定" FontSize="14" FontWeight="SemiBold"/>

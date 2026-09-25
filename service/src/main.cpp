@@ -265,7 +265,8 @@ int main(int argc, char* argv[]) {
                     const auto resolved_model_path =
                         resolve_configured_model_path(model_path);
                     std::error_code error;
-                    if (!std::filesystem::is_regular_file(resolved_model_path, error)) {
+                    if (!std::filesystem::is_regular_file(resolved_model_path, error) &&
+                        !lora_training.ensure_model_exported(resolved_model_path)) {
                         return false;
                     }
 
@@ -297,8 +298,8 @@ int main(int argc, char* argv[]) {
             [](bool enabled) {
                 return llavon::service::save_shift_space_width_toggle_setting(enabled);
             },
-            [&server](std::string_view password) {
-                return server.training_data_writer()->pending_items(password);
+            [&server](std::string_view password, std::int64_t base_run_id) {
+                return server.training_data_writer()->pending_items(password, base_run_id);
             },
             [&server](std::u16string_view event_id) {
                 return server.training_data_writer()->delete_pending(event_id);
@@ -307,9 +308,9 @@ int main(int argc, char* argv[]) {
                 return server.training_data_writer()->lora_training_history();
             },
             [&lora_training](const std::vector<std::u16string>& selected_event_ids,
-                             const std::vector<std::u16string>& reviewed_event_ids,
                              const llavon_settings_lora_options& source, std::string_view password) {
                 llavon::service::LoraTrainingOptions options{
+                    .base_run_id = source.base_run_id,
                     .rank = source.rank,
                     .alpha = source.alpha,
                     .dropout = source.dropout,
@@ -334,7 +335,7 @@ int main(int argc, char* argv[]) {
                     .only_manually_selected = source.only_manually_selected != 0,
                 };
                 return lora_training.start_training_async(
-                    selected_event_ids, reviewed_event_ids, std::move(options), password);
+                    selected_event_ids, std::move(options), password);
             },
             [&lora_training] { return lora_training.status(); },
             [&lora_training](std::int32_t action) {

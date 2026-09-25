@@ -631,11 +631,6 @@ public:
             selected_event_ids, reviewed_event_ids);
     }
 
-    bool mark_training_data_trained(
-        const std::vector<std::u16string>& trained_event_ids) noexcept {
-        return training_data_->mark_trained(trained_event_ids);
-    }
-
     std::shared_ptr<TrainingDataWriter> training_data_writer() const noexcept {
         return training_data_;
     }

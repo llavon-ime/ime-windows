@@ -9,6 +9,7 @@
 #include <dwmapi.h>
 #include <shobjidl_core.h>
 #include <winrt/Microsoft.UI.Interop.h>
+#include <winrt/Microsoft.UI.Dispatching.h>
 #include <rfl/json.hpp>
 #include <utf8/cpp20.h>
 
@@ -448,6 +449,7 @@ bool SettingsWindow::create(HINSTANCE instance) {
     if (window_) {
         return true;
     }
+    restore_ui_alive_ = std::make_shared<std::atomic_bool>(true);
 
     WNDCLASSEXW window_class{sizeof(window_class)};
     window_class.style = CS_HREDRAW | CS_VREDRAW;
@@ -519,6 +521,8 @@ void SettingsWindow::hide() const noexcept {
 }
 
 void SettingsWindow::destroy() noexcept {
+    restore_ui_alive_->store(false, std::memory_order_release);
+    if (lora_restore_worker_.joinable()) lora_restore_worker_.join();
     deactivate_update_target();
     discard_pending_update_results();
     hide();
@@ -1030,15 +1034,16 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
     (void)dialog.ShowAsync();
 }
 
-bool SettingsWindow::load_training_items(const char16_t* password) {
+bool SettingsWindow::load_training_items(
+    const char16_t* password, std::int64_t base_run_id) {
     configuration_.training_items.clear();
     const auto callback = configuration_.refresh_training_items_callback;
     std::size_t count = 0;
     if (!callback || callback(configuration_.refresh_training_items_context,
-            nullptr, 0, &count, password) != ERROR_SUCCESS) return false;
+            nullptr, 0, &count, password, base_run_id) != ERROR_SUCCESS) return false;
     std::vector<llavon_settings_training_item> items(count);
     if (count != 0 && callback(configuration_.refresh_training_items_context,
-            items.data(), items.size(), &count, password) != ERROR_SUCCESS) return false;
+            items.data(), items.size(), &count, password, base_run_id) != ERROR_SUCCESS) return false;
     for (std::size_t index = 0; index < count; ++index) {
         const auto& item = items[index];
         configuration_.training_items.push_back(TrainingDataOption{
@@ -1053,8 +1058,21 @@ bool SettingsWindow::load_training_items(const char16_t* password) {
 
 void SettingsWindow::show_lora_training_dialog() {
     if (lora_dialog_open_) return;
-
-    if (!load_training_items()) throw std::runtime_error("unable to load training metadata");
+    std::size_t history_count = 0;
+    const auto history_callback = configuration_.get_lora_history_callback;
+    if (!history_callback || history_callback(configuration_.get_lora_history_context,
+            nullptr, 0, &history_count) != ERROR_SUCCESS) {
+        throw std::runtime_error("unable to load LoRA training history");
+    }
+    std::vector<llavon_settings_lora_history_item> history(history_count);
+    if (history_count != 0 && history_callback(configuration_.get_lora_history_context,
+            history.data(), history.size(), &history_count) != ERROR_SUCCESS) {
+        throw std::runtime_error("unable to load LoRA training history");
+    }
+    const std::int64_t initial_base_id = history.empty() ? 0 : history.back().id;
+    if (!load_training_items(nullptr, initial_base_id)) {
+        throw std::runtime_error("unable to load training metadata");
+    }
 
     struct DialogState {
         Grid overlay{nullptr};
@@ -1074,6 +1092,15 @@ void SettingsWindow::show_lora_training_dialog() {
         Button next_page{nullptr};
         Button training_data_button{nullptr};
         Button training_history_button{nullptr};
+        ComboBox training_base{nullptr};
+        std::vector<std::int64_t> base_run_ids;
+        struct BaseParameters {
+            std::int32_t rank = 0;
+            double alpha = 0;
+            double dropout = 0;
+            std::u16string target_modules;
+        };
+        std::vector<BaseParameters> base_parameters;
         StackPanel training_data_page{nullptr};
         ScrollViewer main_page{nullptr};
         bool selecting_training_data = false;
@@ -1133,7 +1160,7 @@ void SettingsWindow::show_lora_training_dialog() {
     };
 
     auto state = std::make_shared<DialogState>();
-    state->items = configuration_.training_items;
+    state->items = std::move(configuration_.training_items);
     state->deleted_items.assign(state->items.size(), false);
     state->active_count = state->items.size();
     state->overlay = load_xaml_resource(IDR_LORA_DIALOG_XAML).as<Grid>();
@@ -1163,6 +1190,30 @@ void SettingsWindow::show_lora_training_dialog() {
     state->training_summary = named<TextBlock>(dialog_root, L"TrainingSummary");
     state->training_data_button = named<Button>(dialog_root, L"TrainingDataButton");
     state->training_history_button = named<Button>(dialog_root, L"TrainingHistoryButton");
+    state->training_base = named<ComboBox>(dialog_root, L"TrainingBase");
+    state->base_run_ids.push_back(0);
+    state->base_parameters.emplace_back();
+    {
+        ComboBoxItem base;
+        base.Content(winrt::box_value(L"Base model"));
+        state->training_base.Items().Append(base);
+    }
+    for (const auto& run : history) {
+        state->base_run_ids.push_back(run.id);
+        state->base_parameters.push_back(DialogState::BaseParameters{
+            .rank = run.rank,
+            .alpha = run.alpha,
+            .dropout = run.dropout,
+            .target_modules = run.target_modules ? run.target_modules : u"",
+        });
+        ComboBoxItem choice;
+        const auto stamp = run.completed_at_utc
+            ? utc8_timestamp(run.completed_at_utc) : std::wstring{};
+        choice.Content(winrt::box_value(std::format(L"#{}  {}", run.id, stamp)));
+        state->training_base.Items().Append(choice);
+    }
+    state->training_base.SelectedIndex(
+        static_cast<std::int32_t>(state->base_run_ids.size() - 1));
 
     state->training_history_button.Click([this, state](const auto&, const auto&) {
         std::size_t count = 0;
@@ -1187,12 +1238,10 @@ void SettingsWindow::show_lora_training_dialog() {
         const bool dark = system_uses_dark_theme();
         const auto accent = dark ? solid_brush(96, 205, 255)
                                  : solid_brush(0, 120, 212);
-        const auto muted = dark ? solid_brush(96, 96, 96)
-                                : solid_brush(190, 190, 190);
-
         const auto append_timeline_item = [&](const std::wstring& title,
                                                const std::wstring& detail,
-                                               bool last) {
+                                               bool last,
+                                               std::u16string model_path = {}) {
             Grid row;
             row.ColumnDefinitions().Append(ColumnDefinition{});
             row.ColumnDefinitions().GetAt(0).Width(GridLength{24, GridUnitType::Pixel});
@@ -1207,13 +1256,6 @@ void SettingsWindow::show_lora_training_dialog() {
             node.CornerRadius(CornerRadius{6, 6, 6, 6});
             node.Background(accent);
             rail.Children().Append(node);
-            if (!last) {
-                Border line;
-                line.Width(2);
-                line.Height(detail.empty() ? 31 : 47);
-                line.Background(muted);
-                rail.Children().Append(line);
-            }
             Grid::SetColumn(rail, 0);
             row.Children().Append(rail);
 
@@ -1224,6 +1266,65 @@ void SettingsWindow::show_lora_training_dialog() {
             if (!detail.empty()) {
                 labels.Children().Append(make_text(
                     detail.c_str(), caption_text_size));
+            }
+            if (!model_path.empty()) {
+                Button apply;
+                apply.Content(winrt::box_value(L"套用此版本"));
+                apply.Margin(Thickness{0, 4, 0, 0});
+                apply.HorizontalAlignment(HorizontalAlignment::Left);
+                apply.Click([this, state, model_path = std::move(model_path)](
+                    const auto&, const auto&) {
+                    if (state->busy || restoring_lora_model_) return;
+                    const auto callback = configuration_.save_model_path_callback;
+                    if (!callback) {
+                        state->status.Text(L"無法重建或套用這個歷史模型。");
+                        return;
+                    }
+                    if (lora_restore_worker_.joinable()) lora_restore_worker_.join();
+                    restoring_lora_model_ = true;
+                    state->primary_button.IsEnabled(false);
+                    state->secondary_button.IsEnabled(false);
+                    state->status.Text(L"正在重建並套用歷史模型…");
+                    const auto context = configuration_.save_model_path_context;
+                    const auto dispatcher = state->overlay.DispatcherQueue();
+                    const auto alive = restore_ui_alive_;
+                    try {
+                        lora_restore_worker_ = std::jthread(
+                            [this, state, model_path, callback, context,
+                             dispatcher, alive] {
+                            const auto result = callback(context, model_path.c_str());
+                            try {
+                                dispatcher.TryEnqueue([this, state, model_path, result, alive] {
+                                    if (!alive->load(std::memory_order_acquire)) return;
+                                    restoring_lora_model_ = false;
+                                    if (state->closed) return;
+                                    state->secondary_button.IsEnabled(true);
+                                    if (result != ERROR_SUCCESS) {
+                                        state->status.Text(L"無法重建或套用這個歷史模型。");
+                                        return;
+                                    }
+                                    try {
+                                        configuration_.model_path = model_path;
+                                        model_path_.Text(to_hstring(model_path));
+                                        update_model_path_save_state();
+                                        state->training_observed = false;
+                                        state->output_model_path.clear();
+                                        state->model_applied = true;
+                                        state->status.Text(L"歷史模型已套用。");
+                                    } catch (...) {
+                                        state->status.Text(L"模型已套用，但畫面更新失敗。");
+                                    }
+                                });
+                            } catch (...) {
+                            }
+                        });
+                    } catch (...) {
+                        restoring_lora_model_ = false;
+                        state->secondary_button.IsEnabled(true);
+                        state->status.Text(L"無法啟動歷史模型重建。");
+                    }
+                });
+                labels.Children().Append(apply);
             }
             Grid::SetColumn(labels, 1);
             row.Children().Append(labels);
@@ -1241,10 +1342,13 @@ void SettingsWindow::show_lora_training_dialog() {
                     ? utc8_timestamp(item.completed_at_utc)
                     : std::wstring{};
                 const std::wstring detail = std::format(
-                    L"新增 {} 筆　累計 {} 筆　{} steps",
+                    L"基底 {}　新增 {} 筆　累計 {} 筆　{} steps",
+                    item.parent_id == 0 ? L"Base" :
+                        std::format(L"#{}", item.parent_id),
                     item.record_count, item.cumulative_record_count,
                     item.optimizer_steps);
-                append_timeline_item(title, detail, index + 1 == count);
+                append_timeline_item(title, detail, index + 1 == count,
+                    item.output_model_path ? item.output_model_path : u"");
             }
         }
         content.Children().Append(timeline);
@@ -1380,16 +1484,21 @@ void SettingsWindow::show_lora_training_dialog() {
         (*render_page)();
         state->training_data_button.Click([this, state, render_page](const auto&, const auto&) {
             show_password_dialog(false, [this, state, render_page](const char16_t* password) {
-                if (state->closed || !load_training_items(password)) return false;
+                const auto base_index = state->training_base.SelectedIndex();
+                if (base_index < 0 || state->closed ||
+                    !load_training_items(password,
+                        state->base_run_ids[static_cast<std::size_t>(base_index)])) return false;
+                auto loaded = configuration_.training_items.begin();
                 for (std::size_t index = 0; index < state->items.size(); ++index) {
                     if (state->deleted_items[index]) continue;
                     auto& item = state->items[index];
-                    const auto found = std::find_if(configuration_.training_items.begin(),
+                    const auto found = std::find_if(loaded,
                         configuration_.training_items.end(), [&](const auto& loaded) {
                             return loaded.event_id == item.event_id;
                     });
                     if (found == configuration_.training_items.end()) return false;
-                    item = *found;
+                    item = std::move(*found);
+                    loaded = std::next(found);
                 }
                 configuration_.training_items.clear();
                 (*render_page)();
@@ -1523,7 +1632,7 @@ void SettingsWindow::show_lora_training_dialog() {
             L"預估最多 " + std::to_wstring(estimated) + L" steps（有效資料可能較少）");
     };
 
-    const auto refresh_training_selection = [state, refresh_estimated_steps,
+    const auto refresh_training_selection = [this, state, refresh_estimated_steps,
                                              eligible_training_count] {
         const auto eligible = eligible_training_count().first;
         state->training_summary.Text(state->only_selected_sentences.IsOn()
@@ -1533,11 +1642,45 @@ void SettingsWindow::show_lora_training_dialog() {
         state->training_data_button.IsEnabled(state->active_count != 0);
         state->primary_button.IsEnabled(
             state->selecting_training_data ||
-            (!state->busy && state->model_available && state->trainer_available &&
+            (!state->busy && !restoring_lora_model_ &&
+             state->model_available && state->trainer_available &&
              eligible != 0));
         refresh_estimated_steps();
     };
     *refresh_training_count = refresh_training_selection;
+    const auto load_base_parameters = [state](std::int32_t index) {
+        if (index <= 0) {
+            state->rank.Text(L"8");
+            state->alpha.Text(L"16");
+            state->dropout.Text(L"0");
+            state->target_modules.Text(L"q_proj,v_proj");
+            return;
+        }
+        const auto& parameters = state->base_parameters[
+            static_cast<std::size_t>(index)];
+        state->rank.Text(std::to_wstring(parameters.rank));
+        state->alpha.Text(std::format(L"{}", parameters.alpha));
+        state->dropout.Text(std::format(L"{}", parameters.dropout));
+        state->target_modules.Text(to_hstring(parameters.target_modules));
+    };
+    state->training_base.SelectionChanged(
+        [this, state, refresh_training_selection, load_base_parameters](
+            const auto&, const auto&) {
+            const auto index = state->training_base.SelectedIndex();
+            if (index < 0 || state->closed) return;
+            load_base_parameters(index);
+            if (!load_training_items(nullptr,
+                    state->base_run_ids[static_cast<std::size_t>(index)])) {
+                state->status.Text(L"無法讀取此基底可用的訓練資料。");
+                return;
+            }
+            state->items = std::move(configuration_.training_items);
+            state->deleted_items.assign(state->items.size(), false);
+            state->active_count = state->items.size();
+            state->current_page = 0;
+            refresh_training_selection();
+        });
+    load_base_parameters(state->training_base.SelectedIndex());
     state->only_selected_sentences.Toggled(
         [refresh_training_selection](const auto&, const auto&) {
             refresh_training_selection();
@@ -1780,7 +1923,7 @@ void SettingsWindow::show_lora_training_dialog() {
         const std::u16string completed_model_path =
             status.output_model_path
                 ? status.output_model_path : u"";
-        if (!completed_model_path.empty() &&
+        if (state->training_observed && !completed_model_path.empty() &&
             configuration_.model_path != completed_model_path) {
             configuration_.model_path = completed_model_path;
             model_path_.Text(to_hstring(completed_model_path));
@@ -1829,7 +1972,8 @@ void SettingsWindow::show_lora_training_dialog() {
         close_lora_dialog_ = {};
     };
     close_lora_dialog_ = close_dialog;
-    const auto apply_and_close = [state, apply_new_model, close_dialog] {
+    const auto apply_and_close = [this, state, apply_new_model, close_dialog] {
+        if (restoring_lora_model_) return;
         if (!state->output_model_path.empty() && !state->model_applied &&
             !apply_new_model()) {
             return;
@@ -1907,6 +2051,8 @@ void SettingsWindow::show_lora_training_dialog() {
                     .target_modules = nullptr,
                     .strength = state->training_strength.SelectedIndex(),
                     .only_manually_selected = state->only_selected_sentences.IsOn() ? 1 : 0,
+                    .base_run_id = state->base_run_ids[
+                        static_cast<std::size_t>(state->training_base.SelectedIndex())],
                 };
                 const std::u16string dtype = state->dtype.SelectedIndex() == 1
                     ? u"bfloat16"

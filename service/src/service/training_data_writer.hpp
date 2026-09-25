@@ -62,6 +62,7 @@ struct LoraTrainingRun {
     double alpha = 0;
     double dropout = 0;
     std::u16string target_modules;
+    std::string training_request_json;
 };
 
 class TrainingDataWriter final {
@@ -87,16 +88,18 @@ public:
     }
     void set_pending_count_callback(std::function<void(std::size_t)> callback);
     // Without a password, only IDs and selection metadata are returned.
-    std::vector<TrainingDataItem> pending_items(std::string_view password = {}) const;
+    std::vector<TrainingDataItem> pending_items(
+        std::string_view password = {}, std::int64_t base_run_id = 0) const;
     std::vector<TrainingDataRecord> pending_records(
-        const std::vector<std::u16string>& event_ids, std::string_view password = {}) const;
+        const std::vector<std::u16string>& event_ids, std::string_view password = {},
+        std::int64_t base_run_id = 0) const;
+    std::size_t available_count(std::int64_t base_run_id) const;
     bool delete_pending(std::u16string_view event_id) noexcept;
     bool exclude_unselected(
         const std::vector<std::u16string>& selected_event_ids,
         const std::vector<std::u16string>& reviewed_event_ids) noexcept;
-    bool mark_trained(
-        const std::vector<std::u16string>& trained_event_ids) noexcept;
     std::optional<LoraTrainingRun> latest_lora_training_run() const;
+    std::optional<LoraTrainingRun> lora_training_run(std::int64_t id) const;
     std::vector<LoraTrainingRun> lora_training_history() const noexcept;
     bool complete_lora_training(
         const LoraTrainingRun& run,
@@ -117,9 +120,7 @@ private:
 
     void worker_main() noexcept;
     void publish_pending_delta(std::ptrdiff_t delta) noexcept;
-    bool mark_records(const std::vector<std::u16string>& event_ids,
-                      const char* state) noexcept;
-
+    void publish_latest_available_count() noexcept;
     std::filesystem::path database_path_;
     mutable std::mutex protection_mutex_;
     std::atomic_bool recording_enabled_{false};
