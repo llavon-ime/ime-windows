@@ -46,6 +46,20 @@ add_executable(llavon-ime-service
     src/service.rc
 )
 
+# Embedded only in the web setup. The MSI never carries the GGUF payload.
+add_executable(llavon-ime-model-installer
+    src/model_installer_main.cpp
+    src/service/winrt_http.cpp
+    src/service/winrt_http.hpp
+)
+target_compile_features(llavon-ime-model-installer PRIVATE cxx_std_23)
+target_compile_definitions(llavon-ime-model-installer PRIVATE
+    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+    WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+target_compile_options(llavon-ime-model-installer PRIVATE /W4 /WX /utf-8 /await:strict)
+target_link_libraries(llavon-ime-model-installer PRIVATE
+    Microsoft::CppWinRT WindowsApp bcrypt shell32)
+
 add_library(llavon-ime-candidate-ui SHARED
     src/candidate/candidate_log.hpp
     src/candidate/candidate_runtime.cpp
@@ -105,6 +119,8 @@ set_target_properties(llavon-ime-candidate-ui PROPERTIES
 )
 target_compile_definitions(llavon-ime-service PRIVATE
     LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
+    LLAVON_LORA_SUBMODULE_COMMIT="${LLAVON_LORA_SUBMODULE_COMMIT}"
+    LLAVON_LORA_RELEASE_VERSION="${LLAVON_LORA_VERSION}"
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     UNICODE
@@ -112,6 +128,7 @@ target_compile_definitions(llavon-ime-service PRIVATE
     WINVER=0x0A00
     _WIN32_WINNT=0x0A00
 )
+target_link_libraries(llavon-ime-service PRIVATE bcrypt)
 target_compile_definitions(llavon-ime-settings-ui PRIVATE
     LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
     LLAVON_IME_BUILD_COMMIT="${IME_WINDOWS_SERVICE_BUILD_COMMIT}"

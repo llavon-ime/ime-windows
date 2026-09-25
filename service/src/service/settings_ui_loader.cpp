@@ -490,6 +490,10 @@ std::int32_t SettingsUiLoader::get_lora_status_trampoline(
         self->lora_status_message_ = current.message;
         self->lora_status_revision_ = current.model_revision;
         self->lora_status_output_path_ = current.output_model_path;
+        self->lora_trainer_version_ = current.trainer_version;
+        self->lora_trainer_backend_ = current.trainer_backend;
+        self->lora_trainer_release_version_ = current.trainer_release_version;
+        self->lora_trainer_message_ = current.trainer_message;
         *status = llavon_settings_lora_status{
             .stage = static_cast<std::int32_t>(current.stage),
             .progress = current.progress,
@@ -498,6 +502,12 @@ std::int32_t SettingsUiLoader::get_lora_status_trampoline(
             .message = self->lora_status_message_.c_str(),
             .model_revision = self->lora_status_revision_.c_str(),
             .output_model_path = self->lora_status_output_path_.c_str(),
+            .trainer_available = current.trainer_available ? 1 : 0,
+            .trainer_assets = current.trainer_assets,
+            .trainer_version = self->lora_trainer_version_.c_str(),
+            .trainer_backend = self->lora_trainer_backend_.c_str(),
+            .trainer_release_version = self->lora_trainer_release_version_.c_str(),
+            .trainer_message = self->lora_trainer_message_.c_str(),
         };
         return ERROR_SUCCESS;
     } catch (...) {
@@ -506,11 +516,11 @@ std::int32_t SettingsUiLoader::get_lora_status_trampoline(
 }
 
 std::int32_t SettingsUiLoader::lora_model_action_trampoline(
-    void* context, std::int32_t download_or_update) noexcept {
+    void* context, std::int32_t action) noexcept {
     auto* self = static_cast<SettingsUiLoader*>(context);
     if (!self || !self->lora_model_action_) return ERROR_INVALID_FUNCTION;
     try {
-        return self->lora_model_action_(download_or_update != 0)
+        return self->lora_model_action_(action)
             ? ERROR_SUCCESS
             : ERROR_BUSY;
     } catch (...) {

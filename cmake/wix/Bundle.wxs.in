@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
-     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
   <Bundle
       Name="Llavon IME"
       Manufacturer="Llavon IME"
@@ -9,45 +8,35 @@
       UpgradeCode="7E4C5A19-9882-4E30-8747-3D1649D13257"
       Compressed="yes">
 
-    <Variable Name="InstallLoraTrainer" Type="numeric" Value="1" />
-    <Variable Name="LoraTargetVersion" Type="version" Value="@LLAVON_LORA_VERSION@" />
-    <Variable Name="LoraTargetDisplayVersion" Type="string" Value="@LLAVON_LORA_VERSION@" />
-
-    <util:FileSearch
-        Id="FindLoraTrainerVersion"
-        Variable="LoraInstalledVersion"
-        Path="[ProgramFiles64Folder]Llavon IME\tools\lora\llavon-lora.exe"
-        Result="version" />
-
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication
           LicenseUrl=""
           Theme="hyperlinkLargeLicense"
-          ThemeFile="@CMAKE_CURRENT_SOURCE_DIR@/cmake/wix/BundleTheme.xml"
-          LocalizationFile="@CMAKE_CURRENT_SOURCE_DIR@/cmake/wix/BundleTheme.zh-TW.wxl"
+          ThemeFile="@LLAVON_IME_SOURCE_DIR@/cmake/wix/BundleTheme.xml"
+          LocalizationFile="@LLAVON_IME_SOURCE_DIR@/cmake/wix/BundleTheme.zh-TW.wxl"
           ShowVersion="yes"
           SuppressOptionsUI="yes" />
     </BootstrapperApplication>
 
     <Chain>
+      <!-- Re-run on setup upgrades; the helper verifies and reuses the cached GGUF. -->
+      <ExePackage
+          Id="LlavonModelDownload"
+          DisplayName="拉風輸入法模型"
+          SourceFile="@LLAVON_IME_MODEL_INSTALLER_PATH@"
+          Compressed="yes"
+          PerMachine="yes"
+          Permanent="yes"
+          Vital="yes"
+          DetectCondition="0"
+          InstallArguments="--install-model @LLAVON_IME_MODEL_REVISION@ @LLAVON_IME_MODEL_SHA256@ @LLAVON_IME_MODEL_SIZE@" />
+
       <MsiPackage
           Id="LlavonImeMsi"
           SourceFile="@LLAVON_IME_MSI_PATH@"
           Compressed="yes"
           Visible="no" />
 
-      <ExePackage
-          Id="LlavonLoraWebInstaller"
-          DisplayName="Llavon LoRA Trainer @LLAVON_LORA_VERSION@"
-          SourceFile="@LLAVON_LORA_INSTALLER_PATH@"
-          DownloadUrl="@LLAVON_LORA_INSTALLER_URL@"
-          Compressed="no"
-          PerMachine="yes"
-          Permanent="yes"
-          Vital="no"
-          DetectCondition="LoraInstalledVersion = v@LLAVON_LORA_VERSION@"
-          InstallCondition="InstallLoraTrainer = 1 AND (NOT LoraInstalledVersion OR LoraInstalledVersion &lt; v@LLAVON_LORA_VERSION@)"
-          InstallArguments="install --manifest-url &quot;@LLAVON_LORA_MANIFEST_URL@&quot; --install-dir &quot;[ProgramFiles64Folder]Llavon IME\tools\lora&quot; --asset win-x64-cpu" />
     </Chain>
   </Bundle>
 </Wix>

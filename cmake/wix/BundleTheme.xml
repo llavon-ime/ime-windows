@@ -24,16 +24,8 @@
       <Label X="11" Y="80" Width="-11" Height="30" FontId="2" DisablePrefix="yes">#(loc.InstallHeader)</Label>
       <Label X="11" Y="116" Width="-11" Height="24" FontId="3" DisablePrefix="yes">#(loc.InstallMessage)</Label>
       <Label X="11" Y="157" Width="-11" Height="36" FontId="3" DisablePrefix="yes">
-        <Text Condition="NOT LoraInstalledVersion">#(loc.LoraMissing)</Text>
-        <Text Condition="LoraInstalledVersion = LoraTargetVersion">#(loc.LoraCurrent)</Text>
-        <Text Condition="LoraInstalledVersion &lt; LoraTargetVersion">#(loc.LoraOlder)</Text>
-        <Text Condition="LoraInstalledVersion &gt; LoraTargetVersion">#(loc.LoraNewer)</Text>
+        <Text>#(loc.ModelDownloadNotice)</Text>
       </Label>
-      <Checkbox Name="InstallLoraTrainer" X="11" Y="199" Width="-11" Height="38" TabStop="yes" FontId="3"
-                VisibleCondition="NOT LoraInstalledVersion OR LoraInstalledVersion &lt; LoraTargetVersion">
-        <Text Condition="NOT LoraInstalledVersion">#(loc.LoraInstallCheckbox)</Text>
-        <Text Condition="LoraInstalledVersion">#(loc.LoraUpdateCheckbox)</Text>
-      </Checkbox>
       <Button Name="InstallUpdateButton" X="11" Y="-11" Width="200" Height="23" TabStop="yes" FontId="0" EnableCondition="WixStdBAUpdateAvailable" HideWhenDisabled="yes">#(loc.UpdateButton)</Button>
       <Button Name="InstallButton" X="-91" Y="-11" Width="75" Height="23" TabStop="yes" FontId="0">#(loc.InstallInstallButton)</Button>
       <Button Name="InstallCancelButton" X="-11" Y="-11" Width="75" Height="23" TabStop="yes" FontId="0">

@@ -21,9 +21,9 @@
 
 1. 前往 [最新版本下載頁面](https://github.com/llavon-ime/ime-windows/releases/tag/latest)。
 2. 一般使用者下載 `*-setup.exe`；離線或系統管理部署可改用 `.msi`。
-3. 執行安裝程式並依畫面指示完成安裝。安裝器會先顯示本機 LoRA Trainer
-   狀態；只有勾選並確認後才會下載選配的訓練工具。這是全系統安裝，Windows
-   可能會要求系統管理員權限。
+3. 執行安裝程式並依畫面指示完成安裝。安裝程式會下載並驗證預設模型；更新時若
+   電腦已有相同且完整的模型，就會略過下載。這是全系統安裝，Windows 可能會
+   要求系統管理員權限。
 4. 安裝完成後，按 `Windows 鍵 + 空白鍵`，或點選工作列右下角的輸入法選單，切換至「拉風輸入法」。
 
 如果選單中沒有出現拉風輸入法，可前往 Windows 的「設定」→「時間與語言」→「語言與地區」，在繁體中文的鍵盤選項中確認輸入法是否已加入。
@@ -37,7 +37,8 @@
 - 按住 `Shift` 輸入時，可暫時輸入英文；放開後會回到原本的中文模式。
 - 如需使用 `Shift + 空白鍵` 切換全形／半形，可先在設定視窗中開啟這項功能。
 
-首次使用時，背景服務需要載入本機模型，開始輸入前可能需要稍候片刻。
+首次使用時，背景服務需要載入本機模型，開始輸入前可能需要稍候片刻。單獨安裝
+`.msi` 不會下載模型；請使用 `*-setup.exe`，或在設定中指定已下載的 GGUF 檔案。
 
 ## 開啟設定
 
@@ -123,7 +124,7 @@ build/windows/llavon-ime-0.0.1-setup.exe
 
 安裝器與 MSI 的內部版號固定為 `0.0.1`；CalVer 只用於 GitHub 發布 tag 與其 `latest.json` 發布資訊。從舊的 CalVer 安裝器轉換時，須先從 Windows「已安裝的應用程式」解除安裝舊的安裝套件一次（選顯示 CalVer 的項目，不是舊版另外顯示的 MSI）；否則 WiX 會把 `0.0.1` 視為降版。新安裝套件只會顯示一個解除安裝項目。本機之後只需執行 `cmake --build build/windows --config Release --target llavon-ime-setup --parallel`，不必為版號重新 configure。
 
-本機打包時會檢查 Hugging Face 上的最新模型 revision，revision 更新時會重新下載模型。GitHub Actions 另會使用 SHA-256 管理及驗證模型 cache；首次打包也會從網路下載 vcpkg 相依套件及 WiX 工具。
+建置 `*-setup.exe` 時會記錄 Hugging Face 模型 revision、大小及 SHA-256，模型檔不會打包進安裝檔。安裝時會下載至 `%ProgramData%\Llavon IME\models`；同一模型更新時會驗證既有檔案並略過下載。LoRA Trainer 可在訓練視窗選擇 CPU、CUDA 或 ROCm 版本下載。首次打包仍需從網路取得 vcpkg 相依套件及 WiX 工具。
 
 ## 授權
 

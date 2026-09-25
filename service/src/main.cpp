@@ -1,6 +1,7 @@
 #include <ime-core/core.hpp>
 #include <utf8/cpp20.h>
 #include <windows.h>
+#include <shlobj.h>
 
 #include "service/prediction_pipe_server.hpp"
 #include "service/candidate_ui_loader.hpp"
@@ -11,9 +12,11 @@
 #include "service/settings_ui_loader.hpp"
 #include "service/tray_icon.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -100,6 +103,25 @@ std::filesystem::path executable_directory() {
 std::filesystem::path default_model_path() {
     if (auto path = environment_path(kModelPathEnv)) {
         return *path;
+    }
+    PWSTR raw = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramData, KF_FLAG_DEFAULT,
+                                       nullptr, &raw))) {
+        const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> owned(raw, CoTaskMemFree);
+        const auto root = std::filesystem::path(owned.get()) / L"Llavon IME" / L"models";
+        std::ifstream marker(root / L"current.revision", std::ios::binary);
+        std::string revision;
+        if (marker >> revision && revision.size() == 40 &&
+            std::ranges::all_of(revision, [](char c) {
+                return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' ||
+                       c >= 'A' && c <= 'F';
+            })) {
+            const auto candidate = root /
+                std::wstring(revision.begin(), revision.end()) / kModelFilename;
+            std::error_code ignored;
+            if (std::filesystem::is_regular_file(candidate, ignored))
+                return candidate;
+        }
     }
     return executable_directory().parent_path() / "models" / kModelFilename;
 }
@@ -217,7 +239,7 @@ int main(int argc, char* argv[]) {
         } else if (environment_path(kModelPathEnv)) {
             displayed_model_path = config.model_path.u16string();
         } else {
-            displayed_model_path = u"./models/llavon-ime-llama-250m-Q4_K_M.gguf";
+            displayed_model_path = config.model_path.u16string();
         }
         settings_ui.configure(
             inference_devices, user_settings.inference, active_inference,
@@ -313,10 +335,16 @@ int main(int argc, char* argv[]) {
                     selected_event_ids, reviewed_event_ids, std::move(options), password);
             },
             [&lora_training] { return lora_training.status(); },
-            [&lora_training](bool download_or_update) {
-                return download_or_update
-                    ? lora_training.download_model_async()
-                    : lora_training.check_model_async();
+            [&lora_training](std::int32_t action) {
+                switch (action) {
+                case LLAVON_LORA_CHECK_MODEL: return lora_training.check_model_async();
+                case LLAVON_LORA_DOWNLOAD_MODEL: return lora_training.download_model_async();
+                case LLAVON_LORA_CHECK_TRAINER: return lora_training.check_trainer_async();
+                case LLAVON_LORA_INSTALL_CPU: return lora_training.install_trainer_async(0);
+                case LLAVON_LORA_INSTALL_CUDA: return lora_training.install_trainer_async(1);
+                case LLAVON_LORA_INSTALL_ROCM: return lora_training.install_trainer_async(2);
+                default: return false;
+                }
             },
             [&lora_training] { lora_training.cancel(); },
             [&server, &lora_training](int action, std::string_view password) -> std::size_t {

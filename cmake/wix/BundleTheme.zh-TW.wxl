@@ -6,12 +6,7 @@
   <String Id="UpdateButton" Value="更新至 [WixStdBAUpdateAvailable]" />
   <String Id="InstallHeader" Value="選擇安裝項目" />
   <String Id="InstallMessage" Value="拉風輸入法版本：[WixBundleVersion]" />
-  <String Id="LoraMissing" Value="尚未安裝 LoRA Trainer；可安裝版本 [LoraTargetDisplayVersion]" />
-  <String Id="LoraCurrent" Value="已安裝 LoRA Trainer [LoraTargetDisplayVersion]" />
-  <String Id="LoraOlder" Value="已安裝 LoRA Trainer [LoraInstalledVersion]；可更新至 [LoraTargetDisplayVersion]" />
-  <String Id="LoraNewer" Value="已安裝較新版本的 LoRA Trainer [LoraInstalledVersion]" />
-  <String Id="LoraInstallCheckbox" Value="安裝 LoRA Trainer（供本地個人化模型使用，建議安裝）" />
-  <String Id="LoraUpdateCheckbox" Value="更新 LoRA Trainer" />
+  <String Id="ModelDownloadNotice" Value="安裝程式會驗證已下載的模型；相同模型會直接沿用。LoRA 訓練器可稍後在設定中安裝。" />
   <String Id="ConfirmCancelMessage" Value="確定要取消嗎？" />
   <String Id="ExecuteUpgradeRelatedBundleMessage" Value="舊版拉風輸入法" />
   <String Id="HelpHeader" Value="安裝說明" />

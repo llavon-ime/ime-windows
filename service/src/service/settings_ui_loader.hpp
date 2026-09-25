@@ -39,7 +39,7 @@ public:
         const llavon_settings_lora_options&, std::string_view)>;
     using ProtectionAction = std::function<std::size_t(int, std::string_view)>;
     using GetLoraStatus = std::function<LoraOperationStatus()>;
-    using LoraModelAction = std::function<bool(bool)>;
+    using LoraModelAction = std::function<bool(std::int32_t)>;
     using CancelLora = std::function<void()>;
 
     void configure(
@@ -181,6 +181,10 @@ private:
     std::u16string lora_status_message_;
     std::u16string lora_status_revision_;
     std::u16string lora_status_output_path_;
+    std::u16string lora_trainer_version_;
+    std::u16string lora_trainer_backend_;
+    std::u16string lora_trainer_release_version_;
+    std::u16string lora_trainer_message_;
     std::vector<TrainingDataStorage> training_items_;
     std::vector<std::u16string> reviewed_event_ids_;
     std::vector<LoraHistoryStorage> lora_history_;

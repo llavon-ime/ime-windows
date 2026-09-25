@@ -27,6 +27,8 @@ enum class LoraOperationStage : std::int32_t {
     completed = 7,
     failed = 8,
     cancelled = 9,
+    checking_trainer = 10,
+    installing_trainer = 11,
 };
 
 struct LoraTrainingOptions {
@@ -58,6 +60,13 @@ struct LoraOperationStatus {
     bool model_update_available = false;
     std::u16string model_revision;
     std::u16string output_model_path;
+    bool trainer_available = false;
+    std::int32_t trainer_assets = 0;
+    std::u16string trainer_version;
+    std::u16string trainer_backend;
+    std::u16string trainer_commit;
+    std::u16string trainer_release_version;
+    std::u16string trainer_message;
 };
 
 class LoraTrainingManager final {
@@ -72,6 +81,8 @@ public:
     LoraOperationStatus status();
     bool check_model_async();
     bool download_model_async();
+    bool check_trainer_async();
+    bool install_trainer_async(std::int32_t backend);
     bool start_training_async(std::vector<std::u16string> event_ids,
                               const std::vector<std::u16string>& reviewed_event_ids,
                               LoraTrainingOptions options, std::string_view password);
@@ -83,9 +94,12 @@ public:
 private:
     using Operation = void (LoraTrainingManager::*)();
 
-    bool launch(Operation operation);
+    bool launch(Operation operation, std::int32_t trainer_backend = -1);
     void check_model_worker();
     void download_model_worker();
+    void check_trainer_worker();
+    void install_trainer_worker();
+    void refresh_installed_trainer();
     void training_worker();
     void prune_obsolete_gguf_models(
         const std::filesystem::path& applied_model_path) const noexcept;
@@ -99,7 +113,8 @@ private:
                         double progress_start, double progress_end);
     int run_process(const std::filesystem::path& executable,
                     const std::vector<std::wstring>& arguments,
-                    bool parse_training_progress);
+                    bool parse_training_progress,
+                    std::string* captured_output = nullptr);
 
     std::shared_ptr<TrainingDataWriter> training_data_;
     std::filesystem::path tables_directory_;
@@ -116,6 +131,7 @@ private:
     std::vector<std::u16string> pending_event_ids_;
     std::vector<TrainingDataRecord> pending_records_;
     LoraTrainingOptions pending_options_;
+    std::int32_t pending_trainer_backend_ = 0;
 };
 
 }  // namespace llavon::service

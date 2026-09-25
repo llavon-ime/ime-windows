@@ -147,12 +147,24 @@ Older GGUF files are kept if loading or saving the new model fails. The
 intermediate f16 GGUF is removed after export. The service—not
 the settings DLL—converts the selected SQLite rows into the numeric JSONL
 accepted by the CLI, starts the hidden trainer process, exports the adapter,
-and performs every related file operation. The default CLI path matches the
-optional installer component:
+and performs every related file operation. The fallback CLI path for an older
+installation is:
 
 ```text
 %ProgramFiles%\Llavon IME\tools\lora\llavon-lora.exe
 ```
+
+The training dialog checks for the LoRA Trainer release whose manifest
+`commit` matches this build's pinned `lora-trainer` submodule. It shows the
+installed version and shows CPU, CUDA, and ROCm choices. Download is enabled
+when that exact release contains the corresponding Windows asset. The automatic upstream
+release currently contains Windows CPU; CUDA and ROCm require matching Windows
+assets in that release. An in-app install downloads the selected ZIP, verifies
+its size and SHA-256, checks the archive paths, then extracts and validates its
+installed manifest. It installs under
+`%LocalAppData%\Llavon IME\tools\lora\<version>\<asset>` and records the active
+selection in `current.install`. The service uses that selection before the
+Program Files installation.
 
 Model checks and downloads use WinRT `Windows.Web.Http` with `co_await` for
 network operations. The service's dedicated worker waits only at the outer

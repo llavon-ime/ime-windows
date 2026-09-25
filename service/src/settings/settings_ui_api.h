@@ -65,6 +65,17 @@ enum llavon_settings_lora_stage {
     LLAVON_SETTINGS_LORA_COMPLETED = 7,
     LLAVON_SETTINGS_LORA_FAILED = 8,
     LLAVON_SETTINGS_LORA_CANCELLED = 9,
+    LLAVON_SETTINGS_LORA_CHECKING_TRAINER = 10,
+    LLAVON_SETTINGS_LORA_INSTALLING_TRAINER = 11,
+};
+
+enum llavon_settings_lora_action {
+    LLAVON_LORA_CHECK_MODEL = 0,
+    LLAVON_LORA_DOWNLOAD_MODEL = 1,
+    LLAVON_LORA_CHECK_TRAINER = 2,
+    LLAVON_LORA_INSTALL_CPU = 3,
+    LLAVON_LORA_INSTALL_CUDA = 4,
+    LLAVON_LORA_INSTALL_ROCM = 5,
 };
 
 struct llavon_settings_lora_status {
@@ -75,6 +86,12 @@ struct llavon_settings_lora_status {
     const llavon_char16_t* message;
     const llavon_char16_t* model_revision;
     const llavon_char16_t* output_model_path;
+    int32_t trainer_available;
+    int32_t trainer_assets; // bit 0 CPU, bit 1 CUDA, bit 2 ROCm
+    const llavon_char16_t* trainer_version;
+    const llavon_char16_t* trainer_backend;
+    const llavon_char16_t* trainer_release_version;
+    const llavon_char16_t* trainer_message;
 };
 
 struct llavon_settings_training_item {
@@ -139,7 +156,7 @@ typedef int32_t (*llavon_settings_get_lora_history_callback)(
 typedef int32_t (*llavon_settings_get_lora_status_callback)(
     void* context, struct llavon_settings_lora_status* status);
 typedef int32_t (*llavon_settings_lora_model_action_callback)(
-    void* context, int32_t download_or_update);
+    void* context, int32_t action);
 typedef void (*llavon_settings_cancel_lora_callback)(void* context);
 
 enum llavon_settings_protection_action {

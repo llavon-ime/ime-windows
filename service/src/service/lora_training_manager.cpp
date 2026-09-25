@@ -6,10 +6,12 @@
 
 #include <rfl/json.hpp>
 #include <shlobj.h>
+#include <bcrypt.h>
 #include <utf8/cpp20.h>
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <charconv>
 #include <chrono>
 #include <fstream>
@@ -17,6 +19,7 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -28,6 +31,10 @@ namespace {
 
 constexpr wchar_t assets_path_environment[] = L"LLAVON_IME_LORA_ASSETS_DIR";
 constexpr wchar_t trainer_path_environment[] = L"LLAVON_IME_LORA_CLI_PATH";
+constexpr char trainer_commit[] = LLAVON_LORA_SUBMODULE_COMMIT;
+constexpr char packaged_trainer_version[] = LLAVON_LORA_RELEASE_VERSION;
+constexpr wchar_t trainer_release_root[] =
+    L"https://github.com/llavon-ime/lora-trainer/releases/download/";
 constexpr char model_repository[] = "tony65535/llavon-ime-llama-250m";
 constexpr wchar_t model_repository_directory[] =
     L"tony65535--llavon-ime-llama-250m";
@@ -67,8 +74,22 @@ std::filesystem::path executable_directory() {
     }
 }
 
+std::string read_text(const std::filesystem::path& path);
+std::wstring widen(std::string_view value);
+
 std::filesystem::path trainer_executable() {
     if (auto configured = environment_path(trainer_path_environment)) return *configured;
+    const auto local = local_app_data_root() / L"tools" / L"lora";
+    const auto selected = read_text(local / L"current.install");
+    if (!selected.empty() && selected.find("..") == std::string::npos &&
+        selected.find('\\') == std::string::npos &&
+        selected.find(':') == std::string::npos &&
+        selected.front() != '/' &&
+        std::ranges::count(selected, '/') == 1) {
+        const auto candidate = local / widen(selected) / L"llavon-lora.exe";
+        std::error_code ignored;
+        if (std::filesystem::is_regular_file(candidate, ignored)) return candidate;
+    }
     const auto adjacent = executable_directory() / L"tools" / L"lora" /
                           L"llavon-lora.exe";
     std::error_code error;
@@ -194,6 +215,224 @@ struct ModelRevision {
     std::string sha;
 };
 
+struct TrainerReleaseEntry {
+    std::string tag_name;
+    std::string target_commitish;
+};
+
+struct TrainerReleaseAsset {
+    std::string name;
+    std::string url;
+    std::string sha256;
+    std::uint64_t size;
+};
+
+struct TrainerReleaseManifest {
+    std::int32_t schema;
+    std::string version;
+    std::int32_t trainerApi;
+    std::string commit;
+    std::map<std::string, TrainerReleaseAsset> assets;
+};
+
+struct InstalledTrainerManifest {
+    std::int32_t schema;
+    std::string version;
+    std::int32_t trainerApi;
+    std::string commit;
+    std::string backend;
+};
+
+bool valid_calver(std::string_view value);
+bool valid_https(std::string_view value);
+bool valid_sha256(std::string_view value);
+std::string download_text(WinrtHttpTransfer& transfer, std::wstring url);
+
+TrainerReleaseManifest resolve_trainer_release(WinrtHttpTransfer& transfer) {
+    if (!valid_revision(trainer_commit))
+        throw std::runtime_error("LoRA submodule commit is unavailable in this build");
+    const auto load_version = [&transfer](std::string_view version)
+        -> std::optional<TrainerReleaseManifest> {
+        if (!valid_calver(version)) return std::nullopt;
+        const auto body = download_text(transfer,
+            std::wstring(trainer_release_root) + L"v" + widen(version) +
+                L"/latest.json");
+        auto manifest = rfl::json::read<TrainerReleaseManifest>(body).value();
+        if (manifest.schema != 1 || manifest.trainerApi != 1 ||
+            manifest.commit != trainer_commit || manifest.version != version)
+            return std::nullopt;
+        return manifest;
+    };
+    if (packaged_trainer_version[0]) {
+        try {
+            if (auto manifest = load_version(packaged_trainer_version))
+                return std::move(*manifest);
+        } catch (const std::exception&) {
+            // A local build can retain an older CMake cache entry. Search by
+            // gitlink commit before reporting that the release is missing.
+        }
+    }
+    for (int page = 1; page <= 10; ++page) {
+        const auto body = download_text(transfer,
+            L"https://api.github.com/repos/llavon-ime/lora-trainer/releases?per_page=100&page=" +
+                std::to_wstring(page));
+        const auto releases =
+            rfl::json::read<std::vector<TrainerReleaseEntry>>(body).value();
+        if (releases.empty()) break;
+        for (const auto& release : releases) {
+            if (release.target_commitish == trainer_commit &&
+                release.tag_name.starts_with('v') &&
+                valid_calver(std::string_view(release.tag_name).substr(1))) {
+                if (auto manifest = load_version(
+                        std::string_view(release.tag_name).substr(1)))
+                    return std::move(*manifest);
+            }
+        }
+    }
+    throw std::runtime_error("No release matches the pinned LoRA submodule commit");
+}
+
+bool valid_calver(std::string_view value) {
+    if (value.size() < 12 || value[4] != '.' || value[7] != '.' ||
+        value[10] != '.') return false;
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        if (index == 4 || index == 7 || index == 10) continue;
+        if (value[index] < '0' || value[index] > '9') return false;
+    }
+    return true;
+}
+
+bool valid_https(std::string_view value) {
+    return value.starts_with("https://");
+}
+
+bool valid_sha256(std::string_view value) {
+    return value.size() == 64 && std::ranges::all_of(value, [](char c) {
+        return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' ||
+               c >= 'A' && c <= 'F';
+    });
+}
+
+bool backend_matches(std::string_view backend, std::string_view asset) {
+    if (asset == "win-x64-cpu") return backend == "cpu";
+    if (asset == "win-x64-cuda") return backend.starts_with("cuda");
+    if (asset == "win-x64-rocm") return backend.starts_with("rocm");
+    return false;
+}
+
+bool valid_trainer_asset(const TrainerReleaseAsset& asset) {
+    return valid_https(asset.url) && valid_sha256(asset.sha256) &&
+           asset.size > 0 && std::string_view(asset.name).ends_with(".zip");
+}
+
+std::string download_text(WinrtHttpTransfer& transfer, std::wstring url) {
+    std::string body;
+    transfer.get_stream(std::move(url), [&](const std::uint8_t* bytes,
+                                              std::uint32_t size,
+                                              std::uint64_t, std::uint64_t) {
+        if (body.size() + size > 4 * 1024 * 1024)
+            throw std::runtime_error("LoRA release metadata is too large");
+        body.append(reinterpret_cast<const char*>(bytes), size);
+    });
+    return body;
+}
+
+std::string sha256_file(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("unable to read LoRA archive");
+    BCRYPT_ALG_HANDLE algorithm = nullptr;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+        throw std::runtime_error("unable to initialize SHA-256");
+    struct CloseAlgorithm {
+        BCRYPT_ALG_HANDLE value;
+        ~CloseAlgorithm() { BCryptCloseAlgorithmProvider(value, 0); }
+    } close{algorithm};
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    if (BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) < 0)
+        throw std::runtime_error("unable to create SHA-256 hash");
+    struct CloseHash {
+        BCRYPT_HASH_HANDLE value;
+        ~CloseHash() { BCryptDestroyHash(value); }
+    } close_hash{hash};
+    std::array<char, 1024 * 1024> buffer{};
+    while (input) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto count = input.gcount();
+        if (count > 0 && BCryptHashData(hash,
+                reinterpret_cast<PUCHAR>(buffer.data()),
+                static_cast<ULONG>(count), 0) < 0)
+            throw std::runtime_error("unable to hash LoRA archive");
+    }
+    if (!input.eof()) throw std::runtime_error("unable to read LoRA archive completely");
+    std::array<std::uint8_t, 32> digest{};
+    if (BCryptFinishHash(hash, digest.data(),
+                         static_cast<ULONG>(digest.size()), 0) < 0)
+        throw std::runtime_error("unable to finish LoRA archive hash");
+    constexpr char digits[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(64);
+    for (auto byte : digest) {
+        result.push_back(digits[byte >> 4]);
+        result.push_back(digits[byte & 15]);
+    }
+    return result;
+}
+
+std::filesystem::path system_tar() {
+    std::wstring directory(MAX_PATH, L'\0');
+    const auto length = GetSystemDirectoryW(directory.data(),
+                                           static_cast<UINT>(directory.size()));
+    if (length == 0 || length >= directory.size())
+        throw std::runtime_error("unable to locate Windows tar.exe");
+    directory.resize(length);
+    return std::filesystem::path(directory) / L"tar.exe";
+}
+
+void validate_archive_listing(std::string_view listing) {
+    std::istringstream lines{std::string(listing)};
+    std::string entry;
+    bool found = false;
+    while (std::getline(lines, entry)) {
+        if (!entry.empty() && entry.back() == '\r') entry.pop_back();
+        if (entry.empty() || entry.front() == '/' ||
+            entry.find('\\') != std::string::npos ||
+            entry.find(':') != std::string::npos)
+            throw std::runtime_error("LoRA archive contains an unsafe path");
+        if (entry.starts_with("./")) entry.erase(0, 2);
+        if (entry.empty()) continue;
+        std::string_view remaining(entry);
+        while (!remaining.empty()) {
+            const auto separator = remaining.find('/');
+            const auto part = remaining.substr(0, separator);
+            if (part.empty() || part == "." || part == "..")
+                throw std::runtime_error("LoRA archive contains an unsafe path");
+            found = true;
+            if (separator == std::string_view::npos ||
+                separator + 1 == remaining.size()) break;
+            remaining.remove_prefix(separator + 1);
+        }
+    }
+    if (!found) throw std::runtime_error("LoRA archive is empty");
+}
+
+void select_trainer(const std::filesystem::path& root, std::string_view relative) {
+    std::filesystem::create_directories(root);
+    const auto partial = root / L"current.install.partial";
+    const auto selected = root / L"current.install";
+    {
+        std::ofstream marker(partial, std::ios::trunc);
+        marker << relative << '\n';
+        marker.flush();
+        if (!marker) throw std::runtime_error("unable to select installed trainer");
+    }
+    if (!MoveFileExW(partial.c_str(), selected.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::error_code ignored;
+        std::filesystem::remove(partial, ignored);
+        throw std::runtime_error("unable to publish trainer selection");
+    }
+}
+
 std::int64_t training_steps(const std::filesystem::path& adapter_directory) {
     const auto state = rfl::json::read<TrainingState>(
         read_text(adapter_directory / L"training_state.json")).value();
@@ -217,6 +456,7 @@ LoraTrainingManager::LoraTrainingManager(
         status_.stage = LoraOperationStage::model_ready;
         status_.message = u"基礎模型已下載";
     }
+    refresh_installed_trainer();
 }
 
 void LoraTrainingManager::on_model_applied(
@@ -274,6 +514,7 @@ LoraOperationStatus LoraTrainingManager::status() {
     // while an installer was replacing files). Keep the UI's cached status in
     // sync with the local files without requiring a network request.
     if (!busy_.load(std::memory_order_acquire)) {
+        refresh_installed_trainer();
         std::string revision;
         if (installed_model_is_complete(&revision)) {
             std::lock_guard lock(status_mutex_);
@@ -299,6 +540,43 @@ bool LoraTrainingManager::check_model_async() {
 
 bool LoraTrainingManager::download_model_async() {
     return launch(&LoraTrainingManager::download_model_worker);
+}
+
+bool LoraTrainingManager::check_trainer_async() {
+    return launch(&LoraTrainingManager::check_trainer_worker);
+}
+
+bool LoraTrainingManager::install_trainer_async(std::int32_t backend) {
+    if (backend < 0 || backend > 2) return false;
+    return launch(&LoraTrainingManager::install_trainer_worker, backend);
+}
+
+void LoraTrainingManager::refresh_installed_trainer() {
+    const auto executable = trainer_executable();
+    std::error_code error;
+    const bool exists = std::filesystem::is_regular_file(executable, error);
+    std::string version;
+    std::string backend;
+    std::string commit;
+    if (exists) {
+        const auto body = read_text(executable.parent_path() /
+                                    L"llavon-lora-manifest.json");
+        if (!body.empty()) {
+            const auto parsed = rfl::json::read<InstalledTrainerManifest>(body);
+            if (parsed && parsed.value().schema == 1 &&
+                parsed.value().trainerApi == 1 &&
+                valid_calver(parsed.value().version)) {
+                version = parsed.value().version;
+                backend = parsed.value().backend;
+                commit = parsed.value().commit;
+            }
+        }
+    }
+    std::lock_guard lock(status_mutex_);
+    status_.trainer_available = exists;
+    status_.trainer_version = to_utf16(version);
+    status_.trainer_backend = to_utf16(backend);
+    status_.trainer_commit = to_utf16(commit);
 }
 
 bool LoraTrainingManager::start_training_async(
@@ -354,10 +632,11 @@ void LoraTrainingManager::reset_conversation_data() {
     pending_event_ids_.clear();
 }
 
-bool LoraTrainingManager::launch(Operation operation) {
+bool LoraTrainingManager::launch(Operation operation, std::int32_t trainer_backend) {
     std::lock_guard operation_lock(operation_mutex_);
     if (busy_.load(std::memory_order_acquire)) return false;
     if (worker_.joinable()) worker_.join();
+    if (trainer_backend >= 0) pending_trainer_backend_ = trainer_backend;
     cancelling_.store(false, std::memory_order_release);
     http_transfer_.reset();
     busy_.store(true, std::memory_order_release);
@@ -392,7 +671,10 @@ void LoraTrainingManager::set_status(LoraOperationStage stage, double progress,
     status_.stage = stage;
     status_.progress = std::clamp(progress, 0.0, 1.0);
     status_.message = std::move(message);
-    if (stage != LoraOperationStage::completed) status_.output_model_path.clear();
+    if (stage != LoraOperationStage::completed &&
+        stage != LoraOperationStage::checking_trainer &&
+        stage != LoraOperationStage::installing_trainer)
+        status_.output_model_path.clear();
 }
 
 void LoraTrainingManager::set_failed(const std::exception& error) noexcept {
@@ -401,6 +683,9 @@ void LoraTrainingManager::set_failed(const std::exception& error) noexcept {
         auto message = cancelled ? std::u16string(u"操作已取消")
                                  : to_utf16(error.what());
         std::lock_guard lock(status_mutex_);
+        if (status_.stage == LoraOperationStage::checking_trainer ||
+            status_.stage == LoraOperationStage::installing_trainer)
+            status_.trainer_message = message;
         status_.stage = cancelled ? LoraOperationStage::cancelled
                                   : LoraOperationStage::failed;
         status_.message = std::move(message);
@@ -413,6 +698,9 @@ void LoraTrainingManager::set_failed_unknown() noexcept {
     try {
         const bool cancelled = cancelling_.load(std::memory_order_acquire);
         std::lock_guard lock(status_mutex_);
+        if (status_.stage == LoraOperationStage::checking_trainer ||
+            status_.stage == LoraOperationStage::installing_trainer)
+            status_.trainer_message = cancelled ? u"操作已取消" : u"LoRA 訓練器發生未知錯誤";
         status_.stage = cancelled ? LoraOperationStage::cancelled
                                   : LoraOperationStage::failed;
         status_.message = cancelled ? u"操作已取消" : u"LoRA 發生未知錯誤";
@@ -559,10 +847,179 @@ void LoraTrainingManager::download_model_worker() {
     status_.model_revision = utf8::utf8to16(revision);
 }
 
+void LoraTrainingManager::check_trainer_worker() {
+    set_status(LoraOperationStage::checking_trainer, 0,
+               u"正在查詢 LoRA 訓練器發行版…");
+    try {
+        const auto manifest = resolve_trainer_release(http_transfer_);
+        std::int32_t assets = 0;
+        constexpr std::array<std::string_view, 3> names{
+            "win-x64-cpu", "win-x64-cuda", "win-x64-rocm"};
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const auto asset = manifest.assets.find(std::string(names[index]));
+            if (asset != manifest.assets.end() && valid_trainer_asset(asset->second))
+                assets |= 1 << index;
+        }
+        std::lock_guard lock(status_mutex_);
+        status_.trainer_assets = assets;
+        status_.trainer_release_version = to_utf16(manifest.version);
+        status_.trainer_message =
+            status_.trainer_version == status_.trainer_release_version &&
+            status_.trainer_commit == to_utf16(manifest.commit)
+                ? u"已安裝此 submodule 對應的發行版"
+                : u"可下載此 submodule 對應的發行版";
+        status_.stage = !status_.output_model_path.empty()
+            ? LoraOperationStage::completed
+            : (status_.model_available ? LoraOperationStage::model_ready
+                                       : LoraOperationStage::idle);
+        status_.message = status_.trainer_message;
+    } catch (const std::exception& error) {
+        std::lock_guard lock(status_mutex_);
+        status_.trainer_assets = 0;
+        status_.trainer_release_version.clear();
+        status_.trainer_message = cancelling_.load(std::memory_order_acquire)
+            ? u"查詢已取消" : to_utf16(error.what());
+        status_.stage = !status_.output_model_path.empty()
+            ? LoraOperationStage::completed
+            : (status_.model_available ? LoraOperationStage::model_ready
+                                       : LoraOperationStage::idle);
+        status_.message = status_.trainer_message;
+    }
+}
+
+void LoraTrainingManager::install_trainer_worker() {
+    set_status(LoraOperationStage::checking_trainer, 0,
+               u"正在查詢 LoRA 訓練器版本…");
+    const auto manifest = resolve_trainer_release(http_transfer_);
+    constexpr std::array<std::string_view, 3> asset_names{
+        "win-x64-cpu", "win-x64-cuda", "win-x64-rocm"};
+    const auto asset_name = asset_names.at(
+        static_cast<std::size_t>(pending_trainer_backend_));
+    const auto asset = manifest.assets.find(std::string(asset_name));
+    if (asset == manifest.assets.end())
+        throw std::runtime_error("This release has no Windows asset for the selected backend");
+    if (!valid_trainer_asset(asset->second))
+        throw std::runtime_error("LoRA trainer asset metadata is invalid");
+
+    const auto root = local_app_data_root() / L"tools" / L"lora";
+    const auto relative = manifest.version + "/" + std::string(asset_name);
+    const auto destination = root / widen(relative);
+    const auto matches_release = [&](const std::filesystem::path& directory) {
+        const auto body = read_text(directory / L"llavon-lora-manifest.json");
+        const auto parsed = rfl::json::read<InstalledTrainerManifest>(body);
+        std::error_code ignored;
+        return parsed && parsed.value().version == manifest.version &&
+               parsed.value().trainerApi == manifest.trainerApi &&
+               parsed.value().commit == manifest.commit &&
+               backend_matches(parsed.value().backend, asset_name) &&
+               std::filesystem::is_regular_file(
+                   directory / L"llavon-lora.exe", ignored);
+    };
+    if (matches_release(destination)) {
+        select_trainer(root, relative);
+        refresh_installed_trainer();
+        std::lock_guard lock(status_mutex_);
+        status_.trainer_release_version = to_utf16(manifest.version);
+        status_.trainer_message = u"LoRA 訓練器已安裝";
+        status_.stage = !status_.output_model_path.empty()
+            ? LoraOperationStage::completed
+            : (status_.model_available ? LoraOperationStage::model_ready
+                                       : LoraOperationStage::idle);
+        status_.message = status_.trainer_message;
+        return;
+    }
+
+    const auto downloads = local_app_data_root() / L"downloads";
+    std::filesystem::create_directories(downloads);
+    const auto archive = downloads /
+        (L"llavon-lora-" + widen(run_name()) + L".zip");
+    const auto staging = root /
+        (L".staging-" + widen(run_name()) + L"-" +
+         std::to_wstring(GetCurrentProcessId()));
+    const auto backup = root /
+        (L".backup-" + widen(run_name()) + L"-" +
+         std::to_wstring(GetCurrentProcessId()));
+    struct Cleanup {
+        std::filesystem::path archive;
+        std::filesystem::path staging;
+        ~Cleanup() {
+            std::error_code ignored;
+            std::filesystem::remove(archive, ignored);
+            std::filesystem::remove_all(staging, ignored);
+        }
+    } cleanup{archive, staging};
+    std::ofstream output(archive, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("unable to save LoRA archive");
+    std::uint64_t received = 0;
+    http_transfer_.get_stream(widen(asset->second.url),
+        [&](const std::uint8_t* bytes, std::uint32_t count,
+            std::uint64_t current, std::uint64_t) {
+            if (current > asset->second.size)
+                throw std::runtime_error("LoRA archive exceeds the manifest size");
+            output.write(reinterpret_cast<const char*>(bytes), count);
+            if (!output) throw std::runtime_error("unable to write LoRA archive");
+            received = current;
+            set_status(LoraOperationStage::installing_trainer,
+                0.8 * static_cast<double>(current) /
+                    static_cast<double>(asset->second.size),
+                u"正在下載 LoRA 訓練器…");
+        });
+    output.close();
+    throw_if_cancelled(cancelling_);
+    if (received != asset->second.size ||
+        sha256_file(archive) != asset->second.sha256)
+        throw std::runtime_error("LoRA archive SHA-256 or size mismatch");
+
+    set_status(LoraOperationStage::installing_trainer, 0.85,
+               u"正在解壓縮 LoRA 訓練器…");
+    std::string listing;
+    run_process(system_tar(), {L"-tf", archive.wstring()}, false, &listing);
+    validate_archive_listing(listing);
+    std::filesystem::create_directories(staging);
+    run_process(system_tar(),
+                {L"-xf", archive.wstring(), L"-C", staging.wstring()}, false);
+    throw_if_cancelled(cancelling_);
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(staging)) {
+        const auto attributes = GetFileAttributesW(entry.path().c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES ||
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+            throw std::runtime_error("LoRA archive contains a reparse point");
+    }
+    if (!matches_release(staging))
+        throw std::runtime_error("extracted LoRA trainer did not match the release");
+    std::filesystem::create_directories(destination.parent_path());
+    const bool had_previous = std::filesystem::exists(destination);
+    if (had_previous) std::filesystem::rename(destination, backup);
+    try {
+        std::filesystem::rename(staging, destination);
+        select_trainer(root, relative);
+    } catch (...) {
+        std::error_code ignored;
+        std::filesystem::remove_all(destination, ignored);
+        if (had_previous) {
+            std::filesystem::rename(backup, destination, ignored);
+        }
+        throw;
+    }
+    if (had_previous) {
+        std::error_code ignored;
+        std::filesystem::remove_all(backup, ignored);
+    }
+    refresh_installed_trainer();
+    std::lock_guard lock(status_mutex_);
+    status_.trainer_release_version = to_utf16(manifest.version);
+    status_.trainer_message = u"LoRA 訓練器安裝完成";
+    status_.stage = !status_.output_model_path.empty()
+        ? LoraOperationStage::completed
+        : (status_.model_available ? LoraOperationStage::model_ready
+                                   : LoraOperationStage::idle);
+    status_.message = status_.trainer_message;
+}
 int LoraTrainingManager::run_process(
     const std::filesystem::path& executable,
     const std::vector<std::wstring>& arguments,
-    bool parse_training_progress) {
+    bool parse_training_progress,
+    std::string* captured_output) {
     throw_if_cancelled(cancelling_);
     SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
     HANDLE read_pipe_raw = nullptr;
@@ -608,12 +1065,19 @@ int LoraTrainingManager::run_process(
 
     std::string pending;
     std::string last_line;
+    bool output_too_large = false;
     std::array<char, 4096> buffer{};
     for (;;) {
         DWORD read = 0;
         if (!ReadFile(read_pipe.get(), buffer.data(), static_cast<DWORD>(buffer.size()),
                       &read, nullptr) || read == 0) {
             break;
+        }
+        if (captured_output && !output_too_large) {
+            if (captured_output->size() + read > 4 * 1024 * 1024)
+                output_too_large = true;
+            else
+                captured_output->append(buffer.data(), read);
         }
         pending.append(buffer.data(), read);
         for (;;) {
@@ -650,10 +1114,12 @@ int LoraTrainingManager::run_process(
         active_process_ = nullptr;
     }
     close_handle(process.hProcess);
+    if (output_too_large)
+        throw std::runtime_error("LoRA archive listing is too large");
     if (exit_code != 0) {
         throw std::runtime_error(last_line.empty()
-            ? "llavon-lora.exe failed"
-            : "llavon-lora.exe: " + last_line);
+            ? "LoRA process failed"
+            : "LoRA process: " + last_line);
     }
     return static_cast<int>(exit_code);
 }

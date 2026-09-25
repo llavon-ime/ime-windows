@@ -94,24 +94,19 @@ jobs:
           if ($metadata.sha -notmatch '^[0-9a-f]{40}$') {
             throw "Hugging Face returned an invalid model revision: $($metadata.sha)"
           }
-          if ($model.Count -ne 1 -or $model[0].lfs.sha256 -notmatch '^[0-9a-f]{64}$') {
-            throw "Hugging Face did not return one valid LFS SHA-256 for $modelFilename"
+          if ($model.Count -ne 1 -or $model[0].lfs.sha256 -notmatch '^[0-9a-f]{64}$' -or
+              [long]$model[0].lfs.size -le 0) {
+            throw "Hugging Face did not return valid LFS metadata for $modelFilename"
           }
 
           "revision=$($metadata.sha)" >> $env:GITHUB_OUTPUT
           "sha256=$($model[0].lfs.sha256)" >> $env:GITHUB_OUTPUT
-
-      - name: Cache model download
-        uses: actions/cache@v4
-        with:
-          path: build/windows/downloads
-          key: ${{ runner.os }}-model-${{ steps.model.outputs.sha256 }}
+          "size=$($model[0].lfs.size)" >> $env:GITHUB_OUTPUT
 
       - name: Resolve LoRA Trainer release
         id: lora
         shell: pwsh
         run: |
-          $rollingManifestUrl = 'https://github.com/llavon-ime/lora-trainer/releases/download/latest/latest.json'
           $expectedCommit = (& git -C lora-trainer rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $expectedCommit -notmatch '^[0-9a-f]{40}$') {
             throw "Could not resolve the lora-trainer submodule revision: $expectedCommit"
@@ -119,96 +114,44 @@ jobs:
 
           $manifest = $null
           $attemptCount = 30
-          for ($attempt = 1; $attempt -le $attemptCount; $attempt++) {
+          for ($attempt = 1; $attempt -le $attemptCount -and $null -eq $manifest; $attempt++) {
             try {
-              $candidateUrl = "${rollingManifestUrl}?commit=$expectedCommit&attempt=$attempt"
-              $candidate = Invoke-RestMethod -Uri $candidateUrl -Headers @{ 'Cache-Control' = 'no-cache' }
-              if ($candidate.commit -eq $expectedCommit) {
-                $manifest = $candidate
-                break
+              for ($page = 1; $page -le 10 -and $null -eq $manifest; $page++) {
+                $releases = @(Invoke-RestMethod -Uri "https://api.github.com/repos/llavon-ime/lora-trainer/releases?per_page=100&page=$page")
+                if ($releases.Count -eq 0) { break }
+                foreach ($release in $releases) {
+                  if ($release.target_commitish -ne $expectedCommit -or
+                      $release.tag_name -notmatch '^v(\d{4}\.\d{2}\.\d{2}\.\d+)$') {
+                    continue
+                  }
+                  $version = $Matches[1]
+                  $url = "https://github.com/llavon-ime/lora-trainer/releases/download/$($release.tag_name)/latest.json"
+                  $candidate = Invoke-RestMethod -Uri $url
+                  if ($candidate.schema -ne 1 -or $candidate.trainerApi -ne 1 -or
+                      $candidate.commit -ne $expectedCommit -or
+                      $candidate.version -ne $version -or
+                      $null -eq $candidate.assets.'win-x64-cpu') {
+                    throw "Invalid LoRA Trainer release manifest for $($release.tag_name)"
+                  }
+                  $manifest = $candidate
+                  break
+                }
               }
-              Write-Host "Waiting for LoRA Trainer release of $expectedCommit; latest is $($candidate.commit)."
             } catch {
-              Write-Host "Waiting for the first LoRA Trainer release: $($_.Exception.Message)"
+              Write-Host "Waiting for the LoRA Trainer release: $($_.Exception.Message)"
             }
-
-            if ($attempt -lt $attemptCount) {
+            if ($null -eq $manifest -and $attempt -lt $attemptCount) {
               Start-Sleep -Seconds 30
             }
           }
-
           if ($null -eq $manifest) {
             throw "No LoRA Trainer release appeared for pinned commit $expectedCommit within 15 minutes"
           }
-          if ($manifest.schema -ne 1 -or $manifest.version -notmatch '^\d{4}\.\d{2}\.\d{2}\.\d+$') {
-            throw "LoRA Trainer returned an invalid release manifest"
-          }
-          if ($manifest.trainerApi -ne 1) {
-            throw "Unsupported LoRA Trainer API: $($manifest.trainerApi)"
-          }
-          if ($manifest.installer.sha256 -notmatch '^[0-9a-f]{64}$' -or
-              $manifest.installer.url -notmatch '^https://') {
-            throw "LoRA Trainer manifest has invalid installer metadata"
-          }
-          if ($null -eq $manifest.assets.'win-x64-cpu') {
-            throw "LoRA Trainer manifest has no win-x64-cpu asset"
-          }
-
-          $installerPath = Join-Path $PWD "build/windows/downloads/$($manifest.installer.name)"
-          New-Item -ItemType Directory -Force (Split-Path -Parent $installerPath) | Out-Null
-          Invoke-WebRequest -Uri $manifest.installer.url -OutFile $installerPath
-          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerPath).Hash.ToLowerInvariant()
-          if ($actualHash -ne $manifest.installer.sha256) {
-            Remove-Item -LiteralPath $installerPath
-            throw "LoRA web-installer SHA-256 mismatch"
-          }
-
-          $immutableManifestUrl = "https://github.com/llavon-ime/lora-trainer/releases/download/v$($manifest.version)/latest.json"
           "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
-          "manifest-url=$immutableManifestUrl" >> $env:GITHUB_OUTPUT
-          "installer-url=$($manifest.installer.url)" >> $env:GITHUB_OUTPUT
-          "installer-path=$installerPath" >> $env:GITHUB_OUTPUT
 
       - name: Create cache directories
         shell: pwsh
-        run: New-Item -ItemType Directory -Force .vcpkg-cache, build/windows/downloads | Out-Null
-
-      - name: Prepare verified model
-        shell: pwsh
-        env:
-          MODEL_REVISION: ${{ steps.model.outputs.revision }}
-          MODEL_SHA256: ${{ steps.model.outputs.sha256 }}
-        run: |
-          $modelFilename = 'llavon-ime-llama-250m-Q4_K_M.gguf'
-          $modelPath = Join-Path $PWD "build/windows/downloads/$modelFilename"
-          $revisionPath = "$modelPath.revision"
-          $partialPath = "$modelPath.partial"
-          $expectedSha256 = $env:MODEL_SHA256.ToLowerInvariant()
-
-          if (Test-Path -LiteralPath $modelPath) {
-            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $modelPath).Hash.ToLowerInvariant()
-            if ($actualSha256 -eq $expectedSha256) {
-              Set-Content -LiteralPath $revisionPath -Value $env:MODEL_REVISION -NoNewline
-              Write-Host "Model cache verified: $modelPath"
-              return
-            }
-            Remove-Item -LiteralPath $modelPath
-          }
-
-          $modelUrl = "https://huggingface.co/tony65535/llavon-ime-llama-250m-GGUF/resolve/$($env:MODEL_REVISION)/${modelFilename}?download=true"
-          try {
-            Invoke-WebRequest -Uri $modelUrl -OutFile $partialPath
-            $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $partialPath).Hash.ToLowerInvariant()
-            if ($actualSha256 -ne $expectedSha256) {
-              throw "Downloaded model SHA-256 mismatch: expected $expectedSha256, got $actualSha256"
-            }
-            Move-Item -LiteralPath $partialPath -Destination $modelPath -Force
-            Set-Content -LiteralPath $revisionPath -Value $env:MODEL_REVISION -NoNewline
-          } finally {
-            if (Test-Path -LiteralPath $partialPath) {
-              Remove-Item -LiteralPath $partialPath
-            }
-          }
+        run: New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
 
       - name: Bootstrap vcpkg
         shell: pwsh
@@ -220,10 +163,9 @@ jobs:
           cmake --preset windows
           -DVCPKG_TARGET_TRIPLET=x64-windows-cpu-dispatch
           "-DLLAVON_IME_MODEL_REVISION=${{ steps.model.outputs.revision }}"
+          "-DLLAVON_IME_MODEL_SHA256=${{ steps.model.outputs.sha256 }}"
+          "-DLLAVON_IME_MODEL_SIZE=${{ steps.model.outputs.size }}"
           "-DLLAVON_LORA_VERSION=${{ steps.lora.outputs.version }}"
-          "-DLLAVON_LORA_MANIFEST_URL=${{ steps.lora.outputs.manifest-url }}"
-          "-DLLAVON_LORA_INSTALLER_URL=${{ steps.lora.outputs.installer-url }}"
-          "-DLLAVON_LORA_INSTALLER_PATH=${{ steps.lora.outputs.installer-path }}"
 
       - name: Build web installer
         shell: pwsh

@@ -1,8 +1,8 @@
 # Packaging
 
 The top-level CMake project configures every Windows executable and DLL in one
-build graph, obtains the latest packaged model, then creates a Windows MSI with
-CPack and WiX. CI additionally wraps that MSI in a WiX Burn web installer. The
+build graph, then creates a Windows MSI with CPack and WiX. CI additionally
+wraps that MSI and a small model download helper in a WiX Burn web installer. The
 cross-platform `ime-core` repository remains a submodule, but participates in
 this build as a normal static-library target.
 
@@ -60,32 +60,26 @@ cmake --preset windows
 cmake --build --preset package --parallel
 ```
 
-Build the web setup that contains the MSI and offers the optional LoRA Trainer:
+Build the web setup that contains the MSI and downloads the default model:
 
 ```powershell
 cmake --preset windows
 cmake --build build/windows --config Release --target llavon-ime-setup --parallel
 ```
 
-The `llavon-ime-setup` target is available when the build was configured with
-`LLAVON_LORA_VERSION`, `LLAVON_LORA_MANIFEST_URL`,
-`LLAVON_LORA_INSTALLER_URL`, and `LLAVON_LORA_INSTALLER_PATH`. CI supplies
-these values. A local build directory that has already been configured with
-them can use the setup command above directly.
+CI supplies a pinned model revision, SHA-256, and size to the setup build. Local
+builds resolve the same metadata from Hugging Face when building the setup.
 
 > [!WARNING]
 > If a setup build fails, CMake may leave the previously generated
 > `*-setup.exe` in `build/windows`. Do not assume that file was refreshed.
-> Check its modification time before installing it. Not selecting the LoRA
-> Trainer checkbox only skips installing or updating the trainer; it does not
-> remove the fine-tuning UI from the core MSI.
+> Check its modification time before installing it.
 
 ## Build MSI
 
-For local packaging, CMake resolves the current Hugging Face `main` revision
-and downloads the model when that revision differs from the recorded local
-revision. CMake does not perform SHA-256 verification. The GitHub Actions
-workflow separately handles cache invalidation and SHA-256 verification for CI.
+The standalone MSI contains the application and licenses, but no GGUF model.
+Use the web setup for a normal installation. A managed MSI deployment must
+provide a GGUF model separately or configure a model path in settings.
 
 ```powershell
 cmake --preset windows
@@ -113,10 +107,7 @@ The package target performs these steps:
 - Collects vcpkg package license files from the unified manifest installation.
 - Includes the model attribution and CC BY-NC 4.0 terms in the MSI license
   agreement and as a separately installed license file.
-- Locally, resolves the current Hugging Face revision and downloads the model
-  when it changes. In CI, keys the model cache by its LFS SHA-256 and verifies
-  the downloaded file before CMake runs.
-- Packages `bin`, `tables`, `models`, and `licenses` into an x64 per-machine MSI.
+- Packages `bin`, `tables`, and `licenses` into an x64 per-machine MSI.
 - Registers `llavon-ime.dll` with `regsvr32` during install and unregisters it during uninstall.
 - Adds a per-machine startup entry for the backend service and removes it during uninstall.
 - Adds a Start menu uninstall shortcut that invokes Windows Installer for the
@@ -129,26 +120,21 @@ The package target performs these steps:
 The MSI is written under:
 
 ```text
-build/windows/llavon-ime-0.0.0.0-dev-windows.msi
+build/windows/llavon-ime-0.0.1-windows.msi
 ```
 
-GitHub Actions replaces the development version with an Asia/Taipei CalVer in
-the form `YYYY.MM.DD.GITHUB_RUN_NUMBER` and uses it in the MSI filename, the
-installed version display, update comparison, immutable `v<CalVer>` release,
-and `latest.json`. The MSI's internal Windows Installer product version remains
-independent from the public CalVer because Windows Installer applies its own
-version constraints.
+GitHub Actions publishes an Asia/Taipei CalVer in the form
+`YYYY.MM.DD.GITHUB_RUN_NUMBER` in the immutable `v<CalVer>` release and
+`latest.json`. The MSI and setup use the fixed internal version `0.0.1`.
 
-The `*-setup.exe` bundle embeds the core MSI but keeps the small LoRA
-web-installer as a remote Burn payload. Before showing its checkbox, Burn reads
-the file version of `<install-root>/tools/lora/llavon-lora.exe` and compares it
-with the trainer release selected by CI. Burn downloads the helper only after
-the user confirms installation. The helper then verifies the immutable release
-manifest, archive size, and SHA-256 before atomically replacing that fixed
-directory. Neither the helper nor the bundle writes a custom LoRA registry key.
-The standalone MSI remains available for offline and managed deployment and
-never installs the trainer. The bundle offers the `win-x64-cpu` trainer asset by
-default, so this path does not require CUDA or a CUDA Toolkit.
+The `*-setup.exe` bundle embeds the core MSI and a small model download helper.
+The helper downloads the GGUF pinned at build time, verifies its size and
+SHA-256, and stores it in `%ProgramData%\Llavon IME\models\<revision>`.
+It verifies and reuses an existing copy on subsequent installs or updates.
+The model is outside the MSI installation tree, so MSI upgrades do not remove
+it. The training dialog independently installs the LoRA Trainer ZIP for the
+release matching this build's pinned submodule commit; users can choose CPU,
+CUDA, or ROCm when the release provides the corresponding Windows asset.
 
 CI builds one CPU package using loadable ggml CPU backends. At runtime ggml
 selects the fastest compatible CPU variant, so AVX2 and AVX-512 systems use the
@@ -167,8 +153,6 @@ The installed layout is:
     llavon-ime-candidate-ui.dll
     llavon-ime-settings-ui.dll
     start-llavon-ime-service.vbs
-  models/
-    llavon-ime-llama-250m-Q4_K_M.gguf
   licenses/
     LICENSE.txt
     MODEL-LICENSE.txt
@@ -189,7 +173,9 @@ The backend service resolves paths in this order:
 
 - Explicit command line: `llavon-ime-service.exe <model-path> <tables-dir>`.
 - Environment: `LLAVON_IME_MODEL_PATH` and `LLAVON_IME_TABLES_DIR`.
-- Installed layout relative to the executable: `bin/../models` and `bin/../tables`.
+- Verified model selected by `%ProgramData%\Llavon IME\models\current.revision`;
+  tables at `bin/../tables`.
+- Legacy model at `bin/../models` when the ProgramData marker is unavailable.
 
 The frontend DLL resolves `bopomofo_char.json` in this order:
 

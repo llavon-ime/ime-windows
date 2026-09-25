@@ -1095,6 +1095,14 @@ void SettingsWindow::show_lora_training_dialog() {
         Button check_model{nullptr};
         Button download_model{nullptr};
         Button cancel{nullptr};
+        TextBlock trainer_status_title{nullptr};
+        TextBlock trainer_status_detail{nullptr};
+        TextBlock trainer_release_detail{nullptr};
+        ComboBox trainer_backend{nullptr};
+        Button check_trainer{nullptr};
+        Button install_trainer{nullptr};
+        Button cancel_trainer{nullptr};
+        ProgressBar trainer_progress{nullptr};
         Button reload_model{nullptr};
         TextBlock estimated_steps{nullptr};
         DispatcherTimer timer{nullptr};
@@ -1102,6 +1110,10 @@ void SettingsWindow::show_lora_training_dialog() {
         bool training_observed = false;
         bool model_applied = false;
         bool model_available = false;
+        bool trainer_available = false;
+        std::int32_t trainer_assets = 0;
+        bool trainer_release_available = false;
+        bool trainer_selection_initialized = false;
         bool busy = false;
         bool closed = false;
     };
@@ -1125,6 +1137,15 @@ void SettingsWindow::show_lora_training_dialog() {
     state->check_model = named<Button>(dialog_root, L"CheckModelButton");
     state->download_model = named<Button>(dialog_root, L"DownloadModelButton");
     state->cancel = named<Button>(dialog_root, L"CancelModelButton");
+    state->trainer_status_title = named<TextBlock>(dialog_root, L"TrainerStatusTitle");
+    state->trainer_status_detail = named<TextBlock>(dialog_root, L"TrainerStatusDetail");
+    state->trainer_release_detail = named<TextBlock>(dialog_root, L"TrainerReleaseDetail");
+    state->trainer_backend = named<ComboBox>(dialog_root, L"TrainerBackend");
+    state->check_trainer = named<Button>(dialog_root, L"CheckTrainerButton");
+    state->install_trainer = named<Button>(dialog_root, L"InstallTrainerButton");
+    state->cancel_trainer = named<Button>(dialog_root, L"CancelTrainerButton");
+    state->trainer_progress = named<ProgressBar>(dialog_root, L"TrainerProgress");
+    state->trainer_backend.SelectedIndex(0);
     state->training_summary = named<TextBlock>(dialog_root, L"TrainingSummary");
     state->training_data_button = named<Button>(dialog_root, L"TrainingDataButton");
     state->training_history_button = named<Button>(dialog_root, L"TrainingHistoryButton");
@@ -1437,7 +1458,8 @@ void SettingsWindow::show_lora_training_dialog() {
         state->training_data_button.IsEnabled(state->active_count != 0);
         state->primary_button.IsEnabled(
             state->selecting_training_data ||
-            (!state->busy && state->model_available && state->active_count != 0));
+            (!state->busy && state->model_available && state->trainer_available &&
+             state->active_count != 0));
         refresh_estimated_steps();
     };
     *refresh_training_count = refresh_training_selection;
@@ -1470,6 +1492,42 @@ void SettingsWindow::show_lora_training_dialog() {
             configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
         }
     });
+    const auto update_trainer_choice = [state] {
+        const auto index = state->trainer_backend.SelectedIndex();
+        const bool asset_available = index >= 0 && index < 3 &&
+            (state->trainer_assets & (1 << index)) != 0;
+        state->install_trainer.IsEnabled(
+            !state->busy && state->trainer_release_available && asset_available);
+        if (state->trainer_release_available && !asset_available) {
+            state->trainer_release_detail.Text(
+                L"此 submodule 的發行版沒有選定的 Windows 訓練器下載檔。");
+        }
+    };
+    state->trainer_backend.SelectionChanged(
+        [update_trainer_choice](const auto&, const auto&) { update_trainer_choice(); });
+    state->check_trainer.Click([this, state](const auto&, const auto&) {
+        const auto result = configuration_.lora_model_action_callback
+            ? configuration_.lora_model_action_callback(
+                configuration_.lora_model_action_context, LLAVON_LORA_CHECK_TRAINER)
+            : ERROR_INVALID_FUNCTION;
+        if (result != ERROR_SUCCESS)
+            state->trainer_status_detail.Text(L"無法開始檢查 LoRA 訓練器。");
+    });
+    state->install_trainer.Click([this, state](const auto&, const auto&) {
+        const auto index = state->trainer_backend.SelectedIndex();
+        if (index < 0 || index > 2) return;
+        const auto result = configuration_.lora_model_action_callback
+            ? configuration_.lora_model_action_callback(
+                configuration_.lora_model_action_context,
+                LLAVON_LORA_INSTALL_CPU + index)
+            : ERROR_INVALID_FUNCTION;
+        if (result != ERROR_SUCCESS)
+            state->trainer_status_detail.Text(L"無法開始下載 LoRA 訓練器。");
+    });
+    state->cancel_trainer.Click([this](const auto&, const auto&) {
+        if (configuration_.cancel_lora_callback)
+            configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
+    });
     const auto refresh_apply_state = [state] {
         const bool pending = !state->output_model_path.empty() &&
                              !state->model_applied;
@@ -1501,7 +1559,8 @@ void SettingsWindow::show_lora_training_dialog() {
         apply_new_model();
     });
 
-    const auto refresh_status = [this, state, refresh_training_selection, refresh_apply_state] {
+    const auto refresh_status = [this, state, refresh_training_selection,
+                                 refresh_apply_state, update_trainer_choice] {
         llavon_settings_lora_status status{};
         const std::int32_t result = configuration_.get_lora_status_callback
             ? configuration_.get_lora_status_callback(
@@ -1518,7 +1577,9 @@ void SettingsWindow::show_lora_training_dialog() {
                           status.stage == LLAVON_SETTINGS_LORA_DOWNLOADING_MODEL ||
                           status.stage == LLAVON_SETTINGS_LORA_PREPARING_DATA ||
                           status.stage == LLAVON_SETTINGS_LORA_TRAINING ||
-                          status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL;
+                          status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL ||
+                          status.stage == LLAVON_SETTINGS_LORA_CHECKING_TRAINER ||
+                          status.stage == LLAVON_SETTINGS_LORA_INSTALLING_TRAINER;
         const bool checking_model =
             status.stage == LLAVON_SETTINGS_LORA_CHECKING_MODEL;
         const bool downloading_model =
@@ -1530,6 +1591,57 @@ void SettingsWindow::show_lora_training_dialog() {
         if (training_busy) state->training_observed = true;
         state->busy = busy;
         state->model_available = status.model_available != 0;
+        state->trainer_available = status.trainer_available != 0;
+        if (!state->trainer_selection_initialized && status.trainer_backend &&
+            *status.trainer_backend) {
+            const std::u16string_view backend(status.trainer_backend);
+            state->trainer_backend.SelectedIndex(
+                backend == u"cpu" ? 0 :
+                (backend.find(u"rocm") != std::u16string_view::npos ? 2 :
+                 (backend.find(u"cuda") != std::u16string_view::npos ? 1 : 0)));
+            state->trainer_selection_initialized = true;
+        }
+        state->trainer_assets = status.trainer_assets;
+        state->trainer_release_available =
+            status.trainer_release_version && *status.trainer_release_version;
+        const bool trainer_busy =
+            status.stage == LLAVON_SETTINGS_LORA_CHECKING_TRAINER ||
+            status.stage == LLAVON_SETTINGS_LORA_INSTALLING_TRAINER;
+        const auto wide_text = [](const char16_t* value) {
+            std::wstring result;
+            if (value) {
+                for (; *value; ++value)
+                    result.push_back(static_cast<wchar_t>(*value));
+            }
+            return result;
+        };
+        const auto installed_version = status.trainer_version && *status.trainer_version
+            ? wide_text(status.trainer_version) : std::wstring(L"未知版本");
+        const auto installed_backend = status.trainer_backend && *status.trainer_backend
+            ? wide_text(status.trainer_backend) : std::wstring(L"未知後端");
+        state->trainer_status_title.Text(status.trainer_available
+            ? L"已安裝 " + installed_version + L"（" + installed_backend + L"）"
+            : L"尚未安裝 LoRA 訓練器");
+        const auto trainer_detail = trainer_busy ? status.message
+                                                 : status.trainer_message;
+        state->trainer_status_detail.Text(trainer_detail
+            ? to_hstring(std::u16string_view(trainer_detail)) : L"");
+        if (state->trainer_release_available) {
+            state->trainer_release_detail.Text(
+                L"目前 submodule 對應發行版：" +
+                wide_text(status.trainer_release_version));
+        } else {
+            state->trainer_release_detail.Text(L"尚未找到目前 submodule 對應的發行版。");
+        }
+        state->trainer_progress.Visibility(trainer_busy
+            ? Visibility::Visible : Visibility::Collapsed);
+        state->trainer_progress.IsIndeterminate(trainer_busy);
+        state->check_trainer.IsEnabled(!busy);
+        state->trainer_backend.IsEnabled(!busy);
+        state->cancel_trainer.Visibility(
+            status.stage == LLAVON_SETTINGS_LORA_INSTALLING_TRAINER
+                ? Visibility::Visible : Visibility::Collapsed);
+        update_trainer_choice();
 
         state->progress.Visibility(
             training_busy ? Visibility::Visible : Visibility::Collapsed);
@@ -1587,7 +1699,7 @@ void SettingsWindow::show_lora_training_dialog() {
             downloading_model ? Visibility::Visible : Visibility::Collapsed);
         refresh_training_selection();
         const std::u16string completed_model_path =
-            status.stage == LLAVON_SETTINGS_LORA_COMPLETED && status.output_model_path
+            status.output_model_path
                 ? status.output_model_path : u"";
         if (!completed_model_path.empty() &&
             configuration_.model_path != completed_model_path) {
@@ -1596,7 +1708,7 @@ void SettingsWindow::show_lora_training_dialog() {
             update_model_path_save_state();
         }
         const bool completed_for_dialog =
-            status.stage == LLAVON_SETTINGS_LORA_COMPLETED &&
+            !completed_model_path.empty() &&
             state->training_observed;
         const std::u16string output_model_path =
             completed_for_dialog ? completed_model_path : u"";
@@ -1781,6 +1893,9 @@ void SettingsWindow::show_lora_training_dialog() {
     shell_.Children().GetAt(0).as<Control>().IsEnabled(false);
     shell_.Children().Append(state->overlay);
     lora_dialog_open_ = true;
+    if (configuration_.lora_model_action_callback)
+        configuration_.lora_model_action_callback(
+            configuration_.lora_model_action_context, LLAVON_LORA_CHECK_TRAINER);
 }
 
 void SettingsWindow::add_custom_name_row(
