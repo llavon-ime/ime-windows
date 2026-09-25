@@ -35,7 +35,6 @@
         -->
         <RemoveFile Id="RemoveLlavonImeRootFiles" Directory="INSTALL_ROOT" Name="*" On="uninstall" />
         <RemoveFile Id="RemoveLlavonImeBinFiles" Directory="CM_DP_Runtime.bin" Name="*" On="uninstall" />
-        <RemoveFile Id="RemoveLlavonImeModelFiles" Directory="CM_DP_Runtime.models" Name="*" On="uninstall" />
         <RemoveFile Id="RemoveLlavonImeTableFiles" Directory="CM_DP_Runtime.tables" Name="*" On="uninstall" />
         <RemoveFile Id="RemoveLlavonImeTokenFiles" Directory="CM_DP_Runtime.tables.tokens" Name="*" On="uninstall" />
         <RemoveFile Id="RemoveLlavonImeLicenseFiles" Directory="CM_DP_Runtime.licenses" Name="*" On="uninstall" />
@@ -44,7 +43,6 @@
         <RemoveFolder Id="RemoveLlavonImeTokensFolder" Directory="CM_DP_Runtime.tables.tokens" On="uninstall" />
         <RemoveFolder Id="RemoveLlavonImeVcpkgLicensesFolder" Directory="CM_DP_Runtime.licenses.vcpkg" On="uninstall" />
         <RemoveFolder Id="RemoveLlavonImeBinFolder" Directory="CM_DP_Runtime.bin" On="uninstall" />
-        <RemoveFolder Id="RemoveLlavonImeModelsFolder" Directory="CM_DP_Runtime.models" On="uninstall" />
         <RemoveFolder Id="RemoveLlavonImeTablesFolder" Directory="CM_DP_Runtime.tables" On="uninstall" />
         <RemoveFolder Id="RemoveLlavonImeLicensesFolder" Directory="CM_DP_Runtime.licenses" On="uninstall" />
         <RemoveFolder Id="RemoveLlavonImeInstallRoot" Directory="INSTALL_ROOT" On="uninstall" />
