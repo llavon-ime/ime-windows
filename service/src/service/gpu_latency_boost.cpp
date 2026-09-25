@@ -88,7 +88,7 @@ winrt::com_ptr<IDXGIAdapter1> find_adapter(std::string_view device_id) {
     if (!address) return {};
 
     winrt::com_ptr<IDXGIFactory1> factory;
-    winrt::check_hresult(CreateDXGIFactory1(__uuidof(IDXGIFactory1), factory.put_void()));
+    factory.capture(CreateDXGIFactory1);
 
     for (UINT index = 0;; ++index) {
         winrt::com_ptr<IDXGIAdapter1> adapter;
