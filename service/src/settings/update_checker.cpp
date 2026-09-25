@@ -132,6 +132,31 @@ bool is_commit_id(std::wstring_view value) noexcept {
     return true;
 }
 
+bool is_sha256(std::wstring_view value) noexcept {
+    if (value.size() != 64) return false;
+    for (const wchar_t character : value) {
+        if (!((character >= L'0' && character <= L'9') ||
+              (character >= L'a' && character <= L'f'))) return false;
+    }
+    return true;
+}
+
+bool is_release_setup_url(std::wstring_view url, std::wstring_view version) {
+    const std::wstring prefix =
+        L"https://github.com/llavon-ime/ime-windows/releases/download/v" +
+        std::wstring(version) + L"/";
+    if (!url.starts_with(prefix)) return false;
+    const auto filename = url.substr(prefix.size());
+    if (filename.size() < 5 || !filename.ends_with(L".exe")) return false;
+    for (const wchar_t character : filename) {
+        if (character == L'/' || character == L'\\' || character == L'?' ||
+            character == L'#' || character < 0x21 || character > 0x7e) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::uint64_t json_unsigned(const JsonObject& json, const wchar_t* name) {
     const double value = json.GetNamedNumber(name);
     if (!std::isfinite(value) || value < 0 || value > largest_exact_json_integer ||
@@ -189,6 +214,20 @@ UpdateCheckResult perform_check() {
     if (!is_commit_id(result.latest_commit) || result.latest_build == 0 ||
         !parsed_latest_version) {
         throw std::runtime_error("latest.json contains invalid build identity");
+    }
+    // Existing schema-1 releases have no setup field. They remain readable so
+    // development builds can check for updates before the first new release.
+    if (manifest.HasKey(L"setup")) {
+        const auto setup = manifest.GetNamedObject(L"setup");
+        const auto remote_url = setup.GetNamedString(L"url");
+        result.setup_url.assign(remote_url.c_str(), remote_url.size());
+        const auto remote_sha256 = setup.GetNamedString(L"sha256");
+        result.setup_sha256.assign(remote_sha256.c_str(), remote_sha256.size());
+        result.setup_size = json_unsigned(setup, L"size");
+        if (!is_release_setup_url(result.setup_url, result.latest_version) ||
+            !is_sha256(result.setup_sha256) || result.setup_size == 0) {
+            throw std::runtime_error("latest.json contains invalid setup metadata");
+        }
     }
 
     // The installed WiX version is fixed; release tags are display metadata.

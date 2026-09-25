@@ -68,7 +68,7 @@
         <TextBlock x:Name="BuildLabel" FontSize="14" TextWrapping="Wrap" />
         <StackPanel Orientation="Horizontal" Spacing="12">
           <Button x:Name="UpdateButton" Content="檢查更新" MinWidth="112" MinHeight="32" FontSize="14" />
-          <HyperlinkButton x:Name="UpdateDownload" Visibility="Collapsed" MinHeight="32" FontSize="14" />
+          <Button x:Name="UpdateInstall" Content="立即更新" Visibility="Collapsed" MinHeight="32" FontSize="14" Style="{StaticResource AccentButtonStyle}" />
         </StackPanel>
         <TextBlock x:Name="UpdateStatus" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="開啟設定時會自動與 latest 建置比較。" FontSize="12" TextWrapping="Wrap" />
       </StackPanel>

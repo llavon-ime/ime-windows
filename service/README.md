@@ -52,6 +52,14 @@ The service also owns the interactive per-user process shell:
   their commit differs from `latest`, without guessing which commit is newer.
   The HTTP request runs on a settings worker and is canceled after two seconds,
   so a slow GitHub response never blocks the UI thread.
+- Downloading and installing an update starts only after the user clicks
+  **Update now**. The release manifest supplies the setup URL, byte size, and
+  SHA-256; the settings worker verifies the download before starting the WiX
+  setup silently with a UAC prompt for per-machine installation. The MSI keeps
+  its fixed version so local and published builds can replace each other. The
+  MSI releases the backend and TSF processor before checking for files in use;
+  other apps are left running. Windows may need a restart if an app still holds
+  the old TSF DLL.
 
 The settings and candidate modules are intentionally separate DLLs rather than
 additional executables. They do not share an HWND or STA thread.

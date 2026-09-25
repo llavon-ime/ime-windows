@@ -64,6 +64,7 @@ using namespace winrt::Microsoft::UI::Xaml::Media;
 
 constexpr wchar_t window_class_name[] = L"LlavonImeSettingsWindow";
 constexpr UINT update_result_message = WM_APP + 10;
+constexpr UINT update_install_message = WM_APP + 11;
 constexpr double body_text_size = 14;
 constexpr double caption_text_size = 12;
 constexpr std::size_t training_page_size = 100;
@@ -498,7 +499,7 @@ void SettingsWindow::show() noexcept {
     } catch (...) {
         OutputDebugStringW(L"[settings-ui] unable to focus WinUI island\n");
     }
-    begin_update_check();
+    if (!update_installer_.installing()) begin_update_check();
 }
 
 void SettingsWindow::set_pending_count(std::size_t count) {
@@ -550,6 +551,12 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
         if (result) {
             apply_update_result(std::move(*result));
         }
+        return 0;
+    }
+    if (message == update_install_message) {
+        std::unique_ptr<UpdateInstallEvent> event(
+            reinterpret_cast<UpdateInstallEvent*>(lparam));
+        if (event) apply_update_install_event(std::move(*event));
         return 0;
     }
 
@@ -835,7 +842,8 @@ void SettingsWindow::build_page() {
     named<TextBlock>(shell_, L"BuildLabel").Text(build_label);
     update_button_ = named<Button>(shell_, L"UpdateButton");
     update_button_.Click([this](const auto&, const auto&) { begin_update_check(); });
-    update_download_ = named<HyperlinkButton>(shell_, L"UpdateDownload");
+    update_install_ = named<Button>(shell_, L"UpdateInstall");
+    update_install_.Click([this](const auto&, const auto&) { begin_update_install(); });
     update_status_ = named<TextBlock>(shell_, L"UpdateStatus");
     xaml_source_.Content(shell_);
 }
@@ -2254,15 +2262,17 @@ void SettingsWindow::update_inference_save_state() {
 }
 
 void SettingsWindow::begin_update_check() {
-    if (!update_button_ || !update_status_ || !update_target_) {
+    if (!update_button_ || !update_status_ || !update_target_ ||
+        update_installer_.installing()) {
         return;
     }
 
     update_button_.IsEnabled(false);
     update_status_.Text(L"正在檢查 latest 建置…");
     set_update_status_tone(UpdateStatusTone::secondary);
-    if (update_download_) {
-        update_download_.Visibility(Visibility::Collapsed);
+    available_setup_.reset();
+    if (update_install_) {
+        update_install_.Visibility(Visibility::Collapsed);
     }
 
     const auto target = update_target_;
@@ -2280,7 +2290,7 @@ void SettingsWindow::begin_update_check() {
 }
 
 void SettingsWindow::apply_update_result(UpdateCheckResult result) {
-    if (!update_button_ || !update_status_ || !update_download_) {
+    if (!update_button_ || !update_status_ || !update_install_) {
         return;
     }
 
@@ -2293,11 +2303,15 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::update_available);
 
-            const std::wstring download =
-                L"下載 " + result.latest_version;
-            update_download_.Content(winrt::box_value(download));
-            update_download_.NavigateUri(winrt::Windows::Foundation::Uri(result.release_url));
-            update_download_.Visibility(Visibility::Visible);
+            if (!result.setup_url.empty()) {
+                available_setup_ = SetupAsset{
+                    std::move(result.setup_url), std::move(result.setup_sha256),
+                    result.setup_size};
+                update_install_.Visibility(Visibility::Visible);
+            } else {
+                update_status_.Text(status + L"此發佈尚未提供內建更新資訊。");
+                update_install_.Visibility(Visibility::Collapsed);
+            }
             break;
         }
         case UpdateCheckStatus::up_to_date: {
@@ -2307,7 +2321,7 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
                 L"。";
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::success);
-            update_download_.Visibility(Visibility::Collapsed);
+            update_install_.Visibility(Visibility::Collapsed);
             break;
         }
         case UpdateCheckStatus::local_newer: {
@@ -2316,7 +2330,7 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
                 L" 比 latest Build " + std::to_wstring(result.latest_build) + L" 新。";
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::information);
-            update_download_.Visibility(Visibility::Collapsed);
+            update_install_.Visibility(Visibility::Collapsed);
             break;
         }
         case UpdateCheckStatus::development_build: {
@@ -2326,18 +2340,65 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
                 short_commit(result.latest_commit) + L"）不同，無法判斷新舊。";
             update_status_.Text(status);
             set_update_status_tone(UpdateStatusTone::secondary);
-            const std::wstring download =
-                L"下載 " + result.latest_version;
-            update_download_.Content(winrt::box_value(download));
-            update_download_.NavigateUri(winrt::Windows::Foundation::Uri(result.release_url));
-            update_download_.Visibility(Visibility::Visible);
+            if (!result.setup_url.empty()) {
+                available_setup_ = SetupAsset{
+                    std::move(result.setup_url), std::move(result.setup_sha256),
+                    result.setup_size};
+                update_install_.Visibility(Visibility::Visible);
+            } else {
+                update_status_.Text(status + L"此發佈尚未提供內建更新資訊。");
+                update_install_.Visibility(Visibility::Collapsed);
+            }
             break;
         }
         case UpdateCheckStatus::failed:
         default:
             update_status_.Text(L"無法檢查更新：" + result.error_message);
             set_update_status_tone(UpdateStatusTone::error);
-            update_download_.Visibility(Visibility::Collapsed);
+            update_install_.Visibility(Visibility::Collapsed);
+            break;
+    }
+}
+
+void SettingsWindow::begin_update_install() {
+    if (!available_setup_ || !update_target_) return;
+    update_button_.IsEnabled(false);
+    update_install_.IsEnabled(false);
+    update_status_.Text(L"正在下載更新…");
+    set_update_status_tone(UpdateStatusTone::secondary);
+    const auto target = update_target_;
+    if (!update_installer_.install_async(*available_setup_, [target](UpdateInstallEvent event) {
+            auto pending = std::make_unique<UpdateInstallEvent>(std::move(event));
+            std::lock_guard lock(target->mutex);
+            if (target->window &&
+                PostMessageW(target->window, update_install_message, 0,
+                             reinterpret_cast<LPARAM>(pending.get()))) {
+                pending.release();
+            }
+        })) {
+        update_status_.Text(L"更新已在進行中。");
+    }
+}
+
+void SettingsWindow::apply_update_install_event(UpdateInstallEvent event) {
+    if (!update_status_) return;
+    switch (event.stage) {
+        case UpdateInstallStage::downloading:
+            update_status_.Text(L"正在下載更新：" +
+                std::to_wstring(event.received * 100 / event.total) + L"%");
+            break;
+        case UpdateInstallStage::launching:
+            update_status_.Text(L"下載完成，正在等待 Windows 授權…");
+            break;
+        case UpdateInstallStage::launched:
+            update_status_.Text(L"更新程式已在背景執行；若其他程式仍占用輸入法檔案，可能需要重新啟動 Windows。");
+            set_update_status_tone(UpdateStatusTone::information);
+            break;
+        case UpdateInstallStage::failed:
+            update_status_.Text(L"更新失敗：" + event.error);
+            set_update_status_tone(UpdateStatusTone::error);
+            update_button_.IsEnabled(true);
+            update_install_.IsEnabled(true);
             break;
     }
 }
@@ -2357,6 +2418,9 @@ void SettingsWindow::discard_pending_update_results() noexcept {
     MSG message{};
     while (PeekMessageW(&message, window_, update_result_message, update_result_message, PM_REMOVE)) {
         delete reinterpret_cast<UpdateCheckResult*>(message.lParam);
+    }
+    while (PeekMessageW(&message, window_, update_install_message, update_install_message, PM_REMOVE)) {
+        delete reinterpret_cast<UpdateInstallEvent*>(message.lParam);
     }
 }
 
@@ -2456,7 +2520,7 @@ void SettingsWindow::close_xaml() noexcept {
     save_inference_button_ = nullptr;
     update_button_ = nullptr;
     update_status_ = nullptr;
-    update_download_ = nullptr;
+    update_install_ = nullptr;
     note_ = nullptr;
     custom_name_rows_.clear();
     custom_names_panel_ = nullptr;

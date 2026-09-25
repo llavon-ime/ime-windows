@@ -2,7 +2,7 @@
   <CPackWiXFragment Id="#PRODUCT">
     <!--
       This helper is embedded in the MSI so the first upgrade from an older
-      release can stop its service and unload its DLL before InstallFiles runs.
+      release can stop its service and unload its DLL before file costing runs.
       As an immediate, impersonated action it executes on the interactive
       user's desktop, which is the scope required by TF_IPPMF_FORSESSION.
     -->
@@ -12,7 +12,7 @@
     <CustomAction
       Id="ReleaseLlavonImeForUpgrade"
       BinaryRef="LlavonImeLifecycleHelper"
-      ExeCommand="prepare-update &quot;[INSTALL_ROOT]bin\llavon-ime-service.exe&quot;"
+      ExeCommand="prepare-update-product &quot;[WIX_UPGRADE_DETECTED]&quot;"
       Execute="immediate"
       Impersonate="yes"
       Return="check" />
@@ -52,7 +52,9 @@
       Impersonate="yes"
       Return="check" />
     <InstallExecuteSequence>
-      <Custom Action="ReleaseLlavonImeForUpgrade" After="InstallValidate"
+      <!-- FileCost can record locked files before InstallValidate displays them.
+           Release the installed service and TSF DLL before costing starts. -->
+      <Custom Action="ReleaseLlavonImeForUpgrade" After="FindRelatedProducts"
               Condition="WIX_UPGRADE_DETECTED" />
       <Custom Action="ClearLlavonImeUpdateGateOnRollback" After="InstallInitialize"
               Condition="WIX_UPGRADE_DETECTED" />

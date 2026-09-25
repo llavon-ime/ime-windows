@@ -27,6 +27,9 @@
             DowngradeErrorMessage="已安裝較新版本的 [ProductName]，無法安裝此版本。"/>
 
         <WixVariable Id="WixUILicenseRtf" Value="$(var.CPACK_WIX_LICENSE_RTF)"/>
+        <!-- Leave host applications running; quiet upgrades may need a reboot
+             when a process still holds the in-process TSF DLL. -->
+        <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable"/>
         <Property Id="WIXUI_INSTALLDIR" Value="INSTALL_ROOT"/>
 
         <?ifdef CPACK_WIX_PRODUCT_ICON?>

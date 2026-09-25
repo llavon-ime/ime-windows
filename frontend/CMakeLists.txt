@@ -69,6 +69,7 @@ target_link_libraries(llavon-ime PRIVATE
 )
 target_link_libraries(llavon-ime-lifecycle PRIVATE
     advapi32
+    msi
     ole32
     shell32
     uuid

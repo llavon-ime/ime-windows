@@ -26,6 +26,9 @@ struct UpdateCheckResult {
     std::wstring current_version;
     std::wstring latest_version;
     std::wstring release_url;
+    std::wstring setup_url;
+    std::wstring setup_sha256;
+    std::uint64_t setup_size = 0;
     std::wstring error_message;
 };
 

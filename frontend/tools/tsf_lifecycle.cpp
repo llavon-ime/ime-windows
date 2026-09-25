@@ -1,10 +1,12 @@
 #include <msctf.h>
+#include <msi.h>
 #include <objbase.h>
 #include <sddl.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include <windows.h>
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -274,6 +276,34 @@ HRESULT find_service_processes(std::wstring_view expected_path,
     return error == ERROR_NO_MORE_FILES ? S_OK : HRESULT_FROM_WIN32(error);
 }
 
+HRESULT installed_service_path(std::wstring_view product_codes,
+                               std::wstring& service_path) {
+    while (!product_codes.empty()) {
+        const auto separator = product_codes.find(L';');
+        const std::wstring product_code(product_codes.substr(0, separator));
+        DWORD length = 0;
+        const UINT result = MsiGetProductInfoW(
+            product_code.c_str(), INSTALLPROPERTY_INSTALLLOCATION, nullptr, &length);
+        if ((result == ERROR_SUCCESS || result == ERROR_MORE_DATA) && length > 0) {
+            std::wstring location(length + 1, L'\0');
+            DWORD capacity = static_cast<DWORD>(location.size());
+            const UINT read_result = MsiGetProductInfoW(
+                product_code.c_str(), INSTALLPROPERTY_INSTALLLOCATION,
+                location.data(), &capacity);
+            if (read_result != ERROR_SUCCESS) {
+                return HRESULT_FROM_WIN32(read_result);
+            }
+            location.resize(capacity);
+            service_path = (std::filesystem::path(location) / L"bin" /
+                            L"llavon-ime-service.exe").wstring();
+            return S_OK;
+        }
+        if (separator == std::wstring_view::npos) break;
+        product_codes.remove_prefix(separator + 1);
+    }
+    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+}
+
 HRESULT stop_service(std::wstring_view service_path) noexcept {
     try {
         std::vector<ServiceProcess> processes;
@@ -371,6 +401,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     wchar_t** arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count);
     if (!arguments || argument_count != 3 ||
         (std::wstring_view(arguments[1]) != L"prepare-update" &&
+         std::wstring_view(arguments[1]) != L"prepare-update-product" &&
          std::wstring_view(arguments[1]) != L"prepare-uninstall" &&
          std::wstring_view(arguments[1]) != L"start-service" &&
          std::wstring_view(arguments[1]) != L"restart-service" &&
@@ -383,8 +414,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
 
     const std::wstring operation = arguments[1];
-    const std::wstring service_path = arguments[2];
+    std::wstring service_path = arguments[2];
     LocalFree(arguments);
+
+    if (operation == L"prepare-update-product") {
+        std::wstring installed_path;
+        const HRESULT result = installed_service_path(service_path, installed_path);
+        if (FAILED(result)) return exit_code_from_hresult(result);
+        service_path = std::move(installed_path);
+    }
 
     if (operation == L"start-service") {
         return tsf::launch_process_with_shell_parent(service_path)
@@ -399,7 +437,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return ERROR_SUCCESS;
     }
 
-    const bool updating = operation == L"prepare-update";
+    const bool updating = operation == L"prepare-update" ||
+                          operation == L"prepare-update-product";
     if (updating) {
         const HRESULT guard_result = begin_update_guard(service_path);
         if (FAILED(guard_result)) return exit_code_from_hresult(guard_result);

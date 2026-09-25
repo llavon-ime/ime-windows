@@ -193,7 +193,7 @@ jobs:
 
       - name: Show web installer
         shell: pwsh
-        run: Get-Item build/windows/llavon-ime-0.0.1-setup.exe | Select-Object FullName, Length, LastWriteTime
+        run: Get-ChildItem build/windows -Filter *.exe | Select-Object FullName, Length, LastWriteTime
 
       - name: Upload MSI
         uses: actions/upload-artifact@v4
@@ -207,7 +207,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llavon-ime-windows-setup
-          path: build/windows/llavon-ime-0.0.1-setup.exe
+          path: build/windows/*.exe
           if-no-files-found: error
           retention-days: 14
 
@@ -245,7 +245,7 @@ jobs:
             throw "Expected one MSI, found $($msis.Count)"
           }
           $msi = $msis[0]
-          $setups = @(Get-ChildItem release-assets -Filter *-setup.exe | Sort-Object Name)
+          $setups = @(Get-ChildItem release-assets -Filter *.exe | Sort-Object Name)
           if ($setups.Count -ne 1) {
             throw "Expected one web installer, found $($setups.Count)"
           }
@@ -254,18 +254,7 @@ jobs:
           $manifestPath = Join-Path $PWD "latest.json"
           $releaseVersion = "${{ needs.build-msi.outputs.release-version }}"
           $releaseTag = "v$releaseVersion"
-          $manifest = [ordered]@{
-            schema = 1
-            version = $releaseVersion
-            build = [long]"${{ github.run_number }}"
-            commit = "${{ github.sha }}"
-            published_at = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8)).ToString("o")
-          } | ConvertTo-Json -Compress
-          [System.IO.File]::WriteAllText(
-            $manifestPath,
-            $manifest,
-            [System.Text.UTF8Encoding]::new($false)
-          )
+          $setupSha256 = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 
           gh release view $releaseTag --json targetCommitish *> $null
           if ($LASTEXITCODE -eq 0) {
@@ -273,17 +262,50 @@ jobs:
             if ($targetCommit -ne "${{ github.sha }}") {
               throw "$releaseTag already exists for another commit: $targetCommit"
             }
-            gh release upload $releaseTag $setup.FullName $msi.FullName $manifestPath --clobber
+            gh release upload $releaseTag $setup.FullName $msi.FullName --clobber
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
             gh release edit $releaseTag --notes-file .github/release-notes.md
           } else {
-            gh release create $releaseTag $setup.FullName $msi.FullName $manifestPath `
+            gh release create $releaseTag $setup.FullName $msi.FullName `
               --target "${{ github.sha }}" `
               --title "Llavon IME $releaseVersion" `
               --notes-file .github/release-notes.md
           }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $release = gh api "repos/${{ github.repository }}/releases/tags/$releaseTag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $matchingAssets = @($release.assets | Where-Object {
+            $_.digest -eq "sha256:$setupSha256" -and $_.size -eq $setup.Length
+          })
+          if ($matchingAssets.Count -ne 1) {
+            throw "Could not identify the uploaded setup asset by SHA-256 and size"
+          }
+          $setupUrl = $matchingAssets[0].browser_download_url
+          $manifest = [ordered]@{
+            schema = 1
+            version = $releaseVersion
+            build = [long]"${{ github.run_number }}"
+            commit = "${{ github.sha }}"
+            published_at = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8)).ToString("o")
+            setup = [ordered]@{
+              url = $setupUrl
+              size = [long]$setup.Length
+              sha256 = $setupSha256
+            }
+          } | ConvertTo-Json -Depth 4 -Compress
+          [System.IO.File]::WriteAllText(
+            $manifestPath,
+            $manifest,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          gh release upload $releaseTag $manifestPath --clobber
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }

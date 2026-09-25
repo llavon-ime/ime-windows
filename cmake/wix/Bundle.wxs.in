@@ -35,7 +35,11 @@
           Id="LlavonImeMsi"
           SourceFile="@LLAVON_IME_MSI_PATH@"
           Compressed="yes"
-          Visible="no" />
+          Visible="no">
+        <!-- Residual TSF DLL references must not make Restart Manager close
+             unrelated apps such as browsers or document editors. -->
+        <MsiProperty Name="MSIRESTARTMANAGERCONTROL" Value="Disable" />
+      </MsiPackage>
 
     </Chain>
   </Bundle>

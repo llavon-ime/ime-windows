@@ -2,6 +2,7 @@
 
 #include "settings_configuration.hpp"
 #include "update_checker.hpp"
+#include "update_installer.hpp"
 
 #include <windows.h>
 #include <winrt/Microsoft.UI.Content.h>
@@ -12,6 +13,7 @@
 #include <winrt/base.h>
 
 #include <memory>
+#include <optional>
 #include <functional>
 #include <string>
 #include <utility>
@@ -64,6 +66,8 @@ private:
     const std::vector<std::u16string>& lookup_bopomofo(char32_t character) const;
     void begin_update_check();
     void apply_update_result(UpdateCheckResult result);
+    void begin_update_install();
+    void apply_update_install_event(UpdateInstallEvent event);
     void deactivate_update_target() noexcept;
     void discard_pending_update_results() noexcept;
     void resize_island() const noexcept;
@@ -97,7 +101,7 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::Button save_inference_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button update_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock update_status_{nullptr};
-    winrt::Microsoft::UI::Xaml::Controls::HyperlinkButton update_download_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button update_install_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::StackPanel custom_names_panel_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button add_custom_name_button_{nullptr};
@@ -131,6 +135,8 @@ private:
     struct UpdateNotificationTarget;
     std::shared_ptr<UpdateNotificationTarget> update_target_;
     UpdateChecker update_checker_;
+    UpdateInstaller update_installer_;
+    std::optional<SetupAsset> available_setup_;
 };
 
 }  // namespace llavon::settings
