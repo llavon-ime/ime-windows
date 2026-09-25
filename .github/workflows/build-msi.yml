@@ -103,52 +103,6 @@ jobs:
           "sha256=$($model[0].lfs.sha256)" >> $env:GITHUB_OUTPUT
           "size=$($model[0].lfs.size)" >> $env:GITHUB_OUTPUT
 
-      - name: Resolve LoRA Trainer release
-        id: lora
-        shell: pwsh
-        run: |
-          $expectedCommit = (& git -C lora-trainer rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $expectedCommit -notmatch '^[0-9a-f]{40}$') {
-            throw "Could not resolve the lora-trainer submodule revision: $expectedCommit"
-          }
-
-          $manifest = $null
-          $attemptCount = 30
-          for ($attempt = 1; $attempt -le $attemptCount -and $null -eq $manifest; $attempt++) {
-            try {
-              for ($page = 1; $page -le 10 -and $null -eq $manifest; $page++) {
-                $releases = @(Invoke-RestMethod -Uri "https://api.github.com/repos/llavon-ime/lora-trainer/releases?per_page=100&page=$page")
-                if ($releases.Count -eq 0) { break }
-                foreach ($release in $releases) {
-                  if ($release.target_commitish -ne $expectedCommit -or
-                      $release.tag_name -notmatch '^v(\d{4}\.\d{2}\.\d{2}\.\d+)$') {
-                    continue
-                  }
-                  $version = $Matches[1]
-                  $url = "https://github.com/llavon-ime/lora-trainer/releases/download/$($release.tag_name)/latest.json"
-                  $candidate = Invoke-RestMethod -Uri $url
-                  if ($candidate.schema -ne 1 -or $candidate.trainerApi -ne 1 -or
-                      $candidate.commit -ne $expectedCommit -or
-                      $candidate.version -ne $version -or
-                      $null -eq $candidate.assets.'win-x64-cpu') {
-                    throw "Invalid LoRA Trainer release manifest for $($release.tag_name)"
-                  }
-                  $manifest = $candidate
-                  break
-                }
-              }
-            } catch {
-              Write-Host "Waiting for the LoRA Trainer release: $($_.Exception.Message)"
-            }
-            if ($null -eq $manifest -and $attempt -lt $attemptCount) {
-              Start-Sleep -Seconds 30
-            }
-          }
-          if ($null -eq $manifest) {
-            throw "No LoRA Trainer release appeared for pinned commit $expectedCommit within 15 minutes"
-          }
-          "version=$($manifest.version)" >> $env:GITHUB_OUTPUT
-
       - name: Create cache directories
         shell: pwsh
         run: New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
@@ -165,7 +119,6 @@ jobs:
           "-DLLAVON_IME_MODEL_REVISION=${{ steps.model.outputs.revision }}"
           "-DLLAVON_IME_MODEL_SHA256=${{ steps.model.outputs.sha256 }}"
           "-DLLAVON_IME_MODEL_SIZE=${{ steps.model.outputs.size }}"
-          "-DLLAVON_LORA_VERSION=${{ steps.lora.outputs.version }}"
 
       - name: Build web installer
         shell: pwsh
