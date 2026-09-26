@@ -90,6 +90,8 @@ add_library(llavon-ime-settings-ui SHARED
     src/settings/settings_configuration.hpp
     src/settings/lora_history_tree.cpp
     src/settings/lora_history_tree.hpp
+    src/settings/lora_history_lca.cpp
+    src/settings/lora_history_lca.hpp
     src/settings/settings_menu_window.cpp
     src/settings/settings_menu_window.hpp
     src/settings/settings_runtime.cpp
@@ -229,6 +231,16 @@ target_link_libraries(llavon-ime-candidate-ui PRIVATE
 )
 
 if(BUILD_TESTING)
+    add_executable(lora-history-lca-tests
+        tests/lora_history_lca_tests.cpp
+        src/settings/lora_history_lca.cpp
+        src/settings/lora_history_lca.hpp
+    )
+    target_compile_features(lora-history-lca-tests PRIVATE cxx_std_23)
+    target_compile_options(lora-history-lca-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(lora-history-lca-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME lora-history-lca COMMAND lora-history-lca-tests)
+
     add_executable(gpu-activity-lease-tests tests/gpu_activity_lease_tests.cpp)
     target_compile_features(gpu-activity-lease-tests PRIVATE cxx_std_23)
     target_compile_definitions(gpu-activity-lease-tests PRIVATE

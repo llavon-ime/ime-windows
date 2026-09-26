@@ -1,4 +1,5 @@
 #include "lora_history_tree.hpp"
+#include "lora_history_lca.hpp"
 
 #include "../service/lora_training_manager.hpp"
 
@@ -700,6 +701,33 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
     footer.ColumnDefinitions().GetAt(0).Width(GridLength{1, GridUnitType::Star});
     footer.ColumnDefinitions().Append(ColumnDefinition{});
     footer.ColumnDefinitions().GetAt(1).Width(GridLength{1, GridUnitType::Auto});
+    if (runs.size() >= 2) {
+        std::vector<LoraHistoryParent> lineage;
+        lineage.reserve(runs.size());
+        for (const auto& run : runs) {
+            lineage.push_back({run.id, run.parent_id});
+        }
+        const auto latest_id = runs.back().id;
+        const auto previous_id = runs[runs.size() - 2].id;
+        const auto common_id = tarjan_lca(lineage, latest_id, previous_id);
+        if (common_id && *common_id != latest_id && *common_id != previous_id) {
+            Button tarjan_button;
+            tarjan_button.Content(winrt::box_value(L"Tarjan"));
+            tarjan_button.MinWidth(88);
+            tarjan_button.HorizontalAlignment(HorizontalAlignment::Left);
+            Automation::AutomationProperties::SetName(
+                tarjan_button, L"選擇最新與次新訓練的共同祖先");
+            tarjan_button.Click([weak = std::weak_ptr<SelectionState>(selection),
+                                 id = *common_id](const auto&, const auto&) {
+                if (const auto current = weak.lock()) {
+                    current->selected_id = id;
+                    current->refresh();
+                }
+            });
+            Grid::SetColumn(tarjan_button, 0);
+            footer.Children().Append(tarjan_button);
+        }
+    }
     selection->confirm = Button();
     selection->confirm.Content(winrt::box_value(
         action == LoraHistoryTreeAction::apply_model ?
