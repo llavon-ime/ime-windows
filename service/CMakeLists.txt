@@ -20,6 +20,8 @@ add_executable(llavon-ime-service
     src/service/candidate_ui_loader.hpp
     src/service/custom_name_matcher.cpp
     src/service/custom_name_matcher.hpp
+    src/service/amd_gpu_latency_boost.cpp
+    src/service/amd_gpu_latency_boost.hpp
     src/service/gpu_activity_lease.hpp
     src/service/gpu_latency_boost.cpp
     src/service/gpu_latency_boost.hpp
