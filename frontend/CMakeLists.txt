@@ -55,6 +55,15 @@ find_package(cppwinrt CONFIG REQUIRED)
 find_package(reflectcpp CONFIG REQUIRED)
 find_package(utf8cpp CONFIG REQUIRED)
 
+# A shared yyjson dependency prevents AppContainer hosts from loading the TIP.
+# Check custom triplets too, before producing an unusable installer.
+get_target_property(_llavon_yyjson_type yyjson::yyjson TYPE)
+if(NOT _llavon_yyjson_type STREQUAL "STATIC_LIBRARY")
+    message(FATAL_ERROR
+        "The TSF frontend requires static yyjson. Configure with the repository's "
+        "cmake/triplets overlay and rebuild the vcpkg dependencies.")
+endif()
+
 target_link_libraries(llavon-ime PRIVATE
     Microsoft::CppWinRT
     WindowsApp
@@ -85,3 +94,19 @@ install(TARGETS llavon-ime
     RUNTIME DESTINATION bin
     COMPONENT Runtime
 )
+
+if(BUILD_TESTING)
+    add_executable(frontend-dll-load-tests tests/dll_load_tests.cpp)
+    target_compile_features(frontend-dll-load-tests PRIVATE cxx_std_23)
+    target_compile_definitions(frontend-dll-load-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(frontend-dll-load-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    set_target_properties(frontend-dll-load-tests PROPERTIES
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_dependencies(frontend-dll-load-tests llavon-ime)
+    add_test(NAME frontend-dll-load
+        COMMAND frontend-dll-load-tests "$<TARGET_FILE:llavon-ime>")
+endif()

@@ -125,6 +125,13 @@ jobs:
         shell: pwsh
         run: cmake --build build/windows --config Release --target llavon-ime-setup --parallel
 
+      - name: Verify frontend DLL loading
+        shell: pwsh
+        run: |
+          cmake --build build/windows --config Release --target frontend-dll-load-tests --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build/windows -C Release -R '^frontend-dll-load$' --output-on-failure --no-tests=error
+
       - name: Verify packaged CPU backends
         shell: pwsh
         run: |

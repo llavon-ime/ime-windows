@@ -26,6 +26,17 @@ The DLL keeps TSF composition, candidate state, keyboard behavior, and
 `\\.\pipe\llavon-ime-candidate-ui`. The candidate HWND and XAML island are
 owned by `llavon-ime-candidate-ui.dll` in the service process.
 
+AppContainer hosts such as SearchHost resolve the frontend's DLL dependencies
+using the host's package graph and system directories. They do not search the
+IME installation directory. Both repository triplets therefore link yyjson
+(reflectcpp's JSON backend) statically. Keep private runtime DLL dependencies
+out of the frontend; a missing dependency prevents TSF activation entirely.
+
+Build `frontend-dll-load-tests`, then run `ctest --preset windows -R frontend-dll-load`
+to check that the frontend loads when only system dependencies are available.
+This checks the DLL loading boundary; interactive switching and typing still
+need testing in an actual AppContainer host.
+
 `TextService` directly owns a `llavon::debug::Logger` from the shared asynchronous
 `llavon::debug-client` library. Every TSF host process connects as an independent
 producer to `\\.\pipe\llavon-ime-debugger`. Frontend timing starts at
