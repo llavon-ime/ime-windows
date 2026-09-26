@@ -40,7 +40,8 @@ public:
             security_attributes.lpSecurityDescriptor = security_descriptor;
             HANDLE pipe_handle = CreateNamedPipeW(
                 candidate_pipe_protocol::pipe_name, PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, PIPE_UNLIMITED_INSTANCES,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                PIPE_UNLIMITED_INSTANCES,
                 pipe_buffer_size, pipe_buffer_size, 0, &security_attributes);
             LocalFree(security_descriptor);
             if (pipe_handle == INVALID_HANDLE_VALUE) {

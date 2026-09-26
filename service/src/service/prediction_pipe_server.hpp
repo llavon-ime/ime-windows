@@ -534,7 +534,8 @@ inline asio::awaitable<void> listener(
         security_attributes.lpSecurityDescriptor = security_descriptor;
 
         HANDLE hPipe = CreateNamedPipeW(
-            pipe_name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            pipe_name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, &security_attributes);
         LocalFree(security_descriptor);
 
