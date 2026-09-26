@@ -1220,6 +1220,7 @@ void SettingsWindow::show_lora_training_dialog() {
         TextBlock page_summary{nullptr};
         Button previous_page{nullptr};
         Button next_page{nullptr};
+        ToggleSwitch only_manually_selected{nullptr};
         Button training_data_button{nullptr};
         Button training_base_button{nullptr};
         TextBlock training_base_summary{nullptr};
@@ -1408,14 +1409,36 @@ void SettingsWindow::show_lora_training_dialog() {
         state->previous_page =
             named<Button>(state->training_data_page, L"PreviousPageButton");
         state->next_page = named<Button>(state->training_data_page, L"NextPageButton");
+        state->only_manually_selected =
+            named<ToggleSwitch>(state->training_data_page, L"OnlyManuallySelected");
+
+        const auto visible_training_item_indices = [state] {
+            std::vector<std::size_t> indices;
+            indices.reserve(state->items.size());
+            for (std::size_t index = 0; index < state->items.size(); ++index) {
+                if (!state->only_manually_selected.IsOn() || state->items[index].revice) {
+                    indices.push_back(index);
+                }
+            }
+            return indices;
+        };
 
         const auto render_page = std::make_shared<std::function<void()>>();
-        *render_page = [this, state, dark_selection, refresh_training_count] {
+        *render_page = [this, state, dark_selection, refresh_training_count,
+                        visible_training_item_indices] {
             state->training_items.Items().Clear();
+            const auto visible_indices = visible_training_item_indices();
+            const std::size_t page_count =
+                (visible_indices.size() + training_page_size - 1) /
+                training_page_size;
+            if (page_count != 0 && state->current_page >= page_count) {
+                state->current_page = page_count - 1;
+            }
             const std::size_t begin = state->current_page * training_page_size;
             const std::size_t end = std::min(
-                begin + training_page_size, state->items.size());
-            for (std::size_t index = begin; index < end; ++index) {
+                begin + training_page_size, visible_indices.size());
+            for (std::size_t position = begin; position < end; ++position) {
+                const std::size_t index = visible_indices[position];
                 const auto& item = state->items[index];
                 Grid row;
                 ColumnDefinition action_column;
@@ -1481,14 +1504,12 @@ void SettingsWindow::show_lora_training_dialog() {
                 });
                 state->training_items.Items().Append(row);
             }
-            const std::size_t page_count =
-                (state->items.size() + training_page_size - 1) /
-                training_page_size;
-            state->page_summary.Text(
-                L"第 " + std::to_wstring(state->current_page + 1) + L" / " +
-                std::to_wstring(page_count) + L" 頁（" +
-                std::to_wstring(begin + 1) + L"–" + std::to_wstring(end) +
-                L"）");
+            state->page_summary.Text(visible_indices.empty()
+                ? L"沒有符合條件的資料"
+                : L"第 " + std::to_wstring(state->current_page + 1) + L" / " +
+                      std::to_wstring(page_count) + L" 頁（" +
+                      std::to_wstring(begin + 1) + L"–" + std::to_wstring(end) +
+                      L"）");
             state->previous_page.IsEnabled(state->current_page != 0);
             state->next_page.IsEnabled(state->current_page + 1 < page_count);
         };
@@ -1498,11 +1519,17 @@ void SettingsWindow::show_lora_training_dialog() {
                 (*render_page)();
             });
         state->next_page.Click(
-            [state, render_page](const auto&, const auto&) {
+            [state, render_page, visible_training_item_indices](const auto&, const auto&) {
+                const auto visible_count = visible_training_item_indices().size();
                 const std::size_t page_count =
-                    (state->items.size() + training_page_size - 1) /
+                    (visible_count + training_page_size - 1) /
                     training_page_size;
                 if (state->current_page + 1 < page_count) ++state->current_page;
+                (*render_page)();
+            });
+        state->only_manually_selected.Toggled(
+            [state, render_page](const auto&, const auto&) {
+                state->current_page = 0;
                 (*render_page)();
             });
         (*render_page)();
