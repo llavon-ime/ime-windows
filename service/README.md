@@ -38,6 +38,19 @@ The service also owns the interactive per-user process shell:
   inference, and boost errors are logged. The AMD driver DLL is loaded only
   when the active inference GPU is AMD; no AMD installation is needed to build
   or run the service on other hardware.
+  AMD clock tuning requires a supported manual-tuning interface; some laptop
+  integrated GPUs do not expose it. Such devices continue ordinary inference.
+  Maximum-frequency ranges containing zero or negative values (Navi4+ offsets)
+  are skipped with `maximum_clock_is_offset_or_unknown`: the service does not
+  guess a base frequency or use the tuning range as an overclocking target.
+  An already-high minimum is a successful no-op. Temporary enable failures
+  can retry on later input, at most once per second. Failed restoration is
+  attempted up to four times, one second apart. If those attempts fail, further
+  boosts are suspended and the saved clock state is retained for a final attempt
+  at shutdown or backend replacement. Process termination still cannot guarantee
+  restoration. The first successful adjustment and restoration per backend are
+  logged as `AMD GPU boost applied` and `AMD GPU boost restored`; `available`
+  alone only indicates that the tuning interface was found, not a clock change.
   Performance verification must include 250 ms request spacing and resumption
   after more than two seconds idle, not only continuous token throughput.
 - `llavon-ime-candidate-ui.dll` is loaded on the first candidate presentation.
@@ -124,6 +137,29 @@ flushes the preceding one early. Correction detection never decrypts or reads a
 stored commit. SQLite uses WAL mode, and selection/state changes run in
 transactions, so training-data I/O does not run on the inference path. This
 pre-release schema intentionally does not import the former JSONL prototype.
+
+## AMD laptop GPU Boost verification
+
+1. In settings, select the AMD Vulkan inference device and confirm that the
+   active runtime reports GPU offload. Enabling GPU Boost while inference runs
+   on the CPU does not exercise the AMD backend.
+2. To capture driver diagnostics, exit the existing service from its tray menu,
+   then launch the new build from PowerShell in its `bin` directory:
+   `./llavon-ime-service.exe 2> amd-boost.log`.
+   If automatic startup wins the race, the log reports `already running`;
+   repeat after exiting that instance. A forced process kill is not a normal
+   shutdown test because it bypasses clock restoration.
+3. Type several characters about 250 ms apart, pause for at least five seconds,
+   then resume. Look for `AMD GPU boost applied` followed by
+   `AMD GPU boost restored`. These messages are logged once per backend;
+   a successful driver call does not prove a latency improvement.
+4. Compare GPU Boost enabled and disabled, especially the first prediction
+   after idle. Also check switching models/devices and exiting normally.
+   Monitor observed GPU clocks and power separately if available.
+5. If the log reports an unsupported manual-tuning interface, an offset/unknown
+   maximum, or a missing ADLX DLL, attach that message with the GPU name and
+   driver version. Inference should continue. Support for AMD Vulkan inference
+   does not imply support for ADLX clock tuning on the same integrated GPU.
 
 ## Local LoRA training
 

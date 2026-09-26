@@ -239,14 +239,17 @@ GpuActivityLease::Boost make_gpu_latency_boost(
             auto boost = std::make_unique<NvidiaLatencyBoost>(adapter.get());
             std::clog << "[SRV] NVIDIA GPU latency boost available: device="
                       << runtime.device.device_id << " idle_timeout_ms=2000\n";
-            return [boost = std::move(boost)](bool enabled) { return boost->set(enabled); };
+            return [boost = std::move(boost)](bool enabled) {
+                return boost->set(enabled) ? GpuActivityLease::Result::success
+                                           : GpuActivityLease::Result::unavailable;
+            };
         }
         if (find_adapter(runtime.device.device_id, amd_vendor_id)) {
             return make_amd_gpu_latency_boost(runtime.device.device_id);
         }
         return {};
     } catch (...) {
-        std::clog << "[WARN] NVIDIA GPU latency boost unavailable\n";
+        std::clog << "[WARN] GPU latency boost unavailable during adapter discovery/initialization\n";
         return {};
     }
 }

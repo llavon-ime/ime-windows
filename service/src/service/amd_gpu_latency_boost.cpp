@@ -1,8 +1,8 @@
 #include "amd_gpu_latency_boost.hpp"
+#include "amd_gpu_clock_target.hpp"
 
 #include <windows.h>
 
-#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstddef>
@@ -22,6 +22,8 @@ namespace {
 namespace adlx {
 using Result = int;
 constexpr Result ok = 0;
+constexpr Result not_supported = 12;
+constexpr Result reset_needed = 18;
 constexpr std::uint64_t version = (2ull << 48) | 125ull;
 constexpr std::size_t mapping_get_gpu_slot = 0;
 constexpr std::size_t release_slot = 1;
@@ -32,13 +34,11 @@ constexpr std::size_t tuning_get_manual_gfx_slot = 14;
 constexpr std::size_t manual_min_range_slot = 3;
 constexpr std::size_t manual_get_min_slot = 4;
 constexpr std::size_t manual_set_min_slot = 5;
+constexpr std::size_t manual_max_range_slot = 6;
 constexpr std::size_t manual_get_max_slot = 7;
+constexpr std::size_t gpu_name_slot = 7;
 
-struct IntRange {
-    std::int32_t minValue;
-    std::int32_t maxValue;
-    std::int32_t step;
-};
+using IntRange = AmdClockRange;
 static_assert(sizeof(IntRange) == 12);
 static_assert(sizeof(void*) == 8);
 
@@ -53,6 +53,7 @@ using QueryInterface = Result(__stdcall*)(void*, const wchar_t*, void**);
 using GetRange = Result(__stdcall*)(void*, IntRange*);
 using GetFrequency = Result(__stdcall*)(void*, std::int32_t*);
 using SetFrequency = Result(__stdcall*)(void*, std::int32_t);
+using GetName = Result(__stdcall*)(void*, const char**);
 
 template <typename Function, typename... Args>
 auto call(void* object, std::size_t slot, Args... args) noexcept {
@@ -123,6 +124,7 @@ public:
         }
         const auto result = initialize(adlx::version, &system_, &mapping_);
         if (result != adlx::ok || !system_ || !mapping_) {
+            std::clog << "[WARN] AMD ADLX initialization: adlx_status=" << result << '\n';
             if (result == adlx::ok) (void)terminate_();
             throw std::runtime_error("AMD ADLX initialization failed");
         }
@@ -156,6 +158,10 @@ public:
         if (mapped != adlx::ok || !gpu_) {
             throw std::runtime_error("inference GPU is not an ADLX device");
         }
+        const char* name = nullptr;
+        if (adlx::call<adlx::GetName>(gpu_.get(), adlx::gpu_name_slot, &name) == adlx::ok && name) {
+            std::clog << "[SRV] AMD GPU boost probe: gpu=" << name << '\n';
+        }
 
         void* service = nullptr;
         const auto service_result = adlx::call<adlx::GetService>(
@@ -170,7 +176,9 @@ public:
                                            adlx::tuning_supported_manual_gfx_slot,
                                            gpu_.get(), &supported) != adlx::ok ||
             !supported) {
-            throw std::runtime_error("AMD manual GPU tuning is unsupported");
+            throw std::runtime_error(
+                "AMD manual GPU tuning is unsupported by this GPU/driver "
+                "(including some integrated GPUs); ordinary inference remains available");
         }
 
         void* generic = nullptr;
@@ -192,67 +200,118 @@ public:
     }
 
     ~AmdLatencyBoost() {
-        if (active_) (void)set(false);
+        if (active_ && set(false) != GpuActivityLease::Result::success) {
+            std::clog << "[WARN] AMD GPU minimum clock could not be restored: saved_min_mhz="
+                      << previous_min_ << " boosted_min_mhz=" << boosted_min_ << '\n';
+        }
     }
 
     AmdLatencyBoost(const AmdLatencyBoost&) = delete;
     AmdLatencyBoost& operator=(const AmdLatencyBoost&) = delete;
 
-    bool set(bool enabled) noexcept {
+    GpuActivityLease::Result set(bool enabled) noexcept {
+        using Result = GpuActivityLease::Result;
         if (enabled) {
+            // Never replace the original snapshot while restoration is pending.
+            if (active_) return Result::success;
             adlx::IntRange range{};
+            adlx::IntRange max_range{};
             std::int32_t current_min = 0;
             std::int32_t current_max = 0;
-            if (adlx::call<adlx::GetRange>(tuning_.get(), adlx::manual_min_range_slot,
-                                            &range) != adlx::ok ||
-                adlx::call<adlx::GetFrequency>(tuning_.get(), adlx::manual_get_min_slot,
-                                                &current_min) != adlx::ok ||
-                adlx::call<adlx::GetFrequency>(tuning_.get(), adlx::manual_get_max_slot,
-                                                &current_max) != adlx::ok ||
-                range.step <= 0) {
-                return false;
+            adlx::Result query_status = adlx::ok;
+            const auto check_query = [&](adlx::Result status, std::string_view operation) {
+                query_status = status;
+                return checked(status, operation);
+            };
+            if (!check_query(adlx::call<adlx::GetRange>(tuning_.get(), adlx::manual_min_range_slot,
+                                                      &range), "GetGPUMinFrequencyRange") ||
+                !check_query(adlx::call<adlx::GetRange>(tuning_.get(), adlx::manual_max_range_slot,
+                                                      &max_range), "GetGPUMaxFrequencyRange") ||
+                !check_query(adlx::call<adlx::GetFrequency>(tuning_.get(), adlx::manual_get_min_slot,
+                                                          &current_min), "GetGPUMinFrequency") ||
+                !check_query(adlx::call<adlx::GetFrequency>(tuning_.get(), adlx::manual_get_max_slot,
+                                                          &current_max), "GetGPUMaxFrequency")) {
+                return activation_failure(query_status);
             }
 
-            const auto ceiling = std::min(range.maxValue, current_max);
-            if (current_min >= ceiling || current_min < range.minValue) return false;
-            const auto desired = static_cast<std::int64_t>(current_min) +
-                                 (static_cast<std::int64_t>(ceiling) - current_min) * 3 / 4;
-            const auto steps = (desired - range.minValue) / range.step;
-            const auto target = static_cast<std::int32_t>(range.minValue + steps * range.step);
-            if (target <= current_min) return false;
+            const auto target = amd_gpu_clock_target(range, max_range, current_min, current_max);
+            if (!target) {
+                std::clog << "[WARN] AMD GPU boost skipped: reason="
+                          << (target.error() == AmdClockTargetError::offset_or_unknown_maximum
+                                  ? "maximum_clock_is_offset_or_unknown" : "invalid_clock_values")
+                          << " min_mhz=" << current_min << " max_raw=" << current_max
+                          << " min_range=[" << range.minValue << ',' << range.maxValue
+                          << ',' << range.step << "] max_range=[" << max_range.minValue
+                          << ',' << max_range.maxValue << ',' << max_range.step << "]\n";
+                return Result::unavailable;
+            }
+            if (*target == current_min) {
+                if (!logged_no_change_) {
+                    std::clog << "[SRV] AMD GPU boost needs no clock change: min_mhz="
+                              << current_min << " max_mhz=" << current_max << '\n';
+                    logged_no_change_ = true;
+                }
+                return Result::success;
+            }
 
             const auto result = adlx::call<adlx::SetFrequency>(
-                tuning_.get(), adlx::manual_set_min_slot, target);
+                tuning_.get(), adlx::manual_set_min_slot, *target);
             if (result != adlx::ok) {
                 // ADLX_RESET_NEEDED means another tuning mode is in use. Do not
                 // reset the user's GPU settings merely to enable this hint.
                 std::clog << "[WARN] AMD GPU latency boost enable failed: adlx_status="
                           << result << '\n';
-                return false;
+                return activation_failure(result);
             }
             previous_min_ = current_min;
-            boosted_min_ = target;
+            boosted_min_ = *target;
             active_ = true;
-            return true;
+            if (!logged_adjustment_) {
+                std::clog << "[SRV] AMD GPU boost applied: saved_min_mhz=" << previous_min_
+                          << " requested_min_mhz=" << boosted_min_
+                          << " max_mhz=" << current_max << '\n';
+                logged_adjustment_ = true;
+            }
+            return Result::success;
         }
 
-        if (!active_) return true;
+        if (!active_) return Result::success;
         std::int32_t current_min = 0;
-        if (adlx::call<adlx::GetFrequency>(tuning_.get(), adlx::manual_get_min_slot,
-                                            &current_min) != adlx::ok) return false;
-        if (current_min == boosted_min_ &&
-            adlx::call<adlx::SetFrequency>(tuning_.get(), adlx::manual_set_min_slot,
-                                            previous_min_) != adlx::ok) {
-            std::clog << "[WARN] AMD GPU latency boost restore failed\n";
-            return false;
+        if (!checked(adlx::call<adlx::GetFrequency>(tuning_.get(), adlx::manual_get_min_slot,
+                                                      &current_min), "restore/GetGPUMinFrequency")) {
+            return Result::retry_later;
+        }
+        if (current_min == boosted_min_) {
+            if (!checked(adlx::call<adlx::SetFrequency>(tuning_.get(), adlx::manual_set_min_slot,
+                                                          previous_min_), "restore/SetGPUMinFrequency")) {
+                return Result::retry_later;
+            }
+            if (!logged_restoration_) {
+                std::clog << "[SRV] AMD GPU boost restored: min_mhz=" << previous_min_ << '\n';
+                logged_restoration_ = true;
+            }
+        } else {
+            std::clog << "[SRV] AMD GPU boost restore skipped: minimum changed externally, min_mhz="
+                      << current_min << '\n';
         }
         // A user or another application may have changed tuning meanwhile.
         // Never overwrite a value that is no longer ours.
         active_ = false;
-        return true;
+        return Result::success;
     }
 
 private:
+    static GpuActivityLease::Result activation_failure(adlx::Result result) noexcept {
+        return result == adlx::not_supported || result == adlx::reset_needed
+            ? GpuActivityLease::Result::unavailable : GpuActivityLease::Result::retry_later;
+    }
+
+    static bool checked(adlx::Result result, std::string_view operation) noexcept {
+        if (result == adlx::ok) return true;
+        std::clog << "[WARN] AMD GPU boost " << operation << " failed: adlx_status=" << result << '\n';
+        return false;
+    }
+
     AdlxRuntime runtime_;
     AdlxPtr gpu_;
     AdlxPtr tuning_service_;
@@ -260,6 +319,9 @@ private:
     std::int32_t previous_min_ = 0;
     std::int32_t boosted_min_ = 0;
     bool active_ = false;
+    bool logged_no_change_ = false;
+    bool logged_adjustment_ = false;
+    bool logged_restoration_ = false;
 };
 
 } // namespace
