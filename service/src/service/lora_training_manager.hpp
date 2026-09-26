@@ -70,6 +70,7 @@ struct LoraOperationStatus {
     std::u16string trainer_backend;
     std::u16string trainer_commit;
     std::u16string trainer_release_version;
+    bool trainer_update_available = false;
     std::u16string trainer_message;
 };
 
@@ -91,6 +92,7 @@ public:
                               LoraTrainingOptions options, std::string_view password);
     void on_model_applied(const std::filesystem::path& model_path) const noexcept;
     bool ensure_model_exported(const std::filesystem::path& model_path);
+    bool discard_model_export(const std::filesystem::path& model_path);
     std::size_t discard_plaintext_datasets();
     void reset_conversation_data();
     void cancel() noexcept;

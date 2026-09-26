@@ -100,7 +100,9 @@ void SettingsUiLoader::configure(
     const llavon::ime::core::InferenceRuntimeInfo& active,
     SaveInferenceSettings save_settings,
     std::u16string model_path,
+    std::u16string base_model_path,
     SaveModelPath save_model_path,
+    PrepareModel prepare_model,
     std::vector<CustomNameSetting> custom_names,
     SaveCustomNames save_custom_names,
     bool shift_space_width_toggle_enabled,
@@ -143,7 +145,9 @@ void SettingsUiLoader::configure(
     selected_ = std::move(selected);
     save_settings_ = std::move(save_settings);
     model_path_ = std::move(model_path);
+    base_model_path_ = std::move(base_model_path);
     save_model_path_ = std::move(save_model_path);
+    prepare_model_ = std::move(prepare_model);
     custom_names_.clear();
     custom_names_.reserve(custom_names.size());
     for (const auto& custom_name : custom_names) {
@@ -243,16 +247,19 @@ bool SettingsUiLoader::load() {
     }
 
     start_ = resolve<StartFunction>(module_, "llavon_settings_ui_start");
-    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v4");
+    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v5");
     configure_update_notifications_ = resolve<ConfigureUpdateNotificationsFunction>(
         module_, "llavon_settings_ui_configure_update_notifications");
+    configure_model_preparation_ = resolve<ConfigureModelPreparationFunction>(
+        module_, "llavon_settings_ui_configure_model_preparation_v2");
     show_ = resolve<ShowFunction>(module_, "llavon_settings_ui_show");
     show_context_menu_ =
         resolve<ShowContextMenuFunction>(module_, "llavon_settings_ui_show_context_menu");
     stop_ = resolve<StopFunction>(module_, "llavon_settings_ui_stop");
     const auto set_pending_count = resolve<SetPendingCountFunction>(
         module_, "llavon_settings_ui_set_pending_count");
-    if (!configure_ || !configure_update_notifications_ || !start_ || !show_ ||
+    if (!configure_ || !configure_update_notifications_ ||
+        !configure_model_preparation_ || !start_ || !show_ ||
         !show_context_menu_ || !stop_ ||
         !set_pending_count ||
         !configure_module()) {
@@ -260,6 +267,7 @@ bool SettingsUiLoader::load() {
         module_ = nullptr;
         configure_ = nullptr;
         configure_update_notifications_ = nullptr;
+        configure_model_preparation_ = nullptr;
         start_ = nullptr;
         show_ = nullptr;
         show_context_menu_ = nullptr;
@@ -344,7 +352,9 @@ bool SettingsUiLoader::configure_module() {
                cancel_lora_trampoline, this, protection_trampoline, this) != 0) {
         return false;
     }
-    return configure_update_notifications_(
+    return configure_model_preparation_(
+               prepare_model_trampoline, this, base_model_path_.c_str()) == 0 &&
+           configure_update_notifications_(
                major_update_notifications_enabled_ ? 1 : 0,
                save_update_notifications_trampoline, this) == 0;
 }
@@ -391,6 +401,7 @@ std::int32_t SettingsUiLoader::get_lora_history_trampoline(
                     .alpha = run.alpha,
                     .dropout = run.dropout,
                     .target_modules = run.target_modules,
+                    .training_request_json = run.training_request_json,
                 });
             }
         }
@@ -411,6 +422,7 @@ std::int32_t SettingsUiLoader::get_lora_history_trampoline(
                 .alpha = source.alpha,
                 .dropout = source.dropout,
                 .target_modules = source.target_modules.c_str(),
+                .training_request_json = source.training_request_json.c_str(),
             };
         }
         return ERROR_SUCCESS;
@@ -530,6 +542,7 @@ std::int32_t SettingsUiLoader::get_lora_status_trampoline(
             .trainer_backend = self->lora_trainer_backend_.c_str(),
             .trainer_release_version = self->lora_trainer_release_version_.c_str(),
             .trainer_message = self->lora_trainer_message_.c_str(),
+            .trainer_update_available = current.trainer_update_available ? 1 : 0,
         };
         return ERROR_SUCCESS;
     } catch (...) {
@@ -570,6 +583,22 @@ std::int32_t SettingsUiLoader::save_model_path_trampoline(
         if (!self->save_model_path_(path)) return ERROR_WRITE_FAULT;
         self->model_path_ = path.u16string();
         return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_WRITE_FAULT;
+    }
+}
+
+std::int32_t SettingsUiLoader::prepare_model_trampoline(
+    void* context, const char16_t* model_path, std::int32_t action) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->prepare_model_ || !model_path ||
+        (action != LLAVON_MODEL_PREPARE && action != LLAVON_MODEL_DISCARD)) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    try {
+        return self->prepare_model_(
+            std::filesystem::path(std::u16string_view(model_path)), action)
+            ? ERROR_SUCCESS : ERROR_WRITE_FAULT;
     } catch (...) {
         return ERROR_WRITE_FAULT;
     }

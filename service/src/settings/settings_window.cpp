@@ -2,6 +2,7 @@
 
 #include "../resource.h"
 #include "settings_resources.h"
+#include "lora_history_tree.hpp"
 #include "xaml_resource.hpp"
 #include "../service/lora_training_presets.hpp"
 #include "../service/lora_dataset_builder.hpp"
@@ -40,6 +41,8 @@
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.Provider.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Data.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
@@ -68,6 +71,7 @@ using namespace winrt::Microsoft::UI::Xaml::Media;
 constexpr wchar_t window_class_name[] = L"LlavonImeSettingsWindow";
 constexpr UINT update_result_message = WM_APP + 10;
 constexpr UINT update_install_message = WM_APP + 11;
+constexpr UINT history_preview_message = WM_APP + 12;
 constexpr double body_text_size = 14;
 constexpr double caption_text_size = 12;
 constexpr std::size_t training_page_size = 100;
@@ -104,6 +108,59 @@ std::wstring utc8_timestamp(std::u16string_view value) {
     }
     return std::format(L"{:%Y/%m/%d %H:%M}",
         std::chrono::floor<std::chrono::minutes>(utc + std::chrono::hours{8}));
+}
+
+std::vector<LoraHistoryRunView> load_lora_history_snapshot(
+    const SettingsConfiguration& configuration) {
+    const auto callback = configuration.get_lora_history_callback;
+    std::size_t count = 0;
+    if (!callback || callback(configuration.get_lora_history_context,
+            nullptr, 0, &count) != ERROR_SUCCESS) {
+        throw std::runtime_error("unable to load LoRA training history");
+    }
+    std::vector<llavon_settings_lora_history_item> raw(count);
+    if (count != 0 && callback(configuration.get_lora_history_context,
+            raw.data(), raw.size(), &count) != ERROR_SUCCESS) {
+        throw std::runtime_error("unable to load LoRA training history");
+    }
+    std::vector<LoraHistoryRunView> history;
+    history.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& run = raw[index];
+        history.push_back(LoraHistoryRunView{
+            .id = run.id,
+            .parent_id = run.parent_id,
+            .completed_local = run.completed_at_utc
+                ? utc8_timestamp(run.completed_at_utc) : std::wstring{},
+            .output_model_path = run.output_model_path
+                ? run.output_model_path : u"",
+            .record_count = run.record_count,
+            .cumulative_record_count = run.cumulative_record_count,
+            .optimizer_steps = run.optimizer_steps,
+            .rank = run.rank,
+            .alpha = run.alpha,
+            .dropout = run.dropout,
+            .target_modules = run.target_modules ? run.target_modules : u"",
+            .training_request_json = run.training_request_json
+                ? run.training_request_json : "",
+        });
+    }
+    return history;
+}
+
+std::int64_t applied_history_id(
+    const std::vector<LoraHistoryRunView>& history,
+    std::u16string_view model_path,
+    std::u16string_view base_model_path) {
+    const auto active = std::filesystem::path(model_path).lexically_normal();
+    for (const auto& run : history) {
+        if (!run.output_model_path.empty() &&
+            std::filesystem::path(run.output_model_path).lexically_normal() == active)
+            return run.id;
+    }
+    if (!base_model_path.empty() &&
+        std::filesystem::path(base_model_path).lexically_normal() == active) return 0;
+    return -1;
 }
 
 template <typename T>
@@ -565,6 +622,24 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
         if (event) apply_update_install_event(std::move(*event));
         return 0;
     }
+    if (message == history_preview_message) {
+        if (GetEnvironmentVariableW(L"LLAVON_SETTINGS_TREE_PREVIEW", nullptr, 0)) {
+            const auto invoke_button = [](const Button& button) {
+                const auto peer = winrt::Microsoft::UI::Xaml::Automation::Peers::
+                    FrameworkElementAutomationPeer::CreatePeerForElement(button);
+                if (const auto invoke = peer.try_as<winrt::Microsoft::UI::Xaml::
+                        Automation::Provider::IInvokeProvider>()) invoke.Invoke();
+            };
+            if (wparam == 0) {
+                show_model_history_tree();
+            } else if (wparam == 1 && history_picker_prepare_button_) {
+                invoke_button(history_picker_prepare_button_);
+            } else if (wparam == 2 && history_picker_apply_button_) {
+                invoke_button(history_picker_apply_button_);
+            }
+        }
+        return 0;
+    }
 
     switch (message) {
         case WM_CLOSE:
@@ -619,6 +694,10 @@ void SettingsWindow::build_page() {
         [this](const auto&, const auto&) { update_model_path_save_state(); });
     browse_model_button_ = named<Button>(shell_, L"BrowseModelButton");
     browse_model_button_.Click([this](const auto&, const auto&) { browse_model_file(); });
+    model_history_button_ = named<Button>(shell_, L"ModelHistoryButton");
+    model_history_button_.Click([this](const auto&, const auto&) {
+        show_model_history_tree();
+    });
     save_model_button_ = named<Button>(shell_, L"SaveModelButton");
     save_model_button_.Click([this](const auto&, const auto&) { save_model_path(); });
     model_note_ = named<TextBlock>(shell_, L"ModelNote");
@@ -1089,17 +1168,7 @@ bool SettingsWindow::load_training_items(
 
 void SettingsWindow::show_lora_training_dialog() {
     if (lora_dialog_open_) return;
-    std::size_t history_count = 0;
-    const auto history_callback = configuration_.get_lora_history_callback;
-    if (!history_callback || history_callback(configuration_.get_lora_history_context,
-            nullptr, 0, &history_count) != ERROR_SUCCESS) {
-        throw std::runtime_error("unable to load LoRA training history");
-    }
-    std::vector<llavon_settings_lora_history_item> history(history_count);
-    if (history_count != 0 && history_callback(configuration_.get_lora_history_context,
-            history.data(), history.size(), &history_count) != ERROR_SUCCESS) {
-        throw std::runtime_error("unable to load LoRA training history");
-    }
+    const auto history = load_lora_history_snapshot(configuration_);
     const std::int64_t initial_base_id = history.empty() ? 0 : history.back().id;
     if (!load_training_items(nullptr, initial_base_id)) {
         throw std::runtime_error("unable to load training metadata");
@@ -1122,8 +1191,10 @@ void SettingsWindow::show_lora_training_dialog() {
         Button previous_page{nullptr};
         Button next_page{nullptr};
         Button training_data_button{nullptr};
-        Button training_history_button{nullptr};
+        Button training_base_button{nullptr};
+        TextBlock training_base_summary{nullptr};
         ComboBox training_base{nullptr};
+        std::vector<LoraHistoryRunView> history;
         std::vector<std::int64_t> base_run_ids;
         struct BaseParameters {
             std::int32_t rank = 0;
@@ -1183,6 +1254,12 @@ void SettingsWindow::show_lora_training_dialog() {
         bool model_applied = false;
         bool model_available = false;
         bool trainer_available = false;
+        Expander setup_expander{nullptr};
+        TextBlock setup_summary{nullptr};
+        bool setup_expansion_initialized = false;
+        bool setup_user_changed = false;
+        bool changing_setup_expansion = false;
+        bool setup_needs_attention = false;
         std::int32_t trainer_assets = 0;
         bool trainer_release_available = false;
         bool trainer_selection_initialized = false;
@@ -1191,6 +1268,7 @@ void SettingsWindow::show_lora_training_dialog() {
     };
 
     auto state = std::make_shared<DialogState>();
+    state->history = history;
     state->items = std::move(configuration_.training_items);
     state->deleted_items.assign(state->items.size(), false);
     state->active_count = state->items.size();
@@ -1201,6 +1279,21 @@ void SettingsWindow::show_lora_training_dialog() {
     state->primary_button = named<Button>(dialog_root, L"DialogPrimaryButton");
     state->secondary_button = named<Button>(dialog_root, L"DialogSecondaryButton");
     state->main_page = named<ScrollViewer>(dialog_root, L"MainScroll");
+    state->setup_expander = named<Expander>(dialog_root, L"SetupExpander");
+    state->setup_summary = named<TextBlock>(dialog_root, L"SetupSummary");
+    const auto weak_dialog = std::weak_ptr<DialogState>(state);
+    state->setup_expander.Expanding([weak_dialog](const auto&, const auto&) {
+        if (const auto current = weak_dialog.lock(); current &&
+            current->setup_expansion_initialized &&
+            !current->changing_setup_expansion)
+            current->setup_user_changed = true;
+    });
+    state->setup_expander.Collapsed([weak_dialog](const auto&, const auto&) {
+        if (const auto current = weak_dialog.lock(); current &&
+            current->setup_expansion_initialized &&
+            !current->changing_setup_expansion)
+            current->setup_user_changed = true;
+    });
     state->model_status_card = named<Border>(dialog_root, L"ModelStatusBorder");
     state->model_status_icon = named<FontIcon>(dialog_root, L"ModelStatusIcon");
     state->model_status_title = named<TextBlock>(dialog_root, L"ModelStatusTitle");
@@ -1220,7 +1313,8 @@ void SettingsWindow::show_lora_training_dialog() {
     state->trainer_backend.SelectedIndex(0);
     state->training_summary = named<TextBlock>(dialog_root, L"TrainingSummary");
     state->training_data_button = named<Button>(dialog_root, L"TrainingDataButton");
-    state->training_history_button = named<Button>(dialog_root, L"TrainingHistoryButton");
+    state->training_base_button = named<Button>(dialog_root, L"TrainingBaseButton");
+    state->training_base_summary = named<TextBlock>(dialog_root, L"TrainingBaseSummary");
     state->training_base = named<ComboBox>(dialog_root, L"TrainingBase");
     state->base_run_ids.push_back(0);
     state->base_parameters.emplace_back();
@@ -1235,164 +1329,33 @@ void SettingsWindow::show_lora_training_dialog() {
             .rank = run.rank,
             .alpha = run.alpha,
             .dropout = run.dropout,
-            .target_modules = run.target_modules ? run.target_modules : u"",
+            .target_modules = run.target_modules,
         });
         ComboBoxItem choice;
-        const auto stamp = run.completed_at_utc
-            ? utc8_timestamp(run.completed_at_utc) : std::wstring{};
-        choice.Content(winrt::box_value(std::format(L"#{}  {}", run.id, stamp)));
+        choice.Content(winrt::box_value(std::format(
+            L"#{}  {}", run.id, run.completed_local)));
         state->training_base.Items().Append(choice);
     }
     state->training_base.SelectedIndex(
         static_cast<std::int32_t>(state->base_run_ids.size() - 1));
 
-    state->training_history_button.Click([this, state](const auto&, const auto&) {
-        std::size_t count = 0;
-        const auto callback = configuration_.get_lora_history_callback;
-        const std::int32_t count_result = callback
-            ? callback(configuration_.get_lora_history_context, nullptr, 0, &count)
-            : ERROR_INVALID_FUNCTION;
-        std::vector<llavon_settings_lora_history_item> history(count);
-        const std::int32_t load_result = count_result == ERROR_SUCCESS
-            ? callback(configuration_.get_lora_history_context, history.data(),
-                       history.size(), &count)
-            : count_result;
-
-        StackPanel content;
-        content.Width(360);
-        content.Spacing(12);
-        content.Children().Append(make_text(
-            L"訓練歷程", 16, FontWeights::SemiBold()));
-
-        StackPanel timeline;
-        timeline.Spacing(0);
-        const bool dark = system_uses_dark_theme();
-        const auto accent = dark ? solid_brush(96, 205, 255)
-                                 : solid_brush(0, 120, 212);
-        const auto append_timeline_item = [&](const std::wstring& title,
-                                               const std::wstring& detail,
-                                               bool last,
-                                               std::u16string model_path = {}) {
-            Grid row;
-            row.ColumnDefinitions().Append(ColumnDefinition{});
-            row.ColumnDefinitions().GetAt(0).Width(GridLength{24, GridUnitType::Pixel});
-            row.ColumnDefinitions().Append(ColumnDefinition{});
-            row.ColumnDefinitions().GetAt(1).Width(GridLength{1, GridUnitType::Star});
-
-            StackPanel rail;
-            rail.HorizontalAlignment(HorizontalAlignment::Center);
-            Border node;
-            node.Width(11);
-            node.Height(11);
-            node.CornerRadius(CornerRadius{6, 6, 6, 6});
-            node.Background(accent);
-            rail.Children().Append(node);
-            Grid::SetColumn(rail, 0);
-            row.Children().Append(rail);
-
-            StackPanel labels;
-            labels.Margin(Thickness{8.0, 0.0, 0.0, last ? 0.0 : 10.0});
-            labels.Children().Append(make_text(
-                title.c_str(), body_text_size, FontWeights::SemiBold()));
-            if (!detail.empty()) {
-                labels.Children().Append(make_text(
-                    detail.c_str(), caption_text_size));
-            }
-            if (!model_path.empty()) {
-                Button apply;
-                apply.Content(winrt::box_value(L"套用此版本"));
-                apply.Margin(Thickness{0, 4, 0, 0});
-                apply.HorizontalAlignment(HorizontalAlignment::Left);
-                apply.Click([this, state, model_path = std::move(model_path)](
-                    const auto&, const auto&) {
-                    if (state->busy || restoring_lora_model_) return;
-                    const auto callback = configuration_.save_model_path_callback;
-                    if (!callback) {
-                        state->status.Text(L"無法重建或套用這個歷史模型。");
-                        return;
-                    }
-                    if (lora_restore_worker_.joinable()) lora_restore_worker_.join();
-                    restoring_lora_model_ = true;
-                    state->primary_button.IsEnabled(false);
-                    state->secondary_button.IsEnabled(false);
-                    state->status.Text(L"正在重建並套用歷史模型…");
-                    const auto context = configuration_.save_model_path_context;
-                    const auto dispatcher = state->overlay.DispatcherQueue();
-                    const auto alive = restore_ui_alive_;
-                    try {
-                        lora_restore_worker_ = std::jthread(
-                            [this, state, model_path, callback, context,
-                             dispatcher, alive] {
-                            const auto result = callback(context, model_path.c_str());
-                            try {
-                                dispatcher.TryEnqueue([this, state, model_path, result, alive] {
-                                    if (!alive->load(std::memory_order_acquire)) return;
-                                    restoring_lora_model_ = false;
-                                    if (state->closed) return;
-                                    state->secondary_button.IsEnabled(true);
-                                    if (result != ERROR_SUCCESS) {
-                                        state->status.Text(L"無法重建或套用這個歷史模型。");
-                                        return;
-                                    }
-                                    try {
-                                        configuration_.model_path = model_path;
-                                        model_path_.Text(to_hstring(model_path));
-                                        update_model_path_save_state();
-                                        state->training_observed = false;
-                                        state->output_model_path.clear();
-                                        state->model_applied = true;
-                                        state->status.Text(L"歷史模型已套用。");
-                                    } catch (...) {
-                                        state->status.Text(L"模型已套用，但畫面更新失敗。");
-                                    }
-                                });
-                            } catch (...) {
-                            }
-                        });
-                    } catch (...) {
-                        restoring_lora_model_ = false;
-                        state->secondary_button.IsEnabled(true);
-                        state->status.Text(L"無法啟動歷史模型重建。");
-                    }
-                });
-                labels.Children().Append(apply);
-            }
-            Grid::SetColumn(labels, 1);
-            row.Children().Append(labels);
-            timeline.Children().Append(row);
-        };
-
-        if (load_result != ERROR_SUCCESS || count == 0) {
-            append_timeline_item(L"Base model", L"", false);
-            append_timeline_item(L"尚無訓練紀錄", L"", true);
-        } else {
-            append_timeline_item(L"Base model", L"", false);
-            for (std::size_t index = 0; index < count; ++index) {
-                const auto& item = history[index];
-                const std::wstring title = item.completed_at_utc
-                    ? utc8_timestamp(item.completed_at_utc)
-                    : std::wstring{};
-                const std::wstring detail = std::format(
-                    L"基底 {}　新增 {} 筆　累計 {} 筆　{} steps",
-                    item.parent_id == 0 ? L"Base" :
-                        std::format(L"#{}", item.parent_id),
-                    item.record_count, item.cumulative_record_count,
-                    item.optimizer_steps);
-                append_timeline_item(title, detail, index + 1 == count,
-                    item.output_model_path ? item.output_model_path : u"");
-            }
-        }
-        content.Children().Append(timeline);
-        ScrollViewer scroller;
-        scroller.MaxHeight(440);
-        scroller.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);
-        scroller.Content(content);
-        Flyout flyout;
-        flyout.Content(scroller);
-        flyout.Placement(FlyoutPlacementMode::BottomEdgeAlignedRight);
-        flyout.ShowAt(state->training_history_button);
+    state->training_base_button.Click([this, state](const auto&, const auto&) {
+        const auto index = state->training_base.SelectedIndex();
+        const auto selected = index >= 0
+            ? state->base_run_ids[static_cast<std::size_t>(index)] : 0;
+        show_history_picker(state->training_base_button, state->history,
+            selected, applied_history_id(state->history, configuration_.model_path,
+                configuration_.base_model_path),
+            LoraHistoryTreeAction::choose_training_base,
+            [weak_state = std::weak_ptr<DialogState>(state)](std::int64_t id) {
+                const auto dialog = weak_state.lock();
+                if (!dialog || dialog->closed) return;
+                const auto found = std::ranges::find(dialog->base_run_ids, id);
+                if (found == dialog->base_run_ids.end()) return;
+                dialog->training_base.SelectedIndex(
+                    static_cast<std::int32_t>(found - dialog->base_run_ids.begin()));
+            });
     });
-
     const auto refresh_training_count =
         std::make_shared<std::function<void()>>();
     if (state->items.empty()) {
@@ -1699,6 +1662,10 @@ void SettingsWindow::show_lora_training_dialog() {
             const auto&, const auto&) {
             const auto index = state->training_base.SelectedIndex();
             if (index < 0 || state->closed) return;
+            state->training_base_summary.Text(index == 0 ? L"Base model" :
+                std::format(L"訓練 #{} · {}",
+                    state->base_run_ids[static_cast<std::size_t>(index)],
+                    state->history[static_cast<std::size_t>(index - 1)].completed_local));
             load_base_parameters(index);
             if (!load_training_items(nullptr,
                     state->base_run_ids[static_cast<std::size_t>(index)])) {
@@ -1712,6 +1679,9 @@ void SettingsWindow::show_lora_training_dialog() {
             refresh_training_selection();
         });
     load_base_parameters(state->training_base.SelectedIndex());
+    state->training_base_summary.Text(history.empty() ? L"Base model" :
+        std::format(L"訓練 #{} · {}",
+            history.back().id, history.back().completed_local));
     state->only_selected_sentences.Toggled(
         [refresh_training_selection](const auto&, const auto&) {
             refresh_training_selection();
@@ -1821,6 +1791,13 @@ void SettingsWindow::show_lora_training_dialog() {
             : ERROR_INVALID_FUNCTION;
         if (result != ERROR_SUCCESS) {
             state->status.Text(L"無法取得 LoRA 狀態。");
+            state->setup_summary.Text(L"無法確認安裝狀態");
+            if (!state->setup_expansion_initialized) {
+                state->changing_setup_expansion = true;
+                state->setup_expander.IsExpanded(true);
+                state->changing_setup_expansion = false;
+                state->setup_expansion_initialized = true;
+            }
             return;
         }
         if (status.message && *status.message) {
@@ -1857,6 +1834,34 @@ void SettingsWindow::show_lora_training_dialog() {
         state->trainer_assets = status.trainer_assets;
         state->trainer_release_available =
             status.trainer_release_version && *status.trainer_release_version;
+        const bool setup_needs_attention =
+            !status.model_available || !status.trainer_available ||
+            status.model_update_available || status.trainer_update_available ||
+            status.stage == LLAVON_SETTINGS_LORA_DOWNLOADING_MODEL ||
+            status.stage == LLAVON_SETTINGS_LORA_INSTALLING_TRAINER;
+        if (!status.model_available || !status.trainer_available) {
+            state->setup_summary.Text(L"模型或訓練器尚未安裝");
+        } else if (status.model_update_available ||
+                   status.trainer_update_available) {
+            state->setup_summary.Text(L"有可用更新");
+        } else if (status.stage == LLAVON_SETTINGS_LORA_CHECKING_MODEL ||
+                   status.stage == LLAVON_SETTINGS_LORA_CHECKING_TRAINER) {
+            state->setup_summary.Text(L"正在檢查更新");
+        } else if (status.stage == LLAVON_SETTINGS_LORA_DOWNLOADING_MODEL ||
+                   status.stage == LLAVON_SETTINGS_LORA_INSTALLING_TRAINER) {
+            state->setup_summary.Text(L"正在安裝");
+        } else {
+            state->setup_summary.Text(L"模型與訓練器已就緒");
+        }
+        if (!state->setup_expansion_initialized ||
+            (setup_needs_attention && !state->setup_needs_attention &&
+             !state->setup_user_changed)) {
+            state->changing_setup_expansion = true;
+            state->setup_expander.IsExpanded(setup_needs_attention);
+            state->changing_setup_expansion = false;
+            state->setup_expansion_initialized = true;
+        }
+        state->setup_needs_attention = setup_needs_attention;
         const bool trainer_busy =
             status.stage == LLAVON_SETTINGS_LORA_CHECKING_TRAINER ||
             status.stage == LLAVON_SETTINGS_LORA_INSTALLING_TRAINER;
@@ -1986,6 +1991,7 @@ void SettingsWindow::show_lora_training_dialog() {
     lora_dialog_timer_ = state->timer;
     const auto close_dialog = [this, state] {
         if (state->closed) return;
+        close_history_picker();
         state->closed = true;
         state->timer.Stop();
         if (state->training_items) state->training_items.Items().Clear();
@@ -2426,6 +2432,316 @@ void SettingsWindow::browse_model_file() {
     model_path_.Text(owned_path.get());
 }
 
+void SettingsWindow::close_history_picker() {
+    if (!history_picker_overlay_ || restoring_lora_model_) return;
+    if (history_picker_new_export_ &&
+        configuration_.prepare_model_callback &&
+        !history_picker_prepared_model_path_.empty()) {
+        configuration_.prepare_model_callback(
+            configuration_.prepare_model_context,
+            history_picker_prepared_model_path_.c_str(), LLAVON_MODEL_DISCARD);
+    }
+    if (shell_) {
+        const auto children = shell_.Children();
+        std::uint32_t index = 0;
+        if (children.IndexOf(history_picker_overlay_, index)) children.RemoveAt(index);
+    }
+    history_picker_overlay_ = nullptr;
+    history_picker_tree_ = nullptr;
+    history_picker_graph_view_ = nullptr;
+    history_picker_close_button_ = nullptr;
+    history_picker_prepare_button_ = nullptr;
+    history_picker_progress_ = nullptr;
+    history_picker_status_ = nullptr;
+    history_picker_apply_button_ = nullptr;
+    history_picker_prepared_model_path_.clear();
+    history_picker_new_export_ = false;
+    const auto anchor = std::exchange(history_picker_anchor_, nullptr);
+    if (anchor) anchor.Focus(FocusState::Programmatic);
+}
+
+void SettingsWindow::show_history_picker(
+    const Button& anchor,
+    std::vector<LoraHistoryRunView> history,
+    std::int64_t selected_id,
+    std::int64_t applied_id,
+    LoraHistoryTreeAction action,
+    std::function<void(std::int64_t)> on_action) {
+    close_history_picker();
+
+    Grid overlay;
+    overlay.Background(SolidColorBrush(winrt::Windows::UI::Color{144, 0, 0, 0}));
+    overlay.TabFocusNavigation(
+        winrt::Microsoft::UI::Xaml::Input::KeyboardNavigationMode::Cycle);
+
+    Border panel;
+    const bool dark = system_uses_dark_theme();
+    panel.Background(dark ? solid_brush(39, 39, 39) : solid_brush(249, 249, 249));
+    panel.BorderBrush(dark ? solid_brush(73, 73, 73) : solid_brush(216, 216, 216));
+    panel.BorderThickness(Thickness{1, 1, 1, 1});
+    panel.CornerRadius(CornerRadius{12, 12, 12, 12});
+    panel.Padding(Thickness{16, 16, 16, 16});
+    panel.HorizontalAlignment(HorizontalAlignment::Center);
+    panel.VerticalAlignment(VerticalAlignment::Center);
+
+    Grid layout;
+    layout.RowDefinitions().Append(RowDefinition{});
+    layout.RowDefinitions().GetAt(0).Height(GridLength{1, GridUnitType::Auto});
+    layout.RowDefinitions().Append(RowDefinition{});
+    layout.RowDefinitions().GetAt(1).Height(GridLength{1, GridUnitType::Auto});
+    if (action == LoraHistoryTreeAction::apply_model) {
+        layout.RowDefinitions().Append(RowDefinition{});
+        layout.RowDefinitions().GetAt(2).Height(GridLength{1, GridUnitType::Auto});
+    }
+    Button close_button;
+    close_button.Content(winrt::box_value(L"關閉"));
+    close_button.MinWidth(72);
+    close_button.HorizontalAlignment(HorizontalAlignment::Right);
+    close_button.Margin(Thickness{0, 0, 0, 8});
+    close_button.Click([this](const auto&, const auto&) { close_history_picker(); });
+    layout.Children().Append(close_button);
+
+    auto tree_view = make_lora_history_tree(std::move(history), selected_id,
+        applied_id, action,
+        [this, action, callback = std::move(on_action)](std::int64_t id) {
+            if (action == LoraHistoryTreeAction::choose_training_base)
+                close_history_picker();
+            callback(id);
+        });
+    const auto tree = tree_view.root;
+    ContentControl tree_container;
+    tree_container.Content(tree);
+    Grid::SetRow(tree_container, 1);
+    layout.Children().Append(tree_container);
+    if (action == LoraHistoryTreeAction::apply_model) {
+        StackPanel activity;
+        activity.Spacing(4);
+        activity.Margin(Thickness{0, 4, 0, 0});
+        Grid progress_host;
+        progress_host.Height(4);
+        progress_host.HorizontalAlignment(HorizontalAlignment::Stretch);
+        progress_host.Visibility(Visibility::Collapsed);
+        Border progress_track;
+        progress_track.Background(dark ? solid_brush(65, 65, 65) :
+            solid_brush(210, 217, 225));
+        progress_track.CornerRadius(CornerRadius{2, 2, 2, 2});
+        progress_host.Children().Append(progress_track);
+        ProgressBar progress;
+        progress.IsIndeterminate(true);
+        progress.HorizontalAlignment(HorizontalAlignment::Stretch);
+        progress.Height(4);
+        progress.Background(SolidColorBrush(winrt::Windows::UI::Color{0, 0, 0, 0}));
+        progress_host.Children().Append(progress);
+        TextBlock status;
+        status.FontSize(12);
+        status.TextWrapping(TextWrapping::Wrap);
+        status.Visibility(Visibility::Collapsed);
+        activity.Children().Append(progress_host);
+        activity.Children().Append(status);
+        Button apply_button;
+        apply_button.Content(winrt::box_value(L"套用並關閉"));
+        apply_button.MinWidth(150);
+        apply_button.HorizontalAlignment(HorizontalAlignment::Right);
+        apply_button.Visibility(Visibility::Collapsed);
+        Grid::SetColumn(apply_button, 1);
+        tree.Children().GetAt(2).as<Grid>().Children().Append(apply_button);
+        Grid::SetRow(activity, 2);
+        layout.Children().Append(activity);
+        history_picker_progress_ = progress_host;
+        history_picker_status_ = status;
+        history_picker_apply_button_ = apply_button;
+        apply_button.Click([this](const auto&, const auto&) {
+            if (restoring_lora_model_ ||
+                history_picker_prepared_model_path_.empty() ||
+                !configuration_.save_model_path_callback) return;
+            history_picker_close_button_.IsEnabled(false);
+            history_picker_apply_button_.IsEnabled(false);
+            history_picker_progress_.Visibility(Visibility::Visible);
+            history_picker_status_.Visibility(Visibility::Collapsed);
+            // The service may load the model before persisting its path. Once
+            // application starts, a failed save must not discard that file.
+            const bool newly_exported = std::exchange(history_picker_new_export_, false);
+            const auto callback = configuration_.save_model_path_callback;
+            const auto context = configuration_.save_model_path_context;
+            if (!begin_lora_history_operation(
+                    history_picker_prepared_model_path_,
+                    [callback, context](const char16_t* path) {
+                        return callback(context, path);
+                    }, true, [this](bool success) {
+                        model_history_button_.IsEnabled(true);
+                        if (success) {
+                            history_picker_new_export_ = false;
+                            model_note_.Text(L"模型已套用。");
+                            model_note_.Visibility(Visibility::Visible);
+                            close_history_picker();
+                            return;
+                        }
+                        history_picker_close_button_.IsEnabled(true);
+                        history_picker_apply_button_.IsEnabled(true);
+                        history_picker_progress_.Visibility(Visibility::Collapsed);
+                        history_picker_status_.Text(L"套用失敗");
+                        history_picker_status_.Visibility(Visibility::Visible);
+                    })) {
+                history_picker_new_export_ = newly_exported;
+                history_picker_close_button_.IsEnabled(true);
+                history_picker_apply_button_.IsEnabled(true);
+                history_picker_progress_.Visibility(Visibility::Collapsed);
+                history_picker_status_.Text(L"無法開始套用");
+                history_picker_status_.Visibility(Visibility::Visible);
+            }
+        });
+    }
+    panel.Child(layout);
+    overlay.Children().Append(panel);
+
+    const auto resize_tree = [panel, tree, action](double width, double height) {
+        tree.Width(std::clamp(width - 96.0, 0.0, 640.0));
+        tree.Height(std::clamp(height -
+            (action == LoraHistoryTreeAction::apply_model ? 152.0 : 96.0),
+            0.0, 560.0));
+        panel.Width(tree.Width() + 34.0);
+    };
+    resize_tree(shell_.ActualWidth(), shell_.ActualHeight());
+    overlay.SizeChanged([resize_tree](const auto&, const auto& args) {
+        const auto size = args.NewSize();
+        resize_tree(size.Width, size.Height);
+    });
+    overlay.KeyDown([this](
+        const auto&, const winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs& args) {
+        if (static_cast<int>(args.Key()) == VK_ESCAPE) {
+            args.Handled(true);
+            close_history_picker();
+        }
+    });
+
+    history_picker_overlay_ = overlay;
+    history_picker_tree_ = tree_container;
+    history_picker_graph_view_ = tree_view.graph_view;
+    history_picker_anchor_ = anchor;
+    history_picker_prepare_button_ = tree_view.confirm;
+    history_picker_close_button_ = close_button;
+    shell_.Children().Append(overlay);
+    close_button.Focus(FocusState::Programmatic);
+}
+
+void SettingsWindow::show_model_history_tree() {
+    try {
+        auto history = load_lora_history_snapshot(configuration_);
+        const auto applied = applied_history_id(history, configuration_.model_path,
+            configuration_.base_model_path);
+        const auto chosen = applied >= 0 ? applied :
+            (history.empty() ? 0 : history.back().id);
+        auto paths = std::make_shared<std::unordered_map<
+            std::int64_t, std::u16string>>();
+        paths->emplace(0, configuration_.base_model_path);
+        for (const auto& run : history) paths->emplace(run.id, run.output_model_path);
+        show_history_picker(model_history_button_, std::move(history), chosen,
+            applied, LoraHistoryTreeAction::apply_model,
+            [this, paths](std::int64_t id) {
+                if (restoring_lora_model_ ||
+                    !configuration_.prepare_model_callback) return;
+                const auto found = paths->find(id);
+                if (found == paths->end() || found->second.empty()) {
+                    history_picker_status_.Text(L"此版本沒有模型檔案");
+                    history_picker_status_.Visibility(Visibility::Visible);
+                    return;
+                }
+                std::error_code path_error;
+                if (id == 0 && !std::filesystem::is_regular_file(
+                        std::filesystem::path(found->second), path_error)) {
+                    history_picker_status_.Text(L"找不到原始 Base model 檔案");
+                    history_picker_status_.Visibility(Visibility::Visible);
+                    return;
+                }
+                history_picker_tree_.IsEnabled(false);
+                history_picker_close_button_.IsEnabled(false);
+                history_picker_progress_.Visibility(Visibility::Visible);
+                history_picker_status_.Visibility(Visibility::Collapsed);
+                const bool already_converted = std::filesystem::is_regular_file(
+                    std::filesystem::path(found->second), path_error);
+                model_history_button_.IsEnabled(false);
+                const auto callback = configuration_.prepare_model_callback;
+                const auto context = configuration_.prepare_model_context;
+                if (!begin_lora_history_operation(found->second,
+                        [callback, context](const char16_t* path) {
+                            return callback(context, path, LLAVON_MODEL_PREPARE);
+                        }, false,
+                        [this, path = found->second,
+                         newly_exported = !path_error && !already_converted](bool success) {
+                            model_history_button_.IsEnabled(true);
+                            if (success) {
+                                history_picker_prepared_model_path_ = path;
+                                history_picker_new_export_ = newly_exported;
+                                history_picker_tree_.IsEnabled(true);
+                                history_picker_graph_view_.IsEnabled(false);
+                                history_picker_prepare_button_.Visibility(
+                                    Visibility::Collapsed);
+                                history_picker_close_button_.IsEnabled(true);
+                                history_picker_progress_.Visibility(Visibility::Collapsed);
+                                history_picker_apply_button_.Visibility(Visibility::Visible);
+                                history_picker_apply_button_.Focus(FocusState::Programmatic);
+                                return;
+                            }
+                            history_picker_tree_.IsEnabled(true);
+                            history_picker_close_button_.IsEnabled(true);
+                            history_picker_progress_.Visibility(Visibility::Collapsed);
+                            history_picker_status_.Text(L"無法準備此模型");
+                            history_picker_status_.Visibility(Visibility::Visible);
+                        })) {
+                    model_history_button_.IsEnabled(true);
+                    history_picker_tree_.IsEnabled(true);
+                    history_picker_close_button_.IsEnabled(true);
+                    history_picker_progress_.Visibility(Visibility::Collapsed);
+                    history_picker_status_.Text(L"無法開始準備模型");
+                    history_picker_status_.Visibility(Visibility::Visible);
+                }
+            });
+    } catch (const winrt::hresult_error& error) {
+        model_note_.Text(L"無法顯示訓練歷程：" + std::wstring(error.message()));
+        model_note_.Visibility(Visibility::Visible);
+    } catch (const std::exception& error) {
+        model_note_.Text(L"無法顯示訓練歷程：" +
+            std::wstring(winrt::to_hstring(error.what())));
+        model_note_.Visibility(Visibility::Visible);
+    }
+}
+
+bool SettingsWindow::begin_lora_history_operation(
+    std::u16string model_path,
+    std::function<std::int32_t(const char16_t*)> operation,
+    bool apply_model, std::function<void(bool)> finished) {
+    if (restoring_lora_model_ || !operation) return false;
+    if (lora_restore_worker_.joinable()) lora_restore_worker_.join();
+    restoring_lora_model_ = true;
+    const auto dispatcher = shell_.DispatcherQueue();
+    const auto alive = restore_ui_alive_;
+    try {
+        lora_restore_worker_ = std::jthread(
+            [this, model_path = std::move(model_path), operation = std::move(operation),
+             apply_model, dispatcher, alive, finished = std::move(finished)] {
+            const bool success = operation(model_path.c_str()) == ERROR_SUCCESS;
+            try {
+                dispatcher.TryEnqueue([this, model_path, success, apply_model,
+                                       alive, finished] {
+                    if (!alive->load(std::memory_order_acquire)) return;
+                    restoring_lora_model_ = false;
+                    if (success && apply_model) {
+                        configuration_.model_path = model_path;
+                        model_path_.Text(to_hstring(model_path));
+                        update_model_path_save_state();
+                    }
+                    finished(success);
+                });
+            } catch (...) {
+            }
+        });
+        return true;
+    } catch (...) {
+        restoring_lora_model_ = false;
+        return false;
+    }
+}
+
 void SettingsWindow::save_model_path() {
     if (!model_path_ || !save_model_button_ || !model_note_ ||
         !configuration_.save_model_path_callback) {
@@ -2753,6 +3069,14 @@ void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
 }
 
 void SettingsWindow::close_xaml() noexcept {
+    if (history_picker_new_export_ && configuration_.prepare_model_callback &&
+        !history_picker_prepared_model_path_.empty()) {
+        configuration_.prepare_model_callback(
+            configuration_.prepare_model_context,
+            history_picker_prepared_model_path_.c_str(), LLAVON_MODEL_DISCARD);
+    }
+    history_picker_prepared_model_path_.clear();
+    history_picker_new_export_ = false;
     if (lora_dialog_timer_) {
         lora_dialog_timer_.Stop();
         lora_dialog_timer_ = nullptr;
@@ -2767,6 +3091,7 @@ void SettingsWindow::close_xaml() noexcept {
     }
     island_window_ = nullptr;
     model_path_ = nullptr;
+    model_history_button_ = nullptr;
     browse_model_button_ = nullptr;
     save_model_button_ = nullptr;
     model_note_ = nullptr;
@@ -2783,6 +3108,15 @@ void SettingsWindow::close_xaml() noexcept {
     save_custom_names_button_ = nullptr;
     custom_names_note_ = nullptr;
     pending_summary_ = nullptr;
+    history_picker_overlay_ = nullptr;
+    history_picker_tree_ = nullptr;
+    history_picker_graph_view_ = nullptr;
+    history_picker_anchor_ = nullptr;
+    history_picker_prepare_button_ = nullptr;
+    history_picker_close_button_ = nullptr;
+    history_picker_progress_ = nullptr;
+    history_picker_status_ = nullptr;
+    history_picker_apply_button_ = nullptr;
     shell_ = nullptr;
     lora_dialog_open_ = false;
     close_lora_dialog_ = {};

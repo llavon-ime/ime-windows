@@ -428,7 +428,8 @@ void initialize_database(const std::filesystem::path& path) {
         }
         Statement valid_json(database.get(), "SELECT json_valid(?)");
         Statement save_request(database.get(),
-            "UPDATE lora_training_runs SET training_request_json=? WHERE id=?");
+            "UPDATE lora_training_runs SET "
+            "training_request_json=json_remove(?,'$.strength') WHERE id=?");
         for (const auto& [id, request_path] : prior_requests) {
             std::error_code error;
             if (!std::filesystem::is_regular_file(request_path, error) ||
@@ -521,6 +522,14 @@ TrainingDataWriter::TrainingDataWriter(
         if (database_version < 3) {
             discard_existing_non_bopomofo_commits(database);
             database.execute("PRAGMA user_version=3");
+        }
+        if (database_version < 4) {
+            database.execute(
+                "UPDATE lora_training_runs SET "
+                "training_request_json=json_remove(training_request_json,'$.strength') "
+                "WHERE training_request_json IS NOT NULL "
+                "AND json_type(training_request_json,'$.strength') IS NOT NULL");
+            database.execute("PRAGMA user_version=4");
         }
         const auto latest = latest_lora_training_run();
         pending_count_.store(available_count(latest ? latest->id : 0),
@@ -992,7 +1001,7 @@ bool TrainingDataWriter::complete_lora_training(
                 "parent_id,base_model_revision,adapter_path,output_model_path,"
                 "completed_at_utc,record_count,cumulative_record_count,optimizer_steps,"
                 "rank,alpha,dropout,target_modules,training_request_json) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,json_remove(?,'$.strength'))");
             if (run.parent_id == 0) insert.bind_null(1);
             else insert.bind_integer(1, run.parent_id);
             insert.bind_text(2, run.base_model_revision);

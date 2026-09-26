@@ -1,6 +1,7 @@
 #pragma once
 
 #include "settings_configuration.hpp"
+#include "lora_history_tree.hpp"
 #include "update_checker.hpp"
 #include "update_installer.hpp"
 
@@ -58,6 +59,19 @@ private:
     void save_custom_names();
     void update_custom_names_save_state();
     void show_lora_training_dialog();
+    void show_model_history_tree();
+    void show_history_picker(
+        const winrt::Microsoft::UI::Xaml::Controls::Button& anchor,
+        std::vector<LoraHistoryRunView> history,
+        std::int64_t selected_id,
+        std::int64_t applied_id,
+        LoraHistoryTreeAction action,
+        std::function<void(std::int64_t)> on_action);
+    void close_history_picker();
+    bool begin_lora_history_operation(
+        std::u16string model_path,
+        std::function<std::int32_t(const char16_t*)> operation,
+        bool apply_model, std::function<void(bool)> finished);
     bool load_training_items(const char16_t* password = nullptr,
                              std::int64_t base_run_id = 0);
     void refresh_protection_controls();
@@ -92,6 +106,17 @@ private:
     HWND island_window_ = nullptr;
     winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Grid shell_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Grid history_picker_overlay_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::ContentControl history_picker_tree_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::ScrollViewer history_picker_graph_view_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button history_picker_anchor_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button history_picker_prepare_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button history_picker_close_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Grid history_picker_progress_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock history_picker_status_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button history_picker_apply_button_{nullptr};
+    std::u16string history_picker_prepared_model_path_;
+    bool history_picker_new_export_ = false;
     bool lora_dialog_open_ = false;
     bool restoring_lora_model_ = false;
     std::jthread lora_restore_worker_;
@@ -101,6 +126,7 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::TextBlock lora_note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBox model_path_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button browse_model_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button model_history_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button save_model_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock model_note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock active_device_status_{nullptr};

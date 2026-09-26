@@ -166,7 +166,7 @@ int branch_lineage_tests(const std::filesystem::path& path) {
                 .rank = 8,
                 .alpha = 16,
                 .target_modules = u"q_proj,v_proj",
-                .training_request_json = R"({"rank":8,"epochs":1})",
+                .training_request_json = R"({"rank":8,"epochs":1,"strength":1})",
             };
         };
         if (!writer.complete_lora_training(make_run(0, 1, 1), {u"branch:a"})) {
@@ -194,6 +194,24 @@ int branch_lineage_tests(const std::filesystem::path& path) {
         const auto run = writer.lora_training_run(c);
         if (!run || run->parent_id != a ||
             run->training_request_json != R"({"rank":8,"epochs":1})") return 94;
+    }
+    sqlite3* legacy_database = nullptr;
+    if (sqlite3_open16(path.c_str(), &legacy_database) != SQLITE_OK) return 108;
+    const char* legacy_strength = R"sql(
+        UPDATE lora_training_runs
+        SET training_request_json='{"strength":3,"rank":8,"epochs":1}'
+        WHERE id=(SELECT MAX(id) FROM lora_training_runs);
+        PRAGMA user_version=3;
+    )sql";
+    const auto legacy_result = sqlite3_exec(legacy_database,
+        legacy_strength, nullptr, nullptr, nullptr);
+    sqlite3_close(legacy_database);
+    if (legacy_result != SQLITE_OK) return 109;
+    {
+        TrainingDataWriter writer(path);
+        const auto run = writer.latest_lora_training_run();
+        if (!run || run->training_request_json != R"({"rank":8,"epochs":1})")
+            return 110;
     }
     DeleteFileW(path.c_str());
     return 0;

@@ -88,6 +88,8 @@ add_library(llavon-ime-settings-ui SHARED
     src/settings/ui/custom_name_reading.xaml
     src/settings/ui/custom_name_warning.xaml
     src/settings/settings_configuration.hpp
+    src/settings/lora_history_tree.cpp
+    src/settings/lora_history_tree.hpp
     src/settings/settings_menu_window.cpp
     src/settings/settings_menu_window.hpp
     src/settings/settings_runtime.cpp

@@ -101,10 +101,7 @@ std::filesystem::path executable_directory() {
     }
 }
 
-std::filesystem::path default_model_path() {
-    if (auto path = environment_path(kModelPathEnv)) {
-        return *path;
-    }
+std::filesystem::path installed_base_model_path() {
     PWSTR raw = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramData, KF_FLAG_DEFAULT,
                                        nullptr, &raw))) {
@@ -125,6 +122,13 @@ std::filesystem::path default_model_path() {
         }
     }
     return executable_directory().parent_path() / "models" / kModelFilename;
+}
+
+std::filesystem::path default_model_path() {
+    if (auto path = environment_path(kModelPathEnv)) {
+        return *path;
+    }
+    return installed_base_model_path();
 }
 
 std::filesystem::path resolve_configured_model_path(std::filesystem::path path) {
@@ -268,6 +272,7 @@ int main(int argc, char* argv[]) {
                 }
             },
             std::move(displayed_model_path),
+            installed_base_model_path().u16string(),
             [&server, active_config, &lora_training](
                 const std::filesystem::path& model_path) {
                 try {
@@ -292,6 +297,17 @@ int main(int argc, char* argv[]) {
                               << error.what() << '\n';
                     return false;
                 }
+            },
+            [active_config, &lora_training](
+                const std::filesystem::path& model_path, std::int32_t action) {
+                const auto resolved_model_path =
+                    resolve_configured_model_path(model_path);
+                if (action == LLAVON_MODEL_PREPARE)
+                    return lora_training.ensure_model_exported(resolved_model_path);
+                if (action == LLAVON_MODEL_DISCARD &&
+                    resolved_model_path != active_config->model_path)
+                    return lora_training.discard_model_export(resolved_model_path);
+                return false;
             },
             user_settings.custom_names,
             [custom_names, custom_names_update_mutex](

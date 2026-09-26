@@ -13,6 +13,14 @@
       <ContentControl x:Name="DialogContent" Grid.Row="1">
         <ScrollViewer x:Name="MainScroll" VerticalScrollBarVisibility="Auto">
     <StackPanel Width="480" Spacing="16">
+      <Expander x:Name="SetupExpander" Width="480" IsExpanded="False" HorizontalContentAlignment="Stretch">
+        <Expander.Header>
+          <StackPanel Spacing="2">
+            <TextBlock Text="模型與訓練器" FontSize="14" FontWeight="SemiBold"/>
+            <TextBlock x:Name="SetupSummary" Text="正在確認安裝狀態" FontSize="12" TextWrapping="Wrap"/>
+          </StackPanel>
+        </Expander.Header>
+        <StackPanel Spacing="16">
       <TextBlock Text="基礎模型&#10;tony65535/llavon-ime-llama-250m · 約 1 GB · CC-BY-NC-4.0"
                  FontSize="12" TextWrapping="Wrap" />
       <Border x:Name="ModelStatusBorder" Padding="0,0,0,12" BorderThickness="0,0,0,1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
@@ -28,15 +36,11 @@
           </StackPanel>
         </Grid>
       </Border>
-      <Grid>
-        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+      <StackPanel Orientation="Horizontal" Spacing="8">
           <Button x:Name="CheckModelButton" Content="檢查更新" MinHeight="32"/>
           <Button x:Name="DownloadModelButton" Content="下載模型" MinHeight="32"/>
           <Button x:Name="CancelModelButton" Content="取消下載" MinHeight="32" Visibility="Collapsed"/>
-        </StackPanel>
-        <Button x:Name="TrainingHistoryButton" Grid.Column="1" Content="訓練歷程" MinHeight="32"/>
-      </Grid>
+      </StackPanel>
       <StackPanel Spacing="8">
         <TextBlock Text="LoRA 訓練器" FontSize="14" FontWeight="SemiBold"/>
         <Border Padding="0,4,0,12" BorderThickness="0,0,0,1"
@@ -65,6 +69,17 @@
           <Button x:Name="CancelTrainerButton" Content="取消" MinHeight="32" VerticalAlignment="Bottom" Visibility="Collapsed"/>
         </StackPanel>
       </StackPanel>
+        </StackPanel>
+      </Expander>
+      <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <StackPanel Grid.Column="0" Spacing="3" VerticalAlignment="Center">
+          <TextBlock Text="訓練基底" FontSize="14" FontWeight="SemiBold"/>
+          <TextBlock x:Name="TrainingBaseSummary" Text="Base model" FontSize="12" TextWrapping="Wrap"/>
+        </StackPanel>
+        <Button x:Name="TrainingBaseButton" Grid.Column="1" Content="選擇訓練基底" MinHeight="32" VerticalAlignment="Center"/>
+        <ComboBox x:Name="TrainingBase" Visibility="Collapsed"/>
+      </Grid>
       <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
@@ -73,8 +88,6 @@
         </StackPanel>
         <Button x:Name="TrainingDataButton" Grid.Column="1" Content="檢視訓練資料" MinHeight="32" VerticalAlignment="Center"/>
       </Grid>
-      <ComboBox x:Name="TrainingBase" Header="訓練基底" MinHeight="32"
-                HorizontalAlignment="Stretch"/>
       <TextBlock x:Name="EmptyTrainingItems" Text="目前沒有尚未訓練的資料。請先使用輸入法提交一些文字。"
                  FontSize="14" TextWrapping="Wrap" Visibility="Collapsed"/>
       <TextBlock Text="訓練設定" FontSize="14" FontWeight="SemiBold"/>

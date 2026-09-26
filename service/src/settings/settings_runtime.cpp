@@ -64,6 +64,18 @@ struct UiThreadState {
 
 class Runtime final {
 public:
+    int32_t configure_model_preparation(
+        llavon_settings_prepare_model_callback callback, void* context,
+        const char16_t* base_model_path) {
+        std::lock_guard lock(mutex_);
+        if (settings_thread_.thread) return ERROR_BUSY;
+        if (!callback || !base_model_path) return ERROR_INVALID_PARAMETER;
+        configuration_.prepare_model_callback = callback;
+        configuration_.prepare_model_context = context;
+        configuration_.base_model_path = base_model_path;
+        return ERROR_SUCCESS;
+    }
+
     int32_t configure_update_notifications(
         bool enabled, llavon_settings_save_update_notifications_callback save_callback,
         void* save_context) {
@@ -514,7 +526,7 @@ Runtime& runtime() {
 }  // namespace
 }  // namespace llavon::settings
 
-extern "C" int32_t llavon_settings_ui_configure_v4(
+extern "C" int32_t llavon_settings_ui_configure_v5(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
@@ -566,6 +578,13 @@ extern "C" int32_t llavon_settings_ui_configure_v4(
         get_lora_status_context, lora_model_action_callback,
         lora_model_action_context, cancel_lora_callback, cancel_lora_context,
         protection_callback, protection_context);
+}
+
+extern "C" int32_t llavon_settings_ui_configure_model_preparation_v2(
+    llavon_settings_prepare_model_callback callback, void* context,
+    const char16_t* base_model_path) {
+    return llavon::settings::runtime().configure_model_preparation(
+        callback, context, base_model_path);
 }
 
 extern "C" int32_t llavon_settings_ui_configure_update_notifications(

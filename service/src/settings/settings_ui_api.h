@@ -92,6 +92,7 @@ struct llavon_settings_lora_status {
     const llavon_char16_t* trainer_backend;
     const llavon_char16_t* trainer_release_version;
     const llavon_char16_t* trainer_message;
+    int32_t trainer_update_available;
 };
 
 struct llavon_settings_training_item {
@@ -114,6 +115,7 @@ struct llavon_settings_lora_history_item {
     double alpha;
     double dropout;
     const llavon_char16_t* target_modules;
+    const char* training_request_json; // UTF-8; null for legacy runs.
 };
 
 struct llavon_settings_lora_options {
@@ -144,6 +146,12 @@ typedef int32_t (*llavon_settings_save_inference_callback)(
     void* context, int32_t backend, const llavon_char16_t* device_id);
 typedef int32_t (*llavon_settings_save_model_path_callback)(
     void* context, const llavon_char16_t* model_path);
+enum llavon_settings_model_preparation_action {
+    LLAVON_MODEL_PREPARE = 0,
+    LLAVON_MODEL_DISCARD = 1,
+};
+typedef int32_t (*llavon_settings_prepare_model_callback)(
+    void* context, const llavon_char16_t* model_path, int32_t action);
 typedef int32_t (*llavon_settings_save_custom_names_callback)(
     void* context, const struct llavon_settings_custom_name* custom_names,
     size_t custom_name_count);
@@ -186,7 +194,7 @@ typedef int32_t (*llavon_settings_protection_callback)(
 // Supplies a snapshot of devices and the setting used for the current service
 // process. Strings and the device array are copied before this call returns.
 // This must be called before llavon_settings_ui_start.
-LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v4(
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v5(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
@@ -223,6 +231,14 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v4(
     llavon_settings_cancel_lora_callback cancel_lora_callback,
     void* cancel_lora_context,
     llavon_settings_protection_callback protection_callback, void* protection_context);
+
+// Registers GGUF preparation separately from model application. PREPARE does
+// not reload ime-core or change the selected model; DISCARD removes a newly
+// prepared model when the user closes the picker without applying it.
+// base_model_path is the installed, unpersonalized GGUF used by the tree root.
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_model_preparation_v2(
+    llavon_settings_prepare_model_callback callback, void* context,
+    const llavon_char16_t* base_model_path);
 
 // Configures the major update notification setting before the UI thread starts.
 LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_update_notifications(

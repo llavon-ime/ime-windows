@@ -492,6 +492,25 @@ bool LoraTrainingManager::ensure_model_exported(
     }
 }
 
+bool LoraTrainingManager::discard_model_export(
+    const std::filesystem::path& model_path) {
+    std::lock_guard operation_lock(operation_mutex_);
+    if (busy_.load(std::memory_order_acquire)) return false;
+    const auto history = training_data_->lora_training_history();
+    std::error_code error;
+    const auto runs_root = std::filesystem::absolute(
+        assets_root_ / L"runs", error).lexically_normal();
+    if (error) return false;
+    const auto output = std::filesystem::absolute(model_path, error).lexically_normal();
+    if (error || output.filename() != L"personalized-Q4_K_M.gguf" ||
+        output.parent_path().parent_path() != runs_root) return false;
+    if (std::ranges::none_of(history, [&](const LoraTrainingRun& run) {
+            return run.output_model_path.lexically_normal() == output;
+        })) return false;
+    std::filesystem::remove(output, error);
+    return !error;
+}
+
 void LoraTrainingManager::prune_obsolete_gguf_models(
     const std::filesystem::path& applied_model_path) const noexcept {
     try {
@@ -944,11 +963,12 @@ void LoraTrainingManager::check_trainer_worker() {
         std::lock_guard lock(status_mutex_);
         status_.trainer_assets = assets;
         status_.trainer_release_version = to_utf16(manifest.version);
-        status_.trainer_message =
-            status_.trainer_version == status_.trainer_release_version &&
-            status_.trainer_commit == to_utf16(manifest.commit)
-                ? u"已安裝此 submodule 對應的發行版"
-                : u"可下載此 submodule 對應的發行版";
+        status_.trainer_update_available =
+            status_.trainer_version != status_.trainer_release_version ||
+            status_.trainer_commit != to_utf16(manifest.commit);
+        status_.trainer_message = status_.trainer_update_available
+            ? u"可下載此 submodule 對應的發行版"
+            : u"已安裝此 submodule 對應的發行版";
         status_.stage = !status_.output_model_path.empty()
             ? LoraOperationStage::completed
             : (status_.model_available ? LoraOperationStage::model_ready
@@ -958,6 +978,7 @@ void LoraTrainingManager::check_trainer_worker() {
         std::lock_guard lock(status_mutex_);
         status_.trainer_assets = 0;
         status_.trainer_release_version.clear();
+        status_.trainer_update_available = false;
         status_.trainer_message = cancelling_.load(std::memory_order_acquire)
             ? u"查詢已取消" : to_utf16(error.what());
         status_.stage = !status_.output_model_path.empty()
@@ -1001,6 +1022,7 @@ void LoraTrainingManager::install_trainer_worker() {
         refresh_installed_trainer();
         std::lock_guard lock(status_mutex_);
         status_.trainer_release_version = to_utf16(manifest.version);
+        status_.trainer_update_available = false;
         status_.trainer_message = u"LoRA 訓練器已安裝";
         status_.stage = !status_.output_model_path.empty()
             ? LoraOperationStage::completed
@@ -1089,6 +1111,7 @@ void LoraTrainingManager::install_trainer_worker() {
     refresh_installed_trainer();
     std::lock_guard lock(status_mutex_);
     status_.trainer_release_version = to_utf16(manifest.version);
+    status_.trainer_update_available = false;
     status_.trainer_message = u"LoRA 訓練器安裝完成";
     status_.stage = !status_.output_model_path.empty()
         ? LoraOperationStage::completed
@@ -1285,7 +1308,6 @@ void LoraTrainingManager::training_worker() {
     {
         struct TrainingRequest {
             std::int32_t preset_version;
-            std::int32_t strength;
             bool only_manually_selected;
             std::int64_t parent_id;
             std::string base_model_revision;
@@ -1325,7 +1347,6 @@ void LoraTrainingManager::training_worker() {
         }
         const TrainingRequest request{
             .preset_version = 1,
-            .strength = static_cast<std::int32_t>(pending_options_.strength),
             .only_manually_selected = pending_options_.only_manually_selected,
             .parent_id = previous_run ? previous_run->id : 0,
             .base_model_revision = revision,

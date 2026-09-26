@@ -119,11 +119,11 @@ cmake --build --preset package --parallel
 完成後，安裝檔位於：
 
 ```text
-build/windows/llavon-ime-0.0.1-windows.msi
-build/windows/llavon-ime-0.0.1-setup.exe
+build/windows/llavon-ime-1.0.0-windows.msi
+build/windows/llavon-ime-1.0.0-setup.exe
 ```
 
-安裝器與 MSI 的內部版號固定為 `0.0.1`；CalVer 只用於 GitHub 發布 tag 與其 `latest.json` 發布資訊。從舊的 CalVer 安裝器轉換時，須先從 Windows「已安裝的應用程式」解除安裝舊的安裝套件一次（選顯示 CalVer 的項目，不是舊版另外顯示的 MSI）；否則 WiX 會把 `0.0.1` 視為降版。新安裝套件只會顯示一個解除安裝項目。本機之後只需執行 `cmake --build build/windows --config Release --target llavon-ime-setup --parallel`，不必為版號重新 configure。
+安裝器與 MSI 的內部版號固定為 `1.0.0`；CalVer 只用於 GitHub 發布 tag 與其 `latest.json` 發布資訊。從舊的 CalVer 安裝器轉換時，須先從 Windows「已安裝的應用程式」解除安裝舊的安裝套件一次（選顯示 CalVer 的項目，不是舊版另外顯示的 MSI）；否則 WiX 會把 `1.0.0` 視為降版。新安裝套件只會顯示一個解除安裝項目。本機之後只需執行 `cmake --build build/windows --config Release --target llavon-ime-setup --parallel`，不必為版號重新 configure。
 
 建置 `*-setup.exe` 時會記錄 Hugging Face 模型 revision、大小及 SHA-256，模型檔不會打包進安裝檔。安裝時會下載至 `%ProgramData%\Llavon IME\models`；同一模型更新時會驗證既有檔案並略過下載。LoRA Trainer 可在訓練視窗選擇 CPU、CUDA 或 ROCm 版本下載。首次打包仍需從網路取得 vcpkg 相依套件及 WiX 工具。
 

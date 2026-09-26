@@ -190,7 +190,7 @@ jobs:
 
       - name: Show MSI
         shell: pwsh
-        run: Get-Item build/windows/llavon-ime-0.0.1-windows.msi | Select-Object FullName, Length, LastWriteTime
+        run: Get-Item build/windows/llavon-ime-1.0.0-windows.msi | Select-Object FullName, Length, LastWriteTime
 
       - name: Show web installer
         shell: pwsh
@@ -200,7 +200,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llavon-ime-windows-msi
-          path: build/windows/llavon-ime-0.0.1-windows.msi
+          path: build/windows/llavon-ime-1.0.0-windows.msi
           if-no-files-found: error
           retention-days: 14
 

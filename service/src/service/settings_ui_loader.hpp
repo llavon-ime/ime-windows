@@ -27,6 +27,7 @@ public:
     using SaveInferenceSettings = std::function<bool(
         const llavon::ime::core::InferenceDeviceSelection&)>;
     using SaveModelPath = std::function<bool(const std::filesystem::path&)>;
+    using PrepareModel = std::function<bool(const std::filesystem::path&, std::int32_t)>;
     using SaveCustomNames =
         std::function<bool(const std::vector<CustomNameSetting>&)>;
     using SaveWidthToggleSetting = std::function<bool(bool)>;
@@ -49,7 +50,9 @@ public:
         const llavon::ime::core::InferenceRuntimeInfo& active,
         SaveInferenceSettings save_settings,
         std::u16string model_path,
+        std::u16string base_model_path,
         SaveModelPath save_model_path,
+        PrepareModel prepare_model,
         std::vector<CustomNameSetting> custom_names,
         SaveCustomNames save_custom_names,
         bool shift_space_width_toggle_enabled,
@@ -102,6 +105,7 @@ private:
         double alpha = 0;
         double dropout = 0;
         std::u16string target_modules;
+        std::string training_request_json;
     };
 
     using ConfigureFunction = std::int32_t (*)(
@@ -123,6 +127,8 @@ private:
     using StartFunction = std::int32_t (*)();
     using ConfigureUpdateNotificationsFunction = std::int32_t (*)(
         std::int32_t, llavon_settings_save_update_notifications_callback, void*);
+    using ConfigureModelPreparationFunction = std::int32_t (*)(
+        llavon_settings_prepare_model_callback, void*, const char16_t*);
     using ShowFunction = void (*)();
     using ShowContextMenuFunction = void (*)(std::int32_t, std::int32_t);
     using StopFunction = std::int32_t (*)();
@@ -140,6 +146,8 @@ private:
         std::size_t custom_name_count) noexcept;
     static std::int32_t save_model_path_trampoline(
         void* context, const char16_t* model_path) noexcept;
+    static std::int32_t prepare_model_trampoline(
+        void* context, const char16_t* model_path, std::int32_t action) noexcept;
     static std::int32_t save_width_toggle_trampoline(
         void* context, std::int32_t enabled) noexcept;
     static std::int32_t save_update_notifications_trampoline(
@@ -168,6 +176,7 @@ private:
     HMODULE module_ = nullptr;
     ConfigureFunction configure_ = nullptr;
     ConfigureUpdateNotificationsFunction configure_update_notifications_ = nullptr;
+    ConfigureModelPreparationFunction configure_model_preparation_ = nullptr;
     StartFunction start_ = nullptr;
     ShowFunction show_ = nullptr;
     ShowContextMenuFunction show_context_menu_ = nullptr;
@@ -182,7 +191,9 @@ private:
     llavon::ime::core::InferenceDeviceSelection selected_;
     SaveInferenceSettings save_settings_;
     std::u16string model_path_;
+    std::u16string base_model_path_;
     SaveModelPath save_model_path_;
+    PrepareModel prepare_model_;
     std::vector<CustomNameStorage> custom_names_;
     SaveCustomNames save_custom_names_;
     bool shift_space_width_toggle_enabled_ = false;

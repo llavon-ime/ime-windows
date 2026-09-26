@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.31)
 
 # The installer version is independent of release tags. WiX replaces
 # same-version bundles, so local and published installers can swap.
-set(LLAVON_IME_VERSION "0.0.1" CACHE STRING "Fixed installer version" FORCE)
-set(LLAVON_IME_MSI_VERSION "0.0.1" CACHE STRING "Fixed MSI product version" FORCE)
+set(LLAVON_IME_VERSION "1.0.0" CACHE STRING "Fixed installer version" FORCE)
+set(LLAVON_IME_MSI_VERSION "1.0.0" CACHE STRING "Fixed MSI product version" FORCE)
 option(LLAVON_IME_ENABLE_CUDA "Build ime-core with the CUDA backend" OFF)
 
 # vcpkg's toolchain is loaded by project(). Select optional manifest features

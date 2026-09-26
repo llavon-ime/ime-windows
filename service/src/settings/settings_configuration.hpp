@@ -47,8 +47,11 @@ struct SettingsConfiguration {
     llavon_settings_save_inference_callback save_callback = nullptr;
     void* save_context = nullptr;
     std::u16string model_path;
+    std::u16string base_model_path;
     llavon_settings_save_model_path_callback save_model_path_callback = nullptr;
     void* save_model_path_context = nullptr;
+    llavon_settings_prepare_model_callback prepare_model_callback = nullptr;
+    void* prepare_model_context = nullptr;
     std::vector<CustomNameOption> custom_names;
     llavon_settings_save_custom_names_callback save_custom_names_callback = nullptr;
     void* save_custom_names_context = nullptr;
