@@ -19,6 +19,7 @@ struct UserSettings {
     std::string model_path;
     std::vector<CustomNameSetting> custom_names;
     bool shift_space_width_toggle_enabled = false;
+    bool major_update_notifications_enabled = true;
 };
 
 UserSettings load_settings() noexcept;
@@ -29,5 +30,6 @@ bool save_model_path(std::string model_path) noexcept;
 bool save_custom_names(
     const std::vector<CustomNameSetting>& custom_names) noexcept;
 bool save_shift_space_width_toggle_setting(bool enabled) noexcept;
+bool save_major_update_notifications_setting(bool enabled) noexcept;
 
 }  // namespace llavon::service

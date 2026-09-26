@@ -846,6 +846,37 @@ void SettingsWindow::build_page() {
                                     UpdateChecker::installed_build_number(),
                                     UpdateChecker::installed_commit());
     named<TextBlock>(shell_, L"BuildLabel").Text(build_label);
+    const auto update_notifications_toggle =
+        named<ToggleSwitch>(shell_, L"UpdateNotificationsToggle");
+    auto saved_update_notifications =
+        std::make_shared<bool>(configuration_.major_update_notifications_enabled);
+    auto updating_update_notifications = std::make_shared<bool>(false);
+    update_notifications_toggle.IsOn(*saved_update_notifications);
+    const auto update_notifications_note =
+        named<TextBlock>(shell_, L"UpdateNotificationsNote");
+    update_notifications_toggle.Toggled(
+        [this, update_notifications_note, saved_update_notifications,
+         updating_update_notifications](const auto& sender, const auto&) {
+            if (*updating_update_notifications) return;
+            const auto toggle = sender.template as<ToggleSwitch>();
+            const bool enabled = toggle.IsOn();
+            if (enabled == *saved_update_notifications) return;
+            const std::int32_t result = configuration_.save_update_notifications_callback
+                ? configuration_.save_update_notifications_callback(
+                      configuration_.save_update_notifications_context, enabled ? 1 : 0)
+                : ERROR_INVALID_FUNCTION;
+            if (result == ERROR_SUCCESS) {
+                *saved_update_notifications = enabled;
+                configuration_.major_update_notifications_enabled = enabled;
+                update_notifications_note.Visibility(Visibility::Collapsed);
+            } else {
+                *updating_update_notifications = true;
+                toggle.IsOn(*saved_update_notifications);
+                *updating_update_notifications = false;
+                update_notifications_note.Text(L"無法儲存更新通知設定，請再試一次。");
+                update_notifications_note.Visibility(Visibility::Visible);
+            }
+        });
     update_button_ = named<Button>(shell_, L"UpdateButton");
     update_button_.Click([this](const auto&, const auto&) { begin_update_check(); });
     update_install_ = named<Button>(shell_, L"UpdateInstall");

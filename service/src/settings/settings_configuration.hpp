@@ -55,6 +55,10 @@ struct SettingsConfiguration {
     bool shift_space_width_toggle_enabled = false;
     llavon_settings_save_width_toggle_callback save_width_toggle_callback = nullptr;
     void* save_width_toggle_context = nullptr;
+    bool major_update_notifications_enabled = true;
+    llavon_settings_save_update_notifications_callback
+        save_update_notifications_callback = nullptr;
+    void* save_update_notifications_context = nullptr;
     std::vector<TrainingDataOption> training_items;
     llavon_settings_refresh_training_items_callback refresh_training_items_callback = nullptr;
     void* refresh_training_items_context = nullptr;

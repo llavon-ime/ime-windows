@@ -105,6 +105,8 @@ void SettingsUiLoader::configure(
     SaveCustomNames save_custom_names,
     bool shift_space_width_toggle_enabled,
     SaveWidthToggleSetting save_width_toggle,
+    bool major_update_notifications_enabled,
+    SaveUpdateNotifications save_update_notifications,
     LoadTrainingData load_training_data,
     DeleteTrainingData delete_training_data,
     LoadLoraHistory load_lora_history,
@@ -153,6 +155,8 @@ void SettingsUiLoader::configure(
     save_custom_names_ = std::move(save_custom_names);
     shift_space_width_toggle_enabled_ = shift_space_width_toggle_enabled;
     save_width_toggle_ = std::move(save_width_toggle);
+    major_update_notifications_enabled_ = major_update_notifications_enabled;
+    save_update_notifications_ = std::move(save_update_notifications);
     load_training_data_ = std::move(load_training_data);
     delete_training_data_ = std::move(delete_training_data);
     load_lora_history_ = std::move(load_lora_history);
@@ -240,18 +244,22 @@ bool SettingsUiLoader::load() {
 
     start_ = resolve<StartFunction>(module_, "llavon_settings_ui_start");
     configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v4");
+    configure_update_notifications_ = resolve<ConfigureUpdateNotificationsFunction>(
+        module_, "llavon_settings_ui_configure_update_notifications");
     show_ = resolve<ShowFunction>(module_, "llavon_settings_ui_show");
     show_context_menu_ =
         resolve<ShowContextMenuFunction>(module_, "llavon_settings_ui_show_context_menu");
     stop_ = resolve<StopFunction>(module_, "llavon_settings_ui_stop");
     const auto set_pending_count = resolve<SetPendingCountFunction>(
         module_, "llavon_settings_ui_set_pending_count");
-    if (!configure_ || !start_ || !show_ || !show_context_menu_ || !stop_ ||
+    if (!configure_ || !configure_update_notifications_ || !start_ || !show_ ||
+        !show_context_menu_ || !stop_ ||
         !set_pending_count ||
         !configure_module()) {
         FreeLibrary(module_);
         module_ = nullptr;
         configure_ = nullptr;
+        configure_update_notifications_ = nullptr;
         start_ = nullptr;
         show_ = nullptr;
         show_context_menu_ = nullptr;
@@ -317,7 +325,7 @@ bool SettingsUiLoader::configure_module() {
             .revice = item.revice ? 1 : 0,
         });
     }
-    return configure_(
+    if (configure_(
                devices.data(), devices.size(), backend_value(selected_.backend),
                selected_device_id.c_str(), &active_device, gpu_offload_ ? 1 : 0,
                fell_back_to_cpu_ ? 1 : 0, save_trampoline, this,
@@ -333,7 +341,12 @@ bool SettingsUiLoader::configure_module() {
                start_lora_training_trampoline, this,
                get_lora_status_trampoline, this,
                lora_model_action_trampoline, this,
-               cancel_lora_trampoline, this, protection_trampoline, this) == 0;
+               cancel_lora_trampoline, this, protection_trampoline, this) != 0) {
+        return false;
+    }
+    return configure_update_notifications_(
+               major_update_notifications_enabled_ ? 1 : 0,
+               save_update_notifications_trampoline, this) == 0;
 }
 
 std::int32_t SettingsUiLoader::protection_trampoline(
@@ -570,6 +583,20 @@ std::int32_t SettingsUiLoader::save_width_toggle_trampoline(
         const bool value = enabled != 0;
         if (!self->save_width_toggle_(value)) return ERROR_WRITE_FAULT;
         self->shift_space_width_toggle_enabled_ = value;
+        return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_WRITE_FAULT;
+    }
+}
+
+std::int32_t SettingsUiLoader::save_update_notifications_trampoline(
+    void* context, std::int32_t enabled) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->save_update_notifications_) return ERROR_INVALID_FUNCTION;
+    try {
+        const bool value = enabled != 0;
+        if (!self->save_update_notifications_(value)) return ERROR_WRITE_FAULT;
+        self->major_update_notifications_enabled_ = value;
         return ERROR_SUCCESS;
     } catch (...) {
         return ERROR_WRITE_FAULT;

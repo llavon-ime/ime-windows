@@ -64,6 +64,18 @@ struct UiThreadState {
 
 class Runtime final {
 public:
+    int32_t configure_update_notifications(
+        bool enabled, llavon_settings_save_update_notifications_callback save_callback,
+        void* save_context) {
+        std::lock_guard lock(mutex_);
+        if (settings_thread_.thread) return ERROR_BUSY;
+        if (!save_callback) return ERROR_INVALID_PARAMETER;
+        configuration_.major_update_notifications_enabled = enabled;
+        configuration_.save_update_notifications_callback = save_callback;
+        configuration_.save_update_notifications_context = save_context;
+        return ERROR_SUCCESS;
+    }
+
     void set_pending_count(std::size_t count) noexcept {
         pending_count_.store(count, std::memory_order_release);
         has_pending_count_.store(true, std::memory_order_release);
@@ -554,6 +566,14 @@ extern "C" int32_t llavon_settings_ui_configure_v4(
         get_lora_status_context, lora_model_action_callback,
         lora_model_action_context, cancel_lora_callback, cancel_lora_context,
         protection_callback, protection_context);
+}
+
+extern "C" int32_t llavon_settings_ui_configure_update_notifications(
+    int32_t enabled,
+    llavon_settings_save_update_notifications_callback save_callback,
+    void* save_context) {
+    return llavon::settings::runtime().configure_update_notifications(
+        enabled != 0, save_callback, save_context);
 }
 
 extern "C" int32_t llavon_settings_ui_start(void) {

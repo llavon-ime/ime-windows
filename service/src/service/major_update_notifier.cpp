@@ -1,6 +1,7 @@
 #include "major_update_notifier.hpp"
 
 #include "../settings/update_checker.hpp"
+#include "user_settings.hpp"
 
 #include <windows.h>
 #include <winrt/Windows.Data.Xml.Dom.h>
@@ -50,7 +51,9 @@ void MajorUpdateNotifier::run(std::stop_token stop) noexcept {
             std::unique_lock lock(wait_mutex_);
             wake_.wait_for(lock, stop, update_delay, [] { return false; });
         }
-        if (stop.stop_requested() || settings::UpdateChecker::installed_build_number() == 0) {
+        if (stop.stop_requested() ||
+            !load_settings().major_update_notifications_enabled ||
+            settings::UpdateChecker::installed_build_number() == 0) {
             return;
         }
 
@@ -80,7 +83,9 @@ void MajorUpdateNotifier::run(std::stop_token stop) noexcept {
                 if (state->open_settings) state->open_settings();
             }
         });
-        if (stop.stop_requested()) return;
+        if (stop.stop_requested() || !load_settings().major_update_notifications_enabled) {
+            return;
+        }
         ToastNotificationManager::CreateToastNotifier(app_user_model_id).Show(toast);
 
         // Keep the toast and its click handler alive until service shutdown.

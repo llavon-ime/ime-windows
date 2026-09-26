@@ -66,6 +66,9 @@
       <TextBlock Text="軟體更新" FontSize="20" FontWeight="SemiBold" Margin="0,6,0,18" />
       <StackPanel Spacing="8" Margin="0,0,0,24">
         <TextBlock x:Name="BuildLabel" FontSize="14" TextWrapping="Wrap" />
+        <ToggleSwitch x:Name="UpdateNotificationsToggle" Header="更新通知" OnContent="開啟" OffContent="關閉" />
+        <TextBlock Text="只在重大更新時通知" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
+        <TextBlock x:Name="UpdateNotificationsNote" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Visibility="Collapsed" />
         <StackPanel Orientation="Horizontal" Spacing="12">
           <Button x:Name="UpdateButton" Content="檢查更新" MinWidth="112" MinHeight="32" FontSize="14" />
           <Button x:Name="UpdateInstall" Content="立即更新" Visibility="Collapsed" MinHeight="32" FontSize="14" Style="{StaticResource AccentButtonStyle}" />

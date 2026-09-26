@@ -149,6 +149,8 @@ typedef int32_t (*llavon_settings_save_custom_names_callback)(
     size_t custom_name_count);
 typedef int32_t (*llavon_settings_save_width_toggle_callback)(
     void* context, int32_t enabled);
+typedef int32_t (*llavon_settings_save_update_notifications_callback)(
+    void* context, int32_t enabled);
 typedef int32_t (*llavon_settings_start_lora_training_callback)(
     void* context, const llavon_char16_t* const* selected_event_ids,
     size_t selected_event_id_count,
@@ -221,6 +223,12 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v4(
     llavon_settings_cancel_lora_callback cancel_lora_callback,
     void* cancel_lora_context,
     llavon_settings_protection_callback protection_callback, void* protection_context);
+
+// Configures the major update notification setting before the UI thread starts.
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_update_notifications(
+    int32_t enabled,
+    llavon_settings_save_update_notifications_callback save_callback,
+    void* save_context);
 
 // Starts the settings UI's dedicated STA thread. Calling this function more
 // than once is safe. Returns zero on success.

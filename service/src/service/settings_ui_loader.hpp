@@ -30,6 +30,7 @@ public:
     using SaveCustomNames =
         std::function<bool(const std::vector<CustomNameSetting>&)>;
     using SaveWidthToggleSetting = std::function<bool(bool)>;
+    using SaveUpdateNotifications = std::function<bool(bool)>;
     using LoadTrainingData = std::function<std::vector<TrainingDataItem>(
         std::string_view, std::int64_t)>;
     using DeleteTrainingData = std::function<bool(std::u16string_view)>;
@@ -53,6 +54,8 @@ public:
         SaveCustomNames save_custom_names,
         bool shift_space_width_toggle_enabled,
         SaveWidthToggleSetting save_width_toggle,
+        bool major_update_notifications_enabled,
+        SaveUpdateNotifications save_update_notifications,
         LoadTrainingData load_training_data,
         DeleteTrainingData delete_training_data,
         LoadLoraHistory load_lora_history,
@@ -118,6 +121,8 @@ private:
         llavon_settings_lora_model_action_callback, void*,
         llavon_settings_cancel_lora_callback, void*, llavon_settings_protection_callback, void*);
     using StartFunction = std::int32_t (*)();
+    using ConfigureUpdateNotificationsFunction = std::int32_t (*)(
+        std::int32_t, llavon_settings_save_update_notifications_callback, void*);
     using ShowFunction = void (*)();
     using ShowContextMenuFunction = void (*)(std::int32_t, std::int32_t);
     using StopFunction = std::int32_t (*)();
@@ -136,6 +141,8 @@ private:
     static std::int32_t save_model_path_trampoline(
         void* context, const char16_t* model_path) noexcept;
     static std::int32_t save_width_toggle_trampoline(
+        void* context, std::int32_t enabled) noexcept;
+    static std::int32_t save_update_notifications_trampoline(
         void* context, std::int32_t enabled) noexcept;
     static std::int32_t start_lora_training_trampoline(
         void* context, const char16_t* const* selected_event_ids,
@@ -160,6 +167,7 @@ private:
 
     HMODULE module_ = nullptr;
     ConfigureFunction configure_ = nullptr;
+    ConfigureUpdateNotificationsFunction configure_update_notifications_ = nullptr;
     StartFunction start_ = nullptr;
     ShowFunction show_ = nullptr;
     ShowContextMenuFunction show_context_menu_ = nullptr;
@@ -179,6 +187,8 @@ private:
     SaveCustomNames save_custom_names_;
     bool shift_space_width_toggle_enabled_ = false;
     SaveWidthToggleSetting save_width_toggle_;
+    bool major_update_notifications_enabled_ = true;
+    SaveUpdateNotifications save_update_notifications_;
     LoadTrainingData load_training_data_;
     DeleteTrainingData delete_training_data_;
     LoadLoraHistory load_lora_history_;

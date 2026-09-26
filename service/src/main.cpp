@@ -307,6 +307,10 @@ int main(int argc, char* argv[]) {
             [](bool enabled) {
                 return llavon::service::save_shift_space_width_toggle_setting(enabled);
             },
+            user_settings.major_update_notifications_enabled,
+            [](bool enabled) {
+                return llavon::service::save_major_update_notifications_setting(enabled);
+            },
             [&server](std::string_view password, std::int64_t base_run_id) {
                 return server.training_data_writer()->pending_items(password, base_run_id);
             },
