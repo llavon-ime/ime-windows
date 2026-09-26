@@ -257,6 +257,53 @@ jobs:
           $releaseTag = "v$releaseVersion"
           $setupSha256 = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 
+          # Only the commit actually being published may opt in. A trailer is
+          # consumed once; later ordinary releases keep its announcement in
+          # latest.json so users who missed that build can still be notified.
+          $trailers = @(& git log -1 --format=%B $env:GITHUB_SHA | git interpret-trailers --parse)
+          $notices = @($trailers | Where-Object { $_ -cmatch '^Major-Update: .+$' } |
+            ForEach-Object { $_.Substring(14).Trim() })
+          if ($notices.Count -gt 1) {
+            throw "Use only one Major-Update trailer"
+          }
+          if ($notices.Count -eq 1 -and $notices[0].Length -gt 200) {
+            throw "Major-Update message must be at most 200 characters"
+          }
+
+          $majorUpdate = $null
+          if ($notices.Count -eq 1) {
+            $majorUpdate = [ordered]@{
+              build = [long]"${{ github.run_number }}"
+              message = $notices[0]
+            }
+          } else {
+            gh release view latest --json tagName *> $null
+            if ($LASTEXITCODE -eq 0) {
+              $previousDir = Join-Path $env:RUNNER_TEMP "previous-latest-$env:GITHUB_RUN_ID"
+              New-Item -ItemType Directory -Path $previousDir -Force | Out-Null
+              gh release download latest --pattern latest.json --dir $previousDir
+              if ($LASTEXITCODE -ne 0) {
+                throw "Could not download the previous latest.json"
+              }
+              $previous = Get-Content -Raw -Encoding utf8 (Join-Path $previousDir 'latest.json') |
+                ConvertFrom-Json
+              if ($null -ne $previous.major_update) {
+                $majorUpdate = [ordered]@{
+                  build = [long]$previous.major_update.build
+                  message = [string]$previous.major_update.message
+                }
+              }
+            }
+          }
+
+          $releaseNotesPath = Join-Path $env:RUNNER_TEMP "llavon-release-notes-$env:GITHUB_RUN_ID.md"
+          $releaseNotes = Get-Content -Raw -Encoding utf8 '.github/release-notes.md'
+          if ($notices.Count -eq 1) {
+            $releaseNotes = "## 重大更新`n`n$($notices[0])`n`n$releaseNotes"
+          }
+          [System.IO.File]::WriteAllText(
+            $releaseNotesPath, $releaseNotes, [System.Text.UTF8Encoding]::new($false))
+
           gh release view $releaseTag --json targetCommitish *> $null
           if ($LASTEXITCODE -eq 0) {
             $targetCommit = (& gh release view $releaseTag --json targetCommitish --jq .targetCommitish).Trim()
@@ -267,12 +314,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
-            gh release edit $releaseTag --notes-file .github/release-notes.md
+            gh release edit $releaseTag --notes-file $releaseNotesPath
           } else {
             gh release create $releaseTag $setup.FullName $msi.FullName `
               --target "${{ github.sha }}" `
               --title "Llavon IME $releaseVersion" `
-              --notes-file .github/release-notes.md
+              --notes-file $releaseNotesPath
           }
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
@@ -300,7 +347,11 @@ jobs:
               size = [long]$setup.Length
               sha256 = $setupSha256
             }
-          } | ConvertTo-Json -Depth 4 -Compress
+          }
+          if ($null -ne $majorUpdate) {
+            $manifest.major_update = $majorUpdate
+          }
+          $manifest = $manifest | ConvertTo-Json -Depth 4 -Compress
           [System.IO.File]::WriteAllText(
             $manifestPath,
             $manifest,
@@ -326,5 +377,5 @@ jobs:
 
           gh release create latest $setup.FullName $msi.FullName $manifestPath `
             --title "Latest Windows build" `
-            --notes-file .github/release-notes.md `
+            --notes-file $releaseNotesPath `
             --latest

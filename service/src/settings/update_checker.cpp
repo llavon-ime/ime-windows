@@ -215,6 +215,19 @@ UpdateCheckResult perform_check() {
         !parsed_latest_version) {
         throw std::runtime_error("latest.json contains invalid build identity");
     }
+    if (manifest.HasKey(L"major_update")) {
+        const auto major = manifest.GetNamedObject(L"major_update");
+        result.major_update_build = json_unsigned(major, L"build");
+        const winrt::hstring message = major.GetNamedString(L"message");
+        result.major_update_message.assign(message.c_str(), message.size());
+        if (result.major_update_build == 0 ||
+            result.major_update_build > result.latest_build ||
+            result.major_update_message.empty() ||
+            result.major_update_message.size() > 200 ||
+            result.major_update_message.find_first_of(L"\r\n\t") != std::wstring::npos) {
+            throw std::runtime_error("latest.json contains invalid major update metadata");
+        }
+    }
     // Existing schema-1 releases have no setup field. They remain readable so
     // development builds can check for updates before the first new release.
     if (manifest.HasKey(L"setup")) {

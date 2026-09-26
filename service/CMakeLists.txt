@@ -30,6 +30,8 @@ add_executable(llavon-ime-service
     src/service/lora_training_manager.cpp
     src/service/lora_training_manager.hpp
     src/service/lora_training_presets.hpp
+    src/service/major_update_notifier.cpp
+    src/service/major_update_notifier.hpp
     src/service/debug/core_logger_adapter.hpp
     src/service/user_settings.cpp
     src/service/user_settings.hpp
@@ -44,6 +46,8 @@ add_executable(llavon-ime-service
     src/service/training_data_writer.hpp
     src/service/winrt_http.cpp
     src/service/winrt_http.hpp
+    src/settings/update_checker.cpp
+    src/settings/update_checker.hpp
     src/service.rc
 )
 
@@ -124,6 +128,8 @@ set_target_properties(llavon-ime-candidate-ui PROPERTIES
 )
 target_compile_definitions(llavon-ime-service PRIVATE
     LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
+    LLAVON_IME_BUILD_COMMIT="${IME_WINDOWS_SERVICE_BUILD_COMMIT}"
+    LLAVON_IME_BUILD_NUMBER=${IME_WINDOWS_SERVICE_BUILD_NUMBER}
     LLAVON_LORA_SUBMODULE_COMMIT="${LLAVON_LORA_SUBMODULE_COMMIT}"
     WIN32_LEAN_AND_MEAN
     NOMINMAX
@@ -197,6 +203,7 @@ target_link_libraries(llavon-ime-service PRIVATE
     gdi32
     ole32
     oleaut32
+    runtimeobject
     shell32
     ws2_32
 )

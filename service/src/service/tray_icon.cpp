@@ -88,6 +88,13 @@ void TrayIcon::notify_server_stopped(int exit_code) const noexcept {
     }
 }
 
+void TrayIcon::request_open_settings() const noexcept {
+    const HWND notification_window = notification_window_.load(std::memory_order_acquire);
+    if (notification_window && open_settings_message_) {
+        PostMessageW(notification_window, open_settings_message_, 0, 0);
+    }
+}
+
 LRESULT CALLBACK TrayIcon::window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     TrayIcon* self = nullptr;
     if (message == WM_NCCREATE) {

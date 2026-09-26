@@ -11,6 +11,15 @@
     <DirectoryRef Id="INSTALL_ROOT">
       <Component Id="LlavonImeUninstallShortcut" Guid="*">
         <Shortcut
+          Id="OpenLlavonImeSettings"
+          Directory="LlavonImeProgramMenuFolder"
+          Name="拉風輸入法設定"
+          Description="開啟拉風輸入法設定"
+          Target="[INSTALL_ROOT]bin\llavon-ime-service.exe"
+          Arguments="--settings">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="Llavon.IME.Windows" />
+        </Shortcut>
+        <Shortcut
           Id="UninstallLlavonImeFromInstallDirectory"
           Name="解除安裝拉風輸入法"
           Description="開啟已安裝的程式，解除安裝 Llavon IME 安裝套件"

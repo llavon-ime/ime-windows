@@ -8,6 +8,7 @@
 #include "service/custom_name_matcher.hpp"
 #include "service/debug/core_logger_adapter.hpp"
 #include "service/lora_training_manager.hpp"
+#include "service/major_update_notifier.hpp"
 #include "service/user_settings.hpp"
 #include "service/settings_ui_loader.hpp"
 #include "service/tray_icon.hpp"
@@ -195,18 +196,26 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
+        const bool show_settings = argc == 2 && std::string(argv[1]) == "--settings";
+        const int service_argc = show_settings ? 1 : argc;
+
         ServiceInstanceLock instance_lock;
         if (!instance_lock.owns_instance()) {
+            if (show_settings) {
+                const HWND existing = FindWindowW(L"LlavonImeServiceTrayWindow", nullptr);
+                const UINT message = RegisterWindowMessageW(L"LlavonIme.OpenSettings");
+                if (existing && message) PostMessageW(existing, message, 0, 0);
+            }
             std::clog << "[SRV] IME Windows Service already running; exiting\n";
             return 0;
         }
 
         std::clog << "[SRV] IME Windows Service starting\n";
 
-        auto config = parse_core_config(argc, argv);
+        auto config = parse_core_config(service_argc, argv);
         config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
         const auto user_settings = llavon::service::load_settings();
-        if (argc == 1 && !user_settings.model_path.empty()) {
+        if (service_argc == 1 && !user_settings.model_path.empty()) {
             config.model_path = resolve_configured_model_path(
                 std::filesystem::path(utf8::utf8to16(user_settings.model_path)));
         }
@@ -232,7 +241,7 @@ int main(int argc, char* argv[]) {
         llavon::service::SettingsUiLoader settings_ui;
         auto active_config = std::make_shared<llavon::ime::core::CoreConfig>(config);
         std::u16string displayed_model_path;
-        if (argc != 1) {
+        if (service_argc != 1) {
             displayed_model_path = config.model_path.u16string();
         } else if (!user_settings.model_path.empty()) {
             displayed_model_path = utf8::utf8to16(user_settings.model_path);
@@ -385,6 +394,9 @@ int main(int argc, char* argv[]) {
             std::cerr << "[WARN] tray initialization failed: " << GetLastError() << '\n';
             return run_server(server);
         }
+        if (show_settings) settings_ui.show();
+        llavon::service::MajorUpdateNotifier update_notifier(
+            [&tray] { tray.request_open_settings(); });
 
         int server_result = 1;
         std::thread server_thread([&tray, &server, &server_result] {

@@ -26,6 +26,7 @@ public:
                 ShutdownCallback shutdown);
     int run_message_loop();
     void notify_server_stopped(int exit_code) const noexcept;
+    void request_open_settings() const noexcept;
 
 private:
     static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);

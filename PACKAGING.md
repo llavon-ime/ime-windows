@@ -97,6 +97,18 @@ GitHub Actions 會以亞洲／台北時區的 `YYYY.MM.DD.<1000+GITHUB_RUN_NUMBE
 
 設定頁面開啟時會檢查 `latest.json`，但只有使用者點擊「立即更新」才會開始安裝。第 1 版資訊清單也記錄安裝程式資產在版本化發行版中的網址、位元組大小及 SHA-256。網址取自實際發布的資產名稱，因此更改安裝程式執行檔名稱不需要修改更新程式。設定介面的 DLL 會將安裝程式下載至使用者的 LocalAppData，驗證大小與 SHA-256，再以 `runas` 啟動 WiX Burn 安裝套件，並傳入 `-quiet -norestart`。Windows 可能顯示 UAC 提示；WiX 不會顯示安裝介面。
 
+要將某次主分支發布標為重大更新，在**該次發布的最後一筆提交**訊息末尾加上 Git trailer，例如：
+
+```text
+改善輸入法候選字與設定體驗
+
+Major-Update: 候選字選取與自訂詞庫已全面更新，請開啟設定頁安裝新版。
+```
+
+CI 會將這一行（最多 200 個字元）放入 `latest.json` 的 `major_update`，並加到該版 Release 說明。一般提交不加此行即可；不必手動編輯 Release。後續一般發布會在資訊清單保留最近一次重大更新，讓未及時檢查的舊版仍能收到通知。已安裝重大更新或更晚版本的使用者不會收到這則通知。常駐程式每次啟動後會在背景等待約 10 分鐘，接著檢查一次更新；這段等待與檢查不依賴視窗訊息迴圈。若仍有待安裝的重大更新便顯示通知；重新開機後會再次檢查。通知不會自動安裝更新。合併或 squash 時，請確認 `Major-Update:` 留在主分支最後一筆提交的訊息末尾。
+
+通知採用 Windows Toast 彈出介面，安裝器會建立帶有 AppUserModelID 的開始功能表捷徑；直接執行建置目錄中的服務程式沒有這個捷徑，無法顯示 Toast。目前未註冊通知中心歷史記錄所需的 COM 啟用程式，因此不保證通知在彈出視窗消失後仍保留於通知中心。
+
 在 MSI 開始計算檔案占用狀態前，生命週期輔助程式會停止後端，並要求 TSF 釋放輸入處理器。MSI 和 Burn 安裝套件都設定 `MSIRESTARTMANAGERCONTROL=DisableShutdown`，讓 Restart Manager 偵測檔案占用，但不要求它關閉仍載入 TSF DLL 的其他應用程式。先前使用 `Disable` 時，Windows Installer 會改用較慢的內建 FilesInUse 掃描；一次更新的紀錄顯示 `InstallValidate` 兩次各停留約 99 秒。如果應用程式仍持有舊 DLL，Windows Installer 可能將檔案替換延後至下次重新啟動 Windows。MSI 停止正在執行的後端後，已下載的安裝程式仍會繼續執行。
 
 設定頁面的靜默更新不顯示安裝介面。以互動模式直接執行 `*-setup.exe` 時，Burn 也會略過「檔案使用中」對話框；被占用的檔案可能等到重新啟動 Windows 後才替換。直接執行獨立 MSI 時仍可能看到該對話框。下載中斷或檔案不符時，不會啟動安裝程式。更新資訊經 HTTPS 取自專案的 GitHub Release，並信任該來源；資訊清單沒有另外簽章。

@@ -21,6 +21,8 @@ struct UpdateCheckResult {
     UpdateCheckStatus status = UpdateCheckStatus::failed;
     std::uint64_t current_build = 0;
     std::uint64_t latest_build = 0;
+    std::uint64_t major_update_build = 0;
+    std::wstring major_update_message;
     std::wstring current_commit;
     std::wstring latest_commit;
     std::wstring current_version;
@@ -44,11 +46,10 @@ public:
     static std::uint64_t installed_build_number() noexcept;
     static std::wstring_view installed_commit() noexcept;
     static std::wstring_view installed_version() noexcept;
+    static UpdateCheckResult check_now() noexcept;
     bool check_async(Completion completion);
 
 private:
-    static UpdateCheckResult check_now() noexcept;
-
     std::atomic_bool checking_{false};
     std::thread worker_;
 };
