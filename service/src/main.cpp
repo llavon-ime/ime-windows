@@ -238,7 +238,8 @@ int main(int argc, char* argv[]) {
         auto custom_names =
             std::make_shared<llavon::service::CustomNameMatcher>(user_settings.custom_names);
         llavon::service::PredictionPipeServer server(
-            std::move(core), candidate_ui, custom_names);
+            std::move(core), candidate_ui, custom_names,
+            user_settings.gpu_boost_enabled);
         llavon::service::LoraTrainingManager lora_training(
             server.training_data_writer(), config.tables_dir);
         auto custom_names_update_mutex = std::make_shared<std::mutex>();
@@ -322,6 +323,12 @@ int main(int argc, char* argv[]) {
             user_settings.shift_space_width_toggle_enabled,
             [](bool enabled) {
                 return llavon::service::save_shift_space_width_toggle_setting(enabled);
+            },
+            user_settings.gpu_boost_enabled,
+            [&server](bool enabled) {
+                if (!llavon::service::save_gpu_boost_setting(enabled)) return false;
+                server.set_gpu_boost_enabled(enabled);
+                return true;
             },
             user_settings.major_update_notifications_enabled,
             [](bool enabled) {

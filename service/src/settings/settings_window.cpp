@@ -810,6 +810,36 @@ void SettingsWindow::build_page() {
     save_inference_button_.Click([this](const auto&, const auto&) { save_inference_setting(); });
     note_ = named<TextBlock>(shell_, L"InferenceNote");
 
+    const auto gpu_boost_toggle = named<ToggleSwitch>(shell_, L"GpuBoostToggle");
+    auto saved_gpu_boost = std::make_shared<bool>(configuration_.gpu_boost_enabled);
+    auto updating_gpu_boost = std::make_shared<bool>(false);
+    gpu_boost_toggle.IsOn(*saved_gpu_boost);
+    const auto gpu_boost_note = named<TextBlock>(shell_, L"GpuBoostNote");
+    gpu_boost_toggle.Toggled(
+        [this, gpu_boost_note, saved_gpu_boost, updating_gpu_boost](
+            const auto& sender, const auto&) {
+            if (*updating_gpu_boost) return;
+            const auto toggle = sender.template as<ToggleSwitch>();
+            const bool enabled = toggle.IsOn();
+            if (enabled == *saved_gpu_boost) return;
+            const std::int32_t result = configuration_.save_gpu_boost_callback
+                ? configuration_.save_gpu_boost_callback(
+                      configuration_.save_gpu_boost_context, enabled ? 1 : 0)
+                : ERROR_INVALID_FUNCTION;
+            if (result == ERROR_SUCCESS) {
+                *saved_gpu_boost = enabled;
+                gpu_boost_note.Text(enabled
+                    ? L"已儲存；下次 GPU 推論時啟用。"
+                    : L"已儲存；目前的 Boost 會在約 2 秒內結束。");
+            } else {
+                *updating_gpu_boost = true;
+                toggle.IsOn(*saved_gpu_boost);
+                *updating_gpu_boost = false;
+                gpu_boost_note.Text(L"無法儲存 GPU Boost 設定，請稍後再試。");
+            }
+            gpu_boost_note.Visibility(Visibility::Visible);
+        });
+
     const auto full_width_toggle = named<ToggleSwitch>(shell_, L"FullWidthToggle");
     auto saved_full_width =
         std::make_shared<bool>(configuration_.shift_space_width_toggle_enabled);

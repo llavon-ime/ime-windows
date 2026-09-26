@@ -157,6 +157,8 @@ typedef int32_t (*llavon_settings_save_custom_names_callback)(
     size_t custom_name_count);
 typedef int32_t (*llavon_settings_save_width_toggle_callback)(
     void* context, int32_t enabled);
+typedef int32_t (*llavon_settings_save_gpu_boost_callback)(
+    void* context, int32_t enabled);
 typedef int32_t (*llavon_settings_save_update_notifications_callback)(
     void* context, int32_t enabled);
 typedef int32_t (*llavon_settings_start_lora_training_callback)(
@@ -244,6 +246,11 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_model_preparation_v2
 LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_update_notifications(
     int32_t enabled,
     llavon_settings_save_update_notifications_callback save_callback,
+    void* save_context);
+
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_gpu_boost(
+    int32_t enabled,
+    llavon_settings_save_gpu_boost_callback save_callback,
     void* save_context);
 
 // Starts the settings UI's dedicated STA thread. Calling this function more

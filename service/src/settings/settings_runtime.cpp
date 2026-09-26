@@ -64,6 +64,18 @@ struct UiThreadState {
 
 class Runtime final {
 public:
+    int32_t configure_gpu_boost(
+        bool enabled, llavon_settings_save_gpu_boost_callback save_callback,
+        void* save_context) {
+        std::lock_guard lock(mutex_);
+        if (settings_thread_.thread) return ERROR_BUSY;
+        if (!save_callback) return ERROR_INVALID_PARAMETER;
+        configuration_.gpu_boost_enabled = enabled;
+        configuration_.save_gpu_boost_callback = save_callback;
+        configuration_.save_gpu_boost_context = save_context;
+        return ERROR_SUCCESS;
+    }
+
     int32_t configure_model_preparation(
         llavon_settings_prepare_model_callback callback, void* context,
         const char16_t* base_model_path) {
@@ -592,6 +604,14 @@ extern "C" int32_t llavon_settings_ui_configure_update_notifications(
     llavon_settings_save_update_notifications_callback save_callback,
     void* save_context) {
     return llavon::settings::runtime().configure_update_notifications(
+        enabled != 0, save_callback, save_context);
+}
+
+extern "C" int32_t llavon_settings_ui_configure_gpu_boost(
+    int32_t enabled,
+    llavon_settings_save_gpu_boost_callback save_callback,
+    void* save_context) {
+    return llavon::settings::runtime().configure_gpu_boost(
         enabled != 0, save_callback, save_context);
 }
 

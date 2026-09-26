@@ -263,12 +263,18 @@ public:
     using ClientId = std::uint64_t;
     static constexpr std::size_t capacity = 5;
 
-    SessionLru(asio::io_context& context, std::shared_ptr<llavon::ime::core::Core> core)
-        : core_(std::move(core)), gpu_activity_(context) {
+    SessionLru(asio::io_context& context, std::shared_ptr<llavon::ime::core::Core> core,
+               bool gpu_boost_enabled)
+        : core_(std::move(core)), gpu_activity_(context),
+          gpu_boost_enabled_(gpu_boost_enabled) {
         if (!core_) {
             throw std::invalid_argument("inference core is required");
         }
-        gpu_activity_.set_backend(make_gpu_latency_boost(core_->inference_runtime_info()));
+        gpu_activity_.set_enabled(gpu_boost_enabled_);
+        if (gpu_boost_enabled_) {
+            gpu_activity_.set_backend(make_gpu_latency_boost(core_->inference_runtime_info()));
+            boost_backend_initialized_ = true;
+        }
     }
 
     llavon::ime::core::InferenceRuntimeInfo replace_core(
@@ -279,8 +285,20 @@ public:
         idle_.clear();
         recency_.clear();
         core_ = std::move(replacement);
-        gpu_activity_.set_backend(make_gpu_latency_boost(core_->inference_runtime_info()));
+        gpu_activity_.set_backend(gpu_boost_enabled_
+            ? make_gpu_latency_boost(core_->inference_runtime_info())
+            : GpuActivityLease::Boost{});
+        boost_backend_initialized_ = gpu_boost_enabled_;
         return core_->inference_runtime_info();
+    }
+
+    void set_gpu_boost_enabled(bool enabled) {
+        if (enabled && !boost_backend_initialized_) {
+            gpu_activity_.set_backend(make_gpu_latency_boost(core_->inference_runtime_info()));
+            boost_backend_initialized_ = true;
+        }
+        gpu_boost_enabled_ = enabled;
+        gpu_activity_.set_enabled(enabled);
     }
 
     llavon::ime::core::Session& acquire(ClientId client_id) {
@@ -344,6 +362,8 @@ private:
     // SessionLru is confined to the prediction server's single io_context thread.
     std::shared_ptr<llavon::ime::core::Core> core_;
     GpuActivityLease gpu_activity_;
+    bool gpu_boost_enabled_ = true;
+    bool boost_backend_initialized_ = false;
     std::list<ClientId> recency_;
     std::unordered_map<ClientId, Entry> sessions_;
     std::vector<std::unique_ptr<llavon::ime::core::Session>> idle_;
@@ -581,8 +601,10 @@ public:
     PredictionPipeServer(
         std::shared_ptr<llavon::ime::core::Core> core,
         CandidateUiLoader& candidate_ui,
-        std::shared_ptr<CustomNameMatcher> custom_names)
-        : sessions_(std::make_shared<prediction_pipe::SessionLru>(io_ctx_, std::move(core))),
+        std::shared_ptr<CustomNameMatcher> custom_names,
+        bool gpu_boost_enabled = true)
+        : sessions_(std::make_shared<prediction_pipe::SessionLru>(
+              io_ctx_, std::move(core), gpu_boost_enabled)),
           candidate_ui_(candidate_ui),
           custom_names_(std::move(custom_names)),
           training_data_(std::make_shared<TrainingDataWriter>()) {
@@ -618,6 +640,12 @@ public:
             }
         }
         return result.get();
+    }
+
+    void set_gpu_boost_enabled(bool enabled) {
+        asio::post(io_ctx_, [sessions = sessions_, enabled] {
+            sessions->set_gpu_boost_enabled(enabled);
+        });
     }
 
     std::vector<TrainingDataItem> pending_training_data() const {

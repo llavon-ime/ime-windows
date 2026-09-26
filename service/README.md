@@ -19,9 +19,12 @@ The service also owns the interactive per-user process shell:
 - After the model has loaded, the settings window receives the active backend,
   hardware description, device ID, and GPU-offload state reported by
   `ime-core`; this runtime status is kept separate from the next-start setting.
-- With supported NVIDIA or AMD drivers, the service enables GPU latency boost
-  before `Ready` and `Predict`, then releases it after two seconds without
-  either request. NVIDIA uses the NVAPI low-latency hint on an offscreen D3D11
+- GPU Boost is enabled by default and can be turned off in the settings window.
+  With supported NVIDIA or AMD drivers, the service enables it before `Ready`
+  and `Predict`, then releases it after two seconds without either request.
+  Turning the setting off stops renewing an active boost, so it expires at the
+  usual two-second deadline; the choice persists across service restarts.
+  NVIDIA uses the NVAPI low-latency hint on an offscreen D3D11
   device matched to the inference GPU's PCI address. AMD uses the driver-provided
   ADLX API to temporarily raise that GPU's minimum frequency to 75% of the gap
   from its current minimum to its configured maximum. This AMD tuning affects

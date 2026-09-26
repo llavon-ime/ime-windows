@@ -32,6 +32,9 @@ public:
 
     void activate() noexcept { state_->activate(); }
 
+    // Disabling prevents renewals; an existing lease expires at its usual deadline.
+    void set_enabled(bool enabled) noexcept { state_->enabled = enabled; }
+
 private:
     struct State final : std::enable_shared_from_this<State> {
         asio::steady_timer timer;
@@ -40,6 +43,7 @@ private:
         Boost backend;
         std::size_t generation = 0;
         bool active = false;
+        bool enabled = true;
 
         State(asio::io_context& context, Duration timeout)
             : timer(context), idle_timeout(timeout) {}
@@ -60,7 +64,7 @@ private:
         }
 
         void activate() noexcept {
-            if (!backend) return;
+            if (!enabled || !backend) return;
             deadline = std::chrono::steady_clock::now() + idle_timeout;
             if (active) return;
             try {

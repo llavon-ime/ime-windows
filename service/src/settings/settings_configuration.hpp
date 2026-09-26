@@ -56,6 +56,9 @@ struct SettingsConfiguration {
     llavon_settings_save_custom_names_callback save_custom_names_callback = nullptr;
     void* save_custom_names_context = nullptr;
     bool shift_space_width_toggle_enabled = false;
+    bool gpu_boost_enabled = true;
+    llavon_settings_save_gpu_boost_callback save_gpu_boost_callback = nullptr;
+    void* save_gpu_boost_context = nullptr;
     llavon_settings_save_width_toggle_callback save_width_toggle_callback = nullptr;
     void* save_width_toggle_context = nullptr;
     bool major_update_notifications_enabled = true;

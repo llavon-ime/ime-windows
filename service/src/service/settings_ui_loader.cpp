@@ -107,6 +107,8 @@ void SettingsUiLoader::configure(
     SaveCustomNames save_custom_names,
     bool shift_space_width_toggle_enabled,
     SaveWidthToggleSetting save_width_toggle,
+    bool gpu_boost_enabled,
+    SaveGpuBoost save_gpu_boost,
     bool major_update_notifications_enabled,
     SaveUpdateNotifications save_update_notifications,
     LoadTrainingData load_training_data,
@@ -159,6 +161,8 @@ void SettingsUiLoader::configure(
     save_custom_names_ = std::move(save_custom_names);
     shift_space_width_toggle_enabled_ = shift_space_width_toggle_enabled;
     save_width_toggle_ = std::move(save_width_toggle);
+    gpu_boost_enabled_ = gpu_boost_enabled;
+    save_gpu_boost_ = std::move(save_gpu_boost);
     major_update_notifications_enabled_ = major_update_notifications_enabled;
     save_update_notifications_ = std::move(save_update_notifications);
     load_training_data_ = std::move(load_training_data);
@@ -250,6 +254,8 @@ bool SettingsUiLoader::load() {
     configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v5");
     configure_update_notifications_ = resolve<ConfigureUpdateNotificationsFunction>(
         module_, "llavon_settings_ui_configure_update_notifications");
+    configure_gpu_boost_ = resolve<ConfigureGpuBoostFunction>(
+        module_, "llavon_settings_ui_configure_gpu_boost");
     configure_model_preparation_ = resolve<ConfigureModelPreparationFunction>(
         module_, "llavon_settings_ui_configure_model_preparation_v2");
     show_ = resolve<ShowFunction>(module_, "llavon_settings_ui_show");
@@ -258,7 +264,7 @@ bool SettingsUiLoader::load() {
     stop_ = resolve<StopFunction>(module_, "llavon_settings_ui_stop");
     const auto set_pending_count = resolve<SetPendingCountFunction>(
         module_, "llavon_settings_ui_set_pending_count");
-    if (!configure_ || !configure_update_notifications_ ||
+    if (!configure_ || !configure_update_notifications_ || !configure_gpu_boost_ ||
         !configure_model_preparation_ || !start_ || !show_ ||
         !show_context_menu_ || !stop_ ||
         !set_pending_count ||
@@ -267,6 +273,7 @@ bool SettingsUiLoader::load() {
         module_ = nullptr;
         configure_ = nullptr;
         configure_update_notifications_ = nullptr;
+        configure_gpu_boost_ = nullptr;
         configure_model_preparation_ = nullptr;
         start_ = nullptr;
         show_ = nullptr;
@@ -354,6 +361,9 @@ bool SettingsUiLoader::configure_module() {
     }
     return configure_model_preparation_(
                prepare_model_trampoline, this, base_model_path_.c_str()) == 0 &&
+           configure_gpu_boost_(
+               gpu_boost_enabled_ ? 1 : 0,
+               save_gpu_boost_trampoline, this) == 0 &&
            configure_update_notifications_(
                major_update_notifications_enabled_ ? 1 : 0,
                save_update_notifications_trampoline, this) == 0;
@@ -612,6 +622,20 @@ std::int32_t SettingsUiLoader::save_width_toggle_trampoline(
         const bool value = enabled != 0;
         if (!self->save_width_toggle_(value)) return ERROR_WRITE_FAULT;
         self->shift_space_width_toggle_enabled_ = value;
+        return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_WRITE_FAULT;
+    }
+}
+
+std::int32_t SettingsUiLoader::save_gpu_boost_trampoline(
+    void* context, std::int32_t enabled) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !self->save_gpu_boost_) return ERROR_INVALID_FUNCTION;
+    try {
+        const bool value = enabled != 0;
+        if (!self->save_gpu_boost_(value)) return ERROR_WRITE_FAULT;
+        self->gpu_boost_enabled_ = value;
         return ERROR_SUCCESS;
     } catch (...) {
         return ERROR_WRITE_FAULT;

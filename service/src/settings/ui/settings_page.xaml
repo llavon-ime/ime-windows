@@ -110,6 +110,19 @@
             FontSize="12"
             TextWrapping="Wrap"
             Visibility="Collapsed"/>
+        <ToggleSwitch x:Name="GpuBoostToggle"
+            Header="GPU Boost"
+            OnContent="開啟"
+            OffContent="關閉"/>
+        <TextBlock Text="使用 GPU 推論時短暫提高回應速度；停止輸入約 2 秒後恢復。AMD 顯示卡會暫時調整最低時脈。"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            FontSize="12"
+            TextWrapping="Wrap"/>
+        <TextBlock x:Name="GpuBoostNote"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            FontSize="12"
+            TextWrapping="Wrap"
+            Visibility="Collapsed"/>
       </StackPanel>
 
       <TextBlock Text="輸入設定"

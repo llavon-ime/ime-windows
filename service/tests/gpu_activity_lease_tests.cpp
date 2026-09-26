@@ -79,4 +79,26 @@ int main() {
     }
     context.run();
     if (calls != std::vector<bool>{true, false}) return 8;
+
+    // Turning the setting off keeps the current lease until expiry and blocks
+    // new activations. Turning it back on allows the next activation.
+    context.restart();
+    calls.clear();
+    {
+        GpuActivityLease lease(context, 0ms);
+        lease.set_backend(backend);
+        lease.activate();
+        lease.set_enabled(false);
+        lease.activate();
+        if (calls != std::vector<bool>{true}) return 9;
+        context.run();
+        if (calls != std::vector<bool>{true, false}) return 10;
+        context.restart();
+        lease.activate();
+        if (calls != std::vector<bool>{true, false}) return 11;
+        lease.set_enabled(true);
+        lease.activate();
+        context.run();
+    }
+    if (calls != std::vector<bool>{true, false, true, false}) return 12;
 }

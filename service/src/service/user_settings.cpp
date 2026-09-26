@@ -164,6 +164,21 @@ bool save_shift_space_width_toggle_setting(bool enabled) noexcept {
     }
 }
 
+bool save_gpu_boost_setting(bool enabled) noexcept {
+    try {
+        std::lock_guard lock(settings_mutex);
+        auto settings = load_settings_unlocked();
+        settings.gpu_boost_enabled = enabled;
+        return save_settings_unlocked(settings);
+    } catch (const std::exception& error) {
+        std::clog << "[SRV] unable to save GPU boost setting: " << error.what() << '\n';
+        return false;
+    } catch (...) {
+        std::clog << "[SRV] unable to save GPU boost setting\n";
+        return false;
+    }
+}
+
 bool save_major_update_notifications_setting(bool enabled) noexcept {
     try {
         std::lock_guard lock(settings_mutex);

@@ -34,6 +34,7 @@ struct SettingsDocument {
     std::string model_path;
     std::vector<CustomNameDocument> custom_names;
     bool shift_space_width_toggle_enabled = false;
+    bool gpu_boost_enabled = true;
     bool major_update_notifications_enabled = true;
 };
 
@@ -107,6 +108,7 @@ std::optional<UserSettings> decode(std::string_view json) {
         .custom_names = std::move(custom_names),
         .shift_space_width_toggle_enabled =
             document.shift_space_width_toggle_enabled,
+        .gpu_boost_enabled = document.gpu_boost_enabled,
         .major_update_notifications_enabled =
             document.major_update_notifications_enabled,
     };
@@ -145,6 +147,7 @@ std::string encode(const UserSettings& settings) {
         .custom_names = std::move(custom_names),
         .shift_space_width_toggle_enabled =
             settings.shift_space_width_toggle_enabled,
+        .gpu_boost_enabled = settings.gpu_boost_enabled,
         .major_update_notifications_enabled =
             settings.major_update_notifications_enabled,
     };

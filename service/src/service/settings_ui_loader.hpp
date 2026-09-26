@@ -31,6 +31,7 @@ public:
     using SaveCustomNames =
         std::function<bool(const std::vector<CustomNameSetting>&)>;
     using SaveWidthToggleSetting = std::function<bool(bool)>;
+    using SaveGpuBoost = std::function<bool(bool)>;
     using SaveUpdateNotifications = std::function<bool(bool)>;
     using LoadTrainingData = std::function<std::vector<TrainingDataItem>(
         std::string_view, std::int64_t)>;
@@ -57,6 +58,8 @@ public:
         SaveCustomNames save_custom_names,
         bool shift_space_width_toggle_enabled,
         SaveWidthToggleSetting save_width_toggle,
+        bool gpu_boost_enabled,
+        SaveGpuBoost save_gpu_boost,
         bool major_update_notifications_enabled,
         SaveUpdateNotifications save_update_notifications,
         LoadTrainingData load_training_data,
@@ -127,6 +130,8 @@ private:
     using StartFunction = std::int32_t (*)();
     using ConfigureUpdateNotificationsFunction = std::int32_t (*)(
         std::int32_t, llavon_settings_save_update_notifications_callback, void*);
+    using ConfigureGpuBoostFunction = std::int32_t (*)(
+        std::int32_t, llavon_settings_save_gpu_boost_callback, void*);
     using ConfigureModelPreparationFunction = std::int32_t (*)(
         llavon_settings_prepare_model_callback, void*, const char16_t*);
     using ShowFunction = void (*)();
@@ -149,6 +154,8 @@ private:
     static std::int32_t prepare_model_trampoline(
         void* context, const char16_t* model_path, std::int32_t action) noexcept;
     static std::int32_t save_width_toggle_trampoline(
+        void* context, std::int32_t enabled) noexcept;
+    static std::int32_t save_gpu_boost_trampoline(
         void* context, std::int32_t enabled) noexcept;
     static std::int32_t save_update_notifications_trampoline(
         void* context, std::int32_t enabled) noexcept;
@@ -176,6 +183,7 @@ private:
     HMODULE module_ = nullptr;
     ConfigureFunction configure_ = nullptr;
     ConfigureUpdateNotificationsFunction configure_update_notifications_ = nullptr;
+    ConfigureGpuBoostFunction configure_gpu_boost_ = nullptr;
     ConfigureModelPreparationFunction configure_model_preparation_ = nullptr;
     StartFunction start_ = nullptr;
     ShowFunction show_ = nullptr;
@@ -198,6 +206,8 @@ private:
     SaveCustomNames save_custom_names_;
     bool shift_space_width_toggle_enabled_ = false;
     SaveWidthToggleSetting save_width_toggle_;
+    bool gpu_boost_enabled_ = true;
+    SaveGpuBoost save_gpu_boost_;
     bool major_update_notifications_enabled_ = true;
     SaveUpdateNotifications save_update_notifications_;
     LoadTrainingData load_training_data_;
