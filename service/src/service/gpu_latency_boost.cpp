@@ -1,4 +1,5 @@
 #include "gpu_latency_boost.hpp"
+#include "amd_gpu_latency_boost.hpp"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -20,6 +21,7 @@ namespace llavon::service {
 namespace {
 
 constexpr std::uint32_t nvidia_vendor_id = 0x10de;
+constexpr std::uint32_t amd_vendor_id = 0x1002;
 
 struct ModuleHandleTraits {
     using type = HMODULE;
@@ -83,7 +85,8 @@ bool matches_adapter(LUID luid, const std::array<unsigned, 4>& expected) noexcep
            address.DeviceNumber == expected[2] && address.FunctionNumber == expected[3];
 }
 
-winrt::com_ptr<IDXGIAdapter1> find_adapter(std::string_view device_id) {
+winrt::com_ptr<IDXGIAdapter1> find_adapter(std::string_view device_id,
+                                          std::uint32_t vendor_id) {
     const auto address = pci_address(device_id);
     if (!address) return {};
 
@@ -98,7 +101,7 @@ winrt::com_ptr<IDXGIAdapter1> find_adapter(std::string_view device_id) {
 
         DXGI_ADAPTER_DESC1 description{};
         winrt::check_hresult(adapter->GetDesc1(&description));
-        if (description.VendorId == nvidia_vendor_id &&
+        if (description.VendorId == vendor_id &&
             (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0 &&
             matches_adapter(description.AdapterLuid, *address)) {
             return adapter;
@@ -232,13 +235,16 @@ GpuActivityLease::Boost make_gpu_latency_boost(
     }
 
     try {
-        const auto adapter = find_adapter(runtime.device.device_id);
-        if (!adapter) return {};
-
-        auto boost = std::make_unique<NvidiaLatencyBoost>(adapter.get());
-        std::clog << "[SRV] GPU latency boost available: device=" << runtime.device.device_id
-                  << " idle_timeout_ms=2000\n";
-        return [boost = std::move(boost)](bool enabled) { return boost->set(enabled); };
+        if (const auto adapter = find_adapter(runtime.device.device_id, nvidia_vendor_id)) {
+            auto boost = std::make_unique<NvidiaLatencyBoost>(adapter.get());
+            std::clog << "[SRV] NVIDIA GPU latency boost available: device="
+                      << runtime.device.device_id << " idle_timeout_ms=2000\n";
+            return [boost = std::move(boost)](bool enabled) { return boost->set(enabled); };
+        }
+        if (find_adapter(runtime.device.device_id, amd_vendor_id)) {
+            return make_amd_gpu_latency_boost(runtime.device.device_id);
+        }
+        return {};
     } catch (...) {
         std::clog << "[WARN] NVIDIA GPU latency boost unavailable\n";
         return {};

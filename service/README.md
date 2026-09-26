@@ -19,15 +19,22 @@ The service also owns the interactive per-user process shell:
 - After the model has loaded, the settings window receives the active backend,
   hardware description, device ID, and GPU-offload state reported by
   `ime-core`; this runtime status is kept separate from the next-start setting.
-- With supported NVIDIA drivers, the service requests a device-scoped latency
-  boost before `Ready` and `Predict`, then releases it after two seconds without
-  either request. This keeps GPU clocks from dropping between keystrokes while
-  retaining the existing ime-core warmup. It uses the public NVAPI low-latency
-  boost hint on an offscreen D3D11 device matched to the inference GPU's PCI
-  address; inference still uses the selected backend. No driver profile or
-  global power setting is changed, and no background inference work is added.
-  Switching model/device or shutting down also releases the hint. Missing or
-  unsupported drivers retain ordinary inference; boost errors are logged.
+- With supported NVIDIA or AMD drivers, the service enables GPU latency boost
+  before `Ready` and `Predict`, then releases it after two seconds without
+  either request. NVIDIA uses the NVAPI low-latency hint on an offscreen D3D11
+  device matched to the inference GPU's PCI address. AMD uses the driver-provided
+  ADLX API to temporarily raise that GPU's minimum frequency to 75% of the gap
+  from its current minimum to its configured maximum. This AMD tuning affects
+  the entire GPU while active. The previous minimum is restored on idle, model
+  or device switch, and normal shutdown, provided another application has not
+  changed it meanwhile. An abnormal service exit can leave the AMD minimum
+  frequency at the raised value until it is reset in AMD Software or by a later
+  tuning change. AMD automatic tuning modes that require a factory reset are
+  left untouched. Inference still uses the selected backend; no background
+  inference work is added. Missing or unsupported drivers retain ordinary
+  inference, and boost errors are logged. The AMD driver DLL is loaded only
+  when the active inference GPU is AMD; no AMD installation is needed to build
+  or run the service on other hardware.
   Performance verification must include 250 ms request spacing and resumption
   after more than two seconds idle, not only continuous token throughput.
 - `llavon-ime-candidate-ui.dll` is loaded on the first candidate presentation.
