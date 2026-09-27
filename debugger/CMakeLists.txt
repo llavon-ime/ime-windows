@@ -35,11 +35,14 @@ target_include_directories(llavon-debug-client
 add_executable(llavon-ime-debugger WIN32
     src/debugger/debugger.manifest
     src/debugger/debugger.rc
+    src/debugger/debugger_resources.h
     src/debugger/debugger_window.cpp
     src/debugger/debugger_window.hpp
     src/debugger/main.cpp
     src/debugger/pipe_server.cpp
     src/debugger/pipe_server.hpp
+    src/debugger/ui/debugger_page.xaml
+    src/debugger/xaml_resource.hpp
     src/pipe_protocol.hpp
 )
 target_compile_features(llavon-ime-debugger PRIVATE cxx_std_23)

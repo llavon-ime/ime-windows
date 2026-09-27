@@ -1,4 +1,6 @@
 #include "debugger_window.hpp"
+#include "debugger_resources.h"
+#include "xaml_resource.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -8,17 +10,13 @@
 #include <utility>
 #include <vector>
 
-#include <winrt/Windows.UI.Text.h>
-#include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.h>
 
 namespace llavon::debugger {
 namespace {
 
-using namespace winrt::Windows::UI::Text;
 using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Controls;
-using namespace winrt::Windows::UI::Xaml::Media;
 
 constexpr wchar_t window_class_name[] = L"LlavonImeDebuggerWindow";
 constexpr UINT connection_message = WM_APP + 1;
@@ -26,13 +24,13 @@ constexpr UINT log_message = WM_APP + 2;
 constexpr std::size_t maximum_log_characters = 200'000;
 constexpr std::size_t latency_window_size = 120;
 
-TextBlock make_text(const wchar_t* text, double size, FontWeight weight = FontWeights::Normal()) {
-    TextBlock block;
-    block.Text(text);
-    block.FontFamily(FontFamily(L"Segoe UI Variable Text, Microsoft JhengHei UI"));
-    block.FontSize(size);
-    block.FontWeight(weight);
-    return block;
+template <typename Control>
+Control named(const FrameworkElement& root, const wchar_t* name) {
+    const auto control = root.FindName(name).try_as<Control>();
+    if (!control) {
+        throw winrt::hresult_error(E_FAIL, winrt::hstring(L"Missing XAML control: ") + name);
+    }
+    return control;
 }
 
 std::wstring utf8_to_wide(const std::string& text) {
@@ -76,7 +74,7 @@ bool DebuggerWindow::create(HINSTANCE instance) {
     if (!window_) return false;
     try {
         initialize_xaml();
-        build_page();
+        load_page(instance);
         start_server();
     } catch (...) {
         destroy();
@@ -172,39 +170,13 @@ void DebuggerWindow::initialize_xaml() {
     resize_island();
 }
 
-void DebuggerWindow::build_page() {
-    Grid shell;
-    shell.Padding(Thickness{24, 20, 24, 24});
-    RowDefinition header_row;
-    header_row.Height(GridLength{1, GridUnitType::Auto});
-    shell.RowDefinitions().Append(header_row);
-    RowDefinition log_row;
-    log_row.Height(GridLength{1, GridUnitType::Star});
-    shell.RowDefinitions().Append(log_row);
-
-    StackPanel header;
-    header.Spacing(6);
-    header.Margin(Thickness{0, 0, 0, 16});
-    header.Children().Append(make_text(L"End-to-end diagnostics", 22, FontWeights::SemiBold()));
-    connection_status_ = make_text(L"Waiting for producers...", 13);
-    e2e_latency_status_ = make_text(L"End-to-end: no samples", 16, FontWeights::SemiBold());
-    inference_latency_status_ = make_text(L"Inference: no samples", 13);
-    header.Children().Append(connection_status_);
-    header.Children().Append(e2e_latency_status_);
-    header.Children().Append(inference_latency_status_);
-    Grid::SetRow(header, 0);
-    shell.Children().Append(header);
-
-    log_output_ = TextBox();
-    log_output_.IsReadOnly(true);
-    log_output_.AcceptsReturn(true);
-    log_output_.TextWrapping(TextWrapping::NoWrap);
-    ScrollViewer::SetHorizontalScrollBarVisibility(log_output_, ScrollBarVisibility::Auto);
-    ScrollViewer::SetVerticalScrollBarVisibility(log_output_, ScrollBarVisibility::Auto);
-    log_output_.FontFamily(FontFamily(L"Cascadia Mono, Consolas"));
-    log_output_.FontSize(12);
-    Grid::SetRow(log_output_, 1);
-    shell.Children().Append(log_output_);
+void DebuggerWindow::load_page(const HINSTANCE instance) {
+    const auto shell = load_xaml_resource(instance, IDR_DEBUGGER_PAGE_XAML).as<Grid>();
+    debugger_tabs_ = named<Pivot>(shell, L"DebuggerTabs");
+    connection_status_ = named<TextBlock>(shell, L"ConnectionStatus");
+    e2e_latency_status_ = named<TextBlock>(shell, L"E2eLatencyStatus");
+    inference_latency_status_ = named<TextBlock>(shell, L"InferenceLatencyStatus");
+    log_output_ = named<TextBox>(shell, L"LogOutput");
     xaml_source_.Content(shell);
 }
 
@@ -281,6 +253,11 @@ void DebuggerWindow::resize_island() const noexcept {
 }
 
 void DebuggerWindow::close_xaml() noexcept {
+    debugger_tabs_ = nullptr;
+    connection_status_ = nullptr;
+    e2e_latency_status_ = nullptr;
+    inference_latency_status_ = nullptr;
+    log_output_ = nullptr;
     island_native_ = nullptr;
     island_window_ = nullptr;
     try {

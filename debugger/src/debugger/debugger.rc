@@ -1,3 +1,5 @@
 #include <winuser.h>
+#include "debugger_resources.h"
 
 1 RT_MANIFEST "debugger.manifest"
+IDR_DEBUGGER_PAGE_XAML RCDATA "ui/debugger_page.xaml"
