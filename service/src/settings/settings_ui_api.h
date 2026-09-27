@@ -140,6 +140,7 @@ struct llavon_settings_lora_options {
     int32_t strength;
     int32_t only_manually_selected;
     int64_t base_run_id;
+    int32_t stabilize_intruders;
 };
 
 typedef int32_t (*llavon_settings_save_inference_callback)(

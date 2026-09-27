@@ -236,6 +236,25 @@
             <ToggleSwitch x:Name="OnlySelectedSentences"
                 Header="只訓練曾手動選字的句子"
                 IsOn="True"/>
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <ToggleSwitch x:Name="StabilizeIntruders"
+                  Grid.Column="0"
+                  Header="降低模型遺忘（實驗性）"
+                  IsOn="True"/>
+              <HyperlinkButton Grid.Column="1"
+                  Content="論文"
+                  NavigateUri="https://arxiv.org/html/2410.21228v3"
+                  VerticalAlignment="Bottom"
+                  Margin="0,0,0,2"
+                  Padding="8,4"/>
+            </Grid>
+            <TextBlock Text="訓練後會保守縮小可能干擾原模型能力的 LoRA 維度。"
+                FontSize="12"
+                TextWrapping="Wrap"/>
             <StackPanel x:Name="AdvancedTrainingSettings"
                 Visibility="Collapsed"
                 Spacing="8">

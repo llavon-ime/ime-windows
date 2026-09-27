@@ -53,6 +53,7 @@ constexpr double graph_padding_y = 300;
 
 struct TrainingParameters {
     bool only_manually_selected;
+    std::optional<bool> stabilize_intruders;
     std::int32_t rank;
     double alpha;
     double dropout;
@@ -586,6 +587,11 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
                     ? L"資料範圍：只訓練曾手動選字的句子" :
                       L"資料範圍：所有句子", 12,
                     FontWeights::Normal(), muted));
+                details.Children().Append(text(
+                    parameters->stabilize_intruders.value_or(false)
+                        ? L"降低模型遺忘：開啟"
+                        : L"降低模型遺忘：關閉",
+                    12, FontWeights::Normal(), muted));
                 if (const auto* preset = preset_name(*parameters)) {
                     details.Children().Append(text(std::format(L"訓練強度：{}", preset),
                         12, FontWeights::SemiBold(), selected));

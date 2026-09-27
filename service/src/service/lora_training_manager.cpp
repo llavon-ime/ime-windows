@@ -212,6 +212,11 @@ struct TrainingState {
     std::int64_t step;
 };
 
+struct PeftAdapterConfig {
+    std::int32_t r;
+    double lora_alpha;
+};
+
 struct ModelRevision {
     std::string sha;
 };
@@ -632,6 +637,7 @@ bool LoraTrainingManager::start_training_async(
     if (options.strength != LoraTrainingStrength::advanced) {
         const auto strength = options.strength;
         const bool only_selected = options.only_manually_selected;
+        const bool stabilize_intruders = options.stabilize_intruders;
         const auto base_run_id = options.base_run_id;
         options = LoraTrainingOptions{};
         options.base_run_id = base_run_id;
@@ -640,6 +646,7 @@ bool LoraTrainingManager::start_training_async(
         options.learning_rate = preset.learning_rate;
         options.epochs = preset.epochs;
         options.only_manually_selected = only_selected;
+        options.stabilize_intruders = stabilize_intruders;
     }
     if (options.base_run_id < 0 || options.rank <= 0 ||
         !std::isfinite(options.alpha) || options.alpha <= 0 ||
@@ -1275,6 +1282,9 @@ void LoraTrainingManager::training_worker() {
         }
     } cleanup{dataset_path};
     const auto adapter_directory = run_directory / L"adapter";
+    const auto training_adapter_directory = pending_options_.stabilize_intruders
+        ? run_directory / L"adapter-before-stabilization"
+        : adapter_directory;
     const auto f16_path = run_directory / L"personalized-f16.gguf";
     const auto gguf_path = run_directory / L"personalized-Q4_K_M.gguf";
     const auto config_path = model_directory / L"config.json";
@@ -1309,6 +1319,7 @@ void LoraTrainingManager::training_worker() {
         struct TrainingRequest {
             std::int32_t preset_version;
             bool only_manually_selected;
+            bool stabilize_intruders;
             std::int64_t parent_id;
             std::string base_model_revision;
             std::string trainer_commit;
@@ -1348,6 +1359,7 @@ void LoraTrainingManager::training_worker() {
         const TrainingRequest request{
             .preset_version = 1,
             .only_manually_selected = pending_options_.only_manually_selected,
+            .stabilize_intruders = pending_options_.stabilize_intruders,
             .parent_id = previous_run ? previous_run->id : 0,
             .base_model_revision = revision,
             .trainer_commit = trainer_commit,
@@ -1396,7 +1408,7 @@ void LoraTrainingManager::training_worker() {
         L"--model-config", config_path.wstring(),
         L"--model", model_directory.wstring(),
         L"--train-data", dataset_path.wstring(),
-        L"--output-dir", adapter_directory.wstring(),
+        L"--output-dir", training_adapter_directory.wstring(),
         L"--target-modules", std::wstring(pending_options_.target_modules.begin(),
                                            pending_options_.target_modules.end()),
         L"--pad-token-id", std::to_wstring(dataset.pad_token_id),
@@ -1428,7 +1440,21 @@ void LoraTrainingManager::training_worker() {
     std::filesystem::remove(dataset_path);
 
     throw_if_cancelled(cancelling_);
-    set_status(LoraOperationStage::exporting_model, 0.88,
+    if (pending_options_.stabilize_intruders) {
+        set_status(LoraOperationStage::exporting_model, 0.86,
+                   u"訓練完成，正在降低模型遺忘…");
+        run_process(trainer, {
+            L"stabilize-adapter",
+            L"--model", model_directory.wstring(),
+            L"--adapter", training_adapter_directory.wstring(),
+            L"--output-dir", adapter_directory.wstring(),
+            L"--scale", L"0.9",
+            L"--force",
+        }, false);
+    }
+
+    throw_if_cancelled(cancelling_);
+    set_status(LoraOperationStage::exporting_model, 0.90,
                u"訓練完成，正在匯出並量化 GGUF…");
     const std::vector<std::wstring> export_arguments{
         L"export-gguf",
@@ -1447,6 +1473,8 @@ void LoraTrainingManager::training_worker() {
     if (!std::filesystem::is_regular_file(gguf_path, error)) {
         throw std::runtime_error("trainer completed without producing a GGUF model");
     }
+    const auto final_adapter = rfl::json::read<PeftAdapterConfig>(
+        read_text(adapter_directory / L"adapter_config.json")).value();
     const LoraTrainingRun completed_run{
         .parent_id = previous_run ? previous_run->id : 0,
         .base_model_revision = revision,
@@ -1457,8 +1485,8 @@ void LoraTrainingManager::training_worker() {
         .cumulative_record_count = dataset.written +
             (previous_run ? previous_run->cumulative_record_count : 0),
         .optimizer_steps = training_steps(adapter_directory),
-        .rank = pending_options_.rank,
-        .alpha = pending_options_.alpha,
+        .rank = final_adapter.r,
+        .alpha = final_adapter.lora_alpha,
         .dropout = pending_options_.dropout,
         .target_modules = pending_options_.target_modules,
         .training_request_json = std::move(training_request_json),
@@ -1466,6 +1494,9 @@ void LoraTrainingManager::training_worker() {
     if (!training_data_->complete_lora_training(
             completed_run, dataset.included_event_ids)) {
         throw std::runtime_error("model completed but training records could not be marked trained");
+    }
+    if (pending_options_.stabilize_intruders) {
+        std::filesystem::remove_all(training_adapter_directory, error);
     }
     std::lock_guard lock(status_mutex_);
     status_.stage = LoraOperationStage::completed;

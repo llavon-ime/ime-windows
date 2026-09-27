@@ -1240,6 +1240,7 @@ void SettingsWindow::show_lora_training_dialog() {
         ComboBox training_strength{nullptr};
         TextBlock strength_description{nullptr};
         ToggleSwitch only_selected_sentences{nullptr};
+        ToggleSwitch stabilize_intruders{nullptr};
         StackPanel advanced_settings{nullptr};
         TextBox rank{nullptr};
         TextBox alpha{nullptr};
@@ -1568,6 +1569,7 @@ void SettingsWindow::show_lora_training_dialog() {
     state->training_strength = named<ComboBox>(dialog_root, L"TrainingStrength");
     state->strength_description = named<TextBlock>(dialog_root, L"StrengthDescription");
     state->only_selected_sentences = named<ToggleSwitch>(dialog_root, L"OnlySelectedSentences");
+    state->stabilize_intruders = named<ToggleSwitch>(dialog_root, L"StabilizeIntruders");
     state->advanced_settings = named<StackPanel>(dialog_root, L"AdvancedTrainingSettings");
     state->rank = named<TextBox>(dialog_root, L"Rank");
     state->alpha = named<TextBox>(dialog_root, L"Alpha");
@@ -2147,6 +2149,7 @@ void SettingsWindow::show_lora_training_dialog() {
                     .only_manually_selected = state->only_selected_sentences.IsOn() ? 1 : 0,
                     .base_run_id = state->base_run_ids[
                         static_cast<std::size_t>(state->training_base.SelectedIndex())],
+                    .stabilize_intruders = state->stabilize_intruders.IsOn() ? 1 : 0,
                 };
                 const std::u16string dtype = state->dtype.SelectedIndex() == 1
                     ? u"bfloat16"
