@@ -1431,7 +1431,8 @@ STDMETHODIMP TextService::OnEndEdit(ITfContext* context, TfEditCookie /*read_onl
         post_predict_ms + edit_wait_ms + edit_apply_ms + edit_notify_ms;
     const double partition_error_ms = elapsed_ms - partition_ms;
 
-    logger_.log([elapsed_ms, test_to_key_ms, key_pre_mode_ms, mode_ms, mode_to_ready_ms,
+    logger_.log(llavon::debug::LogInformation::general,
+                [elapsed_ms, test_to_key_ms, key_pre_mode_ms, mode_ms, mode_to_ready_ms,
                  ready_ms, ready_to_context_ms, pre_context_ms, context_to_predict_ms,
                  predict_rtt_ms, post_predict_ms, edit_wait_ms, edit_apply_ms,
                  edit_prepare_ms, edit_set_text_ms, edit_attribute_ms, edit_selection_ms,

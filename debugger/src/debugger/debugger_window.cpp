@@ -128,7 +128,11 @@ LRESULT DebuggerWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
     }
     if (message == log_message) {
         std::unique_ptr<std::string> text(reinterpret_cast<std::string*>(lparam));
-        if (text) append_message(std::move(*text));
+        const auto information =
+            wparam == static_cast<WPARAM>(llavon::debug::LogInformation::context)
+                ? llavon::debug::LogInformation::context
+                : llavon::debug::LogInformation::general;
+        if (text) append_message(information, std::move(*text));
         return 0;
     }
     switch (message) {
@@ -177,6 +181,9 @@ void DebuggerWindow::load_page(const HINSTANCE instance) {
     e2e_latency_status_ = named<TextBlock>(shell, L"E2eLatencyStatus");
     inference_latency_status_ = named<TextBlock>(shell, L"InferenceLatencyStatus");
     log_output_ = named<TextBox>(shell, L"LogOutput");
+    context_status_ = named<TextBlock>(shell, L"ContextStatus");
+    captured_context_ = named<TextBox>(shell, L"CapturedContext");
+    token_round_trip_ = named<TextBox>(shell, L"TokenRoundTrip");
     xaml_source_.Content(shell);
 }
 
@@ -184,9 +191,12 @@ void DebuggerWindow::start_server() {
     const HWND target = window_;
     server_ = std::make_unique<PipeServer>(
         [target](int delta) { PostMessageW(target, connection_message, 0, delta); },
-        [target](std::string message) {
+        [target](llavon::debug::LogInformation information, std::string message) {
             auto text = std::make_unique<std::string>(std::move(message));
-            if (PostMessageW(target, log_message, 0, reinterpret_cast<LPARAM>(text.get()))) text.release();
+            if (PostMessageW(target, log_message, static_cast<WPARAM>(information),
+                             reinterpret_cast<LPARAM>(text.get()))) {
+                text.release();
+            }
         });
 }
 
@@ -200,7 +210,13 @@ void DebuggerWindow::update_connection_count(int delta) {
     }
 }
 
-void DebuggerWindow::append_message(std::string message) {
+void DebuggerWindow::append_message(llavon::debug::LogInformation information,
+                                    std::string message) {
+    if (information == llavon::debug::LogInformation::context) {
+        update_context(message);
+        return;
+    }
+
     update_latency(message);
     log_text_ += utf8_to_wide(message);
     log_text_ += L"\r\n";
@@ -212,6 +228,44 @@ void DebuggerWindow::append_message(std::string message) {
     }
     log_output_.Text(log_text_);
     log_output_.Select(static_cast<std::int32_t>(log_text_.size()), 0);
+}
+
+bool DebuggerWindow::update_context(const std::string& message) {
+    const auto source_end = message.find("] ");
+    if (message.empty() || message.front() != '[' || source_end == std::string::npos) {
+        context_status_.Text(L"Invalid context record: missing source");
+        return false;
+    }
+
+    const std::string_view payload(message.data() + source_end + 2,
+                                   message.size() - source_end - 2);
+    const auto length_end = payload.find('\n');
+    if (length_end == std::string_view::npos) {
+        context_status_.Text(L"Invalid context record: missing length");
+        return false;
+    }
+
+    std::size_t captured_size = 0;
+    const char* length_begin = payload.data();
+    const char* length_finish = payload.data() + length_end;
+    const auto parsed = std::from_chars(length_begin, length_finish, captured_size);
+    const std::string_view text = payload.substr(length_end + 1);
+    if (parsed.ec != std::errc{} || parsed.ptr != length_finish ||
+        captured_size > text.size()) {
+        context_status_.Text(L"Invalid context record: invalid length");
+        return false;
+    }
+
+    const std::string_view captured = text.substr(0, captured_size);
+    const std::string_view round_trip = text.substr(captured_size);
+    captured_context_.Text(utf8_to_wide(std::string(captured)));
+    token_round_trip_.Text(utf8_to_wide(std::string(round_trip)));
+
+    std::wstring status = utf8_to_wide(message.substr(1, source_end - 1));
+    status += captured == round_trip ? L" · Round-trip matches"
+                                     : L" · Round-trip differs";
+    context_status_.Text(status);
+    return true;
 }
 
 void DebuggerWindow::update_latency(const std::string& message) {
@@ -258,6 +312,9 @@ void DebuggerWindow::close_xaml() noexcept {
     e2e_latency_status_ = nullptr;
     inference_latency_status_ = nullptr;
     log_output_ = nullptr;
+    context_status_ = nullptr;
+    captured_context_ = nullptr;
+    token_round_trip_ = nullptr;
     island_native_ = nullptr;
     island_window_ = nullptr;
     try {

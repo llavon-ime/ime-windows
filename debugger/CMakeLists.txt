@@ -61,7 +61,10 @@ target_compile_definitions(llavon-ime-debugger PRIVATE
 )
 target_compile_options(llavon-ime-debugger PRIVATE /W4 /WX /utf-8 /permissive-)
 target_link_options(llavon-ime-debugger PRIVATE /MANIFEST:NO)
-target_include_directories(llavon-ime-debugger PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(llavon-ime-debugger PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
 target_link_libraries(llavon-ime-debugger PRIVATE
     Microsoft::CppWinRT
     WindowsApp

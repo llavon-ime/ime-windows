@@ -35,7 +35,9 @@ private:
     void load_page(HINSTANCE instance);
     void start_server();
     void update_connection_count(int delta);
-    void append_message(std::string message);
+    void append_message(llavon::debug::LogInformation information,
+                        std::string message);
+    bool update_context(const std::string& message);
     void update_latency(const std::string& message);
     void resize_island() const noexcept;
     void close_xaml() noexcept;
@@ -51,6 +53,9 @@ private:
     winrt::Windows::UI::Xaml::Controls::TextBlock e2e_latency_status_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBlock inference_latency_status_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBox log_output_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBlock context_status_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBox captured_context_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBox token_round_trip_{nullptr};
     std::unique_ptr<PipeServer> server_;
     std::deque<double> recent_e2e_latency_ms_;
     std::deque<double> recent_inference_latency_ms_;
