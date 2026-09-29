@@ -146,6 +146,20 @@ std::filesystem::path default_tables_directory() {
     return executable_directory().parent_path() / "tables";
 }
 
+std::filesystem::path vulkan_pipeline_cache_directory() noexcept {
+    try {
+        PWSTR raw = nullptr;
+        if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE,
+                                        nullptr, &raw))) {
+            return {};
+        }
+        const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> owned(raw, CoTaskMemFree);
+        return std::filesystem::path(owned.get()) / L"Llavon IME" / L"vulkan-cache";
+    } catch (...) {
+        return {};
+    }
+}
+
 void launch_debugger() noexcept {
     try {
         const auto debugger_path = executable_directory() / L"llavon-ime-debugger.exe";
@@ -222,6 +236,10 @@ int main(int argc, char* argv[]) {
 
         auto config = parse_core_config(service_argc, argv);
         config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
+        config.vulkan_pipeline_cache_dir = vulkan_pipeline_cache_directory();
+        if (config.vulkan_pipeline_cache_dir.empty()) {
+            std::clog << "[WARN] Vulkan pipeline cache disabled: no directory supplied\n";
+        }
         const auto user_settings = llavon::service::load_settings();
         if (service_argc == 1 && !user_settings.model_path.empty()) {
             config.model_path = resolve_configured_model_path(
