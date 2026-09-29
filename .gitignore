@@ -1,3 +1,4 @@
+# Build and packaging output
 /build*/
 /dist*/
 /diagnostics/
@@ -15,7 +16,19 @@ cmake_install.cmake
 CTestTestfile.cmake
 Testing/
 
-# Local dependency installation and NPU validation output
+# Local dependency installation
 vcpkg_installed/
+
+# Python environments and tool caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime logs and NPU validation output
+*.log
 npu-cache/
 npu-report.json

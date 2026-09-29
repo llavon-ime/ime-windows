@@ -260,7 +260,21 @@ target_link_libraries(llavon-ime-candidate-ui PRIVATE
 )
 
 if(BUILD_TESTING)
+    add_executable(settings-ui-smoke-tests tests/settings_ui_smoke_tests.cpp)
+    target_compile_features(settings-ui-smoke-tests PRIVATE cxx_std_23)
+    target_compile_definitions(settings-ui-smoke-tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(settings-ui-smoke-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_link_libraries(settings-ui-smoke-tests PRIVATE ole32)
+    add_dependencies(settings-ui-smoke-tests llavon-ime-settings-ui)
+    add_test(NAME settings-ui-smoke
+        COMMAND settings-ui-smoke-tests "$<TARGET_FILE:llavon-ime-settings-ui>")
+    add_test(NAME settings-ui-dll-search
+        COMMAND settings-ui-smoke-tests "$<TARGET_FILE:llavon-ime-settings-ui>"
+            --default-dll-directories)
+    set_tests_properties(settings-ui-smoke settings-ui-dll-search PROPERTIES TIMEOUT 30)
     if(LLAVON_IME_ENABLE_RYZENAI)
+        target_compile_definitions(settings-ui-smoke-tests PRIVATE LLAVON_IME_RYZENAI=1)
+        target_link_libraries(settings-ui-smoke-tests PRIVATE ime-core::ime-core)
         add_executable(npu-compiler-process-tests
             tests/npu_compiler_process_tests.cpp src/service/npu_compiler_process.cpp)
         target_compile_features(npu-compiler-process-tests PRIVATE cxx_std_23)
@@ -269,6 +283,24 @@ if(BUILD_TESTING)
         target_include_directories(npu-compiler-process-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
         add_test(NAME npu-compiler-process COMMAND npu-compiler-process-tests)
         set_tests_properties(npu-compiler-process PROPERTIES TIMEOUT 20)
+        find_package(onnxruntime-genai-winml CONFIG REQUIRED)
+        add_executable(npu-hardware-tests tests/npu_hardware_tests.cpp)
+        target_compile_features(npu-hardware-tests PRIVATE cxx_std_23)
+        target_compile_options(npu-hardware-tests PRIVATE /W4 /WX /utf-8 /Zc:__cplusplus)
+        target_link_libraries(npu-hardware-tests PRIVATE ime-core::ime-core ONNXRuntimeGenAI::ONNXRuntimeGenAI)
+        add_executable(inference-benchmark tests/inference_benchmark.cpp)
+        target_compile_features(inference-benchmark PRIVATE cxx_std_23)
+        target_compile_options(inference-benchmark PRIVATE /W4 /WX /utf-8 /Zc:__cplusplus)
+        target_link_libraries(inference-benchmark PRIVATE ime-core::ime-core)
+        add_executable(inference-logits tests/inference_logits.cpp)
+        find_package(llama CONFIG REQUIRED)
+        target_compile_features(inference-logits PRIVATE cxx_std_23)
+        target_compile_options(inference-logits PRIVATE /W4 /WX /utf-8 /Zc:__cplusplus)
+        target_link_libraries(inference-logits PRIVATE ime-core::ime-core llama)
+        add_custom_command(TARGET npu-hardware-tests POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/onnxruntime.dll"
+                "$<TARGET_FILE_DIR:npu-hardware-tests>" VERBATIM)
     endif()
     add_executable(inference-settings-tests
         tests/inference_settings_tests.cpp src/service/user_settings_codec.cpp)

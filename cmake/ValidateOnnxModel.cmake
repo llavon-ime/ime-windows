@@ -5,6 +5,7 @@ endif()
 
 foreach(_file IN ITEMS
     genai_config.json
+    npu_model.json
     model.onnx
     model.onnx.data
     tokenizer.json

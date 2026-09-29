@@ -121,6 +121,24 @@ jobs:
           "-DLLAVON_IME_MODEL_SHA256=${{ steps.model.outputs.sha256 }}"
           "-DLLAVON_IME_MODEL_SIZE=${{ steps.model.outputs.size }}"
 
+      - name: Set up NPU exporter Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Export Windows ML NPU model
+        shell: pwsh
+        run: |
+          python -m pip install -r ime-core/tools/requirements-npu-export.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Only the pure-Python cast/fusion passes are used at export time.
+          python -m pip install --no-deps --index-url https://pypi.amd.com/simple model-generate==1.5.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s ime-core/tests/ryzen_ai -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python ime-core/tools/export_onnx.py --output build/windows/models/llavon-ime-llama-250m-Q4_K_M-onnx
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build web installer
         shell: pwsh
         run: cmake --build build/windows --config Release --target llavon-ime-setup --parallel

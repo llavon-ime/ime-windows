@@ -4,11 +4,16 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <format>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -60,6 +65,43 @@ int wmain(int argc, wchar_t** argv) {
         auto accelerator = llavon::ime::core::create_ryzen_ai_accelerator(
             {.model_directory = argv[1], .cache_directory = argv[2], .logger = logger});
         accelerator->prepare({}, static_cast<std::uint32_t>(length));
+        accelerator.reset();
+        accelerator = llavon::ime::core::create_ryzen_ai_accelerator(
+            {.model_directory = argv[1], .cache_directory = argv[2],
+             .allow_compilation = false, .logger = logger});
+        accelerator->prepare({}, static_cast<std::uint32_t>(length));
+        // Session construction does not execute AMD's dynamically selected
+        // attention transactions. Verify prefill, decode and rewind before the
+        // service is allowed to load the compiled context.
+        auto context = accelerator->create_context();
+        const auto started = std::chrono::steady_clock::now();
+        context->decode(std::array<std::int32_t, 3>{1, 1, 1}, 0);
+        const auto vocabulary = context->logits().size();
+        if (vocabulary == 0) throw std::runtime_error("NPU smoke test returned no logits");
+        const auto expected = std::vector<float>(context->logits().begin(), context->logits().end());
+        context->decode(std::array<std::int32_t, 1>{1}, 3);
+        context->truncate(1);
+        context->decode(std::array<std::int32_t, 2>{1, 1}, 1);
+        const auto actual = context->logits();
+        if (actual.size() != expected.size()) {
+            throw std::runtime_error("NPU rewind changed logits dimensions");
+        }
+        double dot = 0.0;
+        double actual_norm = 0.0;
+        double expected_norm = 0.0;
+        for (std::size_t i = 0; i < actual.size(); ++i) {
+            dot += static_cast<double>(actual[i]) * expected[i];
+            actual_norm += static_cast<double>(actual[i]) * actual[i];
+            expected_norm += static_cast<double>(expected[i]) * expected[i];
+        }
+        const auto similarity = dot / std::sqrt(actual_norm * expected_norm);
+        // BF16 prefill and incremental decode need not be bit-identical.
+        if (!std::isfinite(similarity) || similarity < 0.99) {
+            throw std::runtime_error("NPU rewind produced inconsistent logits");
+        }
+        logger->log(std::format("[NPU] hardware smoke test passed: prefill, decode, rewind; {} logits; {} ms",
+            vocabulary, std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started).count()));
         return 0;
     } catch (const std::exception& error) {
         logger->log(std::string("[ERR] ") + error.what());

@@ -21,19 +21,43 @@ namespace llavon::settings {
 namespace {
 using namespace winrt::Microsoft::UI::Xaml;
 
+std::filesystem::path module_directory() {
+    std::wstring path(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(
+        reinterpret_cast<HMODULE>(&__ImageBase), path.data(),
+        static_cast<DWORD>(path.size()));
+    if (!length || length == path.size()) winrt::throw_last_error();
+    path.resize(length);
+    return std::filesystem::path(path).parent_path();
+}
+
+void ensure_winui_modules_loaded() {
+    // VitisAI sets the process-wide default DLL search directories. With that
+    // policy, WinRT's manifest-relative activation fails with E_INVALIDARG.
+    // Preload the settings page's resource, composition and input components by
+    // absolute path, retaining them for the process-wide activation factory cache.
+    [[maybe_unused]] static const bool loaded = [] {
+        const auto directory = module_directory();
+        for (const auto* name : {L"Microsoft.Windows.ApplicationModel.Resources.dll",
+                L"dcompi.dll", L"Microsoft.UI.Input.dll", L"Microsoft.UI.Windowing.dll",
+                L"Microsoft.Graphics.Display.dll", L"wuceffectsi.dll", L"WinUIEdit.dll"}) {
+            const auto path = directory / name;
+            if (!LoadLibraryExW(path.c_str(), nullptr,
+                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)) {
+                winrt::throw_last_error();
+            }
+        }
+        return true;
+    }();
+}
+
 struct IslandApplication : ApplicationT<IslandApplication, Markup::IXamlMetadataProvider> {
     IslandApplication() {
         // Loose settings XAML is embedded as RCDATA. Only the native control
         // library needs a PRI; resolve it explicitly without taking ownership
         // of the host executable's default resources.pri.
         ResourceManagerRequested([](const auto&, const ResourceManagerRequestedEventArgs& args) {
-            std::wstring path(32768, L'\0');
-            const DWORD length = GetModuleFileNameW(
-                reinterpret_cast<HMODULE>(&__ImageBase), path.data(),
-                static_cast<DWORD>(path.size()));
-            if (!length || length == path.size()) winrt::throw_last_error();
-            path.resize(length);
-            const auto pri = std::filesystem::path(path).parent_path() / L"Microsoft.UI.Xaml.Controls.pri";
+            const auto pri = module_directory() / L"Microsoft.UI.Xaml.Controls.pri";
             args.CustomResourceManager(
                 winrt::Microsoft::Windows::ApplicationModel::Resources::ResourceManager(pri.c_str()));
         });
@@ -95,6 +119,8 @@ WinuiRuntime::WinuiRuntime() : state_(std::make_unique<State>()) {
     const wchar_t* stage = L"runtime activation";
     try {
         winrt::check_hresult(WindowsAppRuntime_EnsureIsLoaded());
+        stage = L"WinUI dependency loading";
+        ensure_winui_modules_loaded();
         stage = L"dispatcher queue";
         state_->dispatcher = winrt::Microsoft::UI::Dispatching::DispatcherQueueController::CreateOnCurrentThread();
         stage = L"XAML application";
