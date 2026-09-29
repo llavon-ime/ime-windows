@@ -637,6 +637,7 @@ bool LoraTrainingManager::start_training_async(
     if (options.strength != LoraTrainingStrength::advanced) {
         const auto strength = options.strength;
         const bool only_selected = options.only_manually_selected;
+        const bool train_until_remembered = options.train_until_remembered;
         const bool stabilize_intruders = options.stabilize_intruders;
         const auto base_run_id = options.base_run_id;
         options = LoraTrainingOptions{};
@@ -646,8 +647,12 @@ bool LoraTrainingManager::start_training_async(
         options.learning_rate = preset.learning_rate;
         options.epochs = preset.epochs;
         options.only_manually_selected = only_selected;
+        options.train_until_remembered = train_until_remembered;
         options.stabilize_intruders = stabilize_intruders;
     }
+    if (options.train_until_remembered &&
+        (options.strength == LoraTrainingStrength::ultra_low ||
+         !options.only_manually_selected)) return false;
     if (options.base_run_id < 0 || options.rank <= 0 ||
         !std::isfinite(options.alpha) || options.alpha <= 0 ||
         !std::isfinite(options.dropout) || options.dropout < 0 ||
@@ -1212,8 +1217,15 @@ int LoraTrainingManager::run_process(
                                 to_utf16(line));
                         }
                     } catch (...) {
+                        if (line.substr(slash + 1, space - slash - 1) ==
+                            "until-remembered") {
+                            set_status(LoraOperationStage::training, 0.05,
+                                       to_utf16(line));
+                        }
                     }
                 }
+            } else if (parse_training_progress && line.starts_with("remembered=")) {
+                set_status(LoraOperationStage::training, 0.05, to_utf16(line));
             }
         }
     }
@@ -1239,6 +1251,17 @@ void LoraTrainingManager::training_worker() {
     throw_if_cancelled(cancelling_);
     if (pending_event_ids_.empty()) {
         throw std::invalid_argument("at least one training record must be selected");
+    }
+    if (pending_options_.train_until_remembered) {
+        std::map<std::pair<std::u16string, std::string>, std::u16string> answers;
+        for (const auto& record : pending_records_) {
+            const auto [found, inserted] = answers.try_emplace(
+                std::pair{record.context, record.padding_json}, record.answer);
+            if (!inserted && found->second != record.answer) {
+                throw std::invalid_argument(
+                    "警告：訓練資料有相同輸入但不同答案，請刪除衝突資料後再使用「訓練直到記住」。");
+            }
+        }
     }
     std::string revision;
     if (!installed_model_is_complete(&revision)) {
@@ -1319,6 +1342,7 @@ void LoraTrainingManager::training_worker() {
         struct TrainingRequest {
             std::int32_t preset_version;
             bool only_manually_selected;
+            bool train_until_remembered;
             bool stabilize_intruders;
             std::int64_t parent_id;
             std::string base_model_revision;
@@ -1359,6 +1383,7 @@ void LoraTrainingManager::training_worker() {
         const TrainingRequest request{
             .preset_version = 1,
             .only_manually_selected = pending_options_.only_manually_selected,
+            .train_until_remembered = pending_options_.train_until_remembered,
             .stabilize_intruders = pending_options_.stabilize_intruders,
             .parent_id = previous_run ? previous_run->id : 0,
             .base_model_revision = revision,
@@ -1434,6 +1459,9 @@ void LoraTrainingManager::training_worker() {
     if (previous_run) {
         train_arguments.push_back(L"--resume-adapter");
         train_arguments.push_back(previous_run->adapter_path.wstring());
+    }
+    if (pending_options_.train_until_remembered) {
+        train_arguments.push_back(L"--train-until-remembered");
     }
     if (!pending_options_.shuffle) train_arguments.push_back(L"--no-shuffle");
     run_process(trainer, train_arguments, true);

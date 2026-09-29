@@ -232,6 +232,11 @@ other records contribute one. The trainer shuffles the combined samples each
 epoch when shuffling is enabled (the default). Training history counts the
 original records, without the extra samples.
 
+The optional train-until-remembered mode re-evaluates every manually selected
+training target after each epoch and repeats until every target wins within its
+candidate set. The mode rejects conflicting targets for an identical causal
+input prefix and is unavailable for the ultra-low preset.
+
 The dialog supplies non-empty defaults derived from
 `lora-trainer/docs/step-search-results.md`: rank/alpha 8/16, dropout 0, batch
 size and gradient accumulation 1, 5 epochs, max steps `-1`, learning rate `1e-4`,

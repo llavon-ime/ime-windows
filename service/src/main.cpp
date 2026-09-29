@@ -391,6 +391,7 @@ int main(int argc, char* argv[]) {
                         : u"q_proj,v_proj",
                     .strength = static_cast<llavon::service::LoraTrainingStrength>(source.strength),
                     .only_manually_selected = source.only_manually_selected != 0,
+                    .train_until_remembered = source.train_until_remembered != 0,
                     .stabilize_intruders = source.stabilize_intruders != 0,
                 };
                 return lora_training.start_training_async(

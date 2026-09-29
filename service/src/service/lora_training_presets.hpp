@@ -11,7 +11,8 @@ enum class LoraTrainingStrength : std::int32_t {
   low = 1,
   medium = 2,
   high = 3,
-  advanced = 4,
+  very_high = 4,
+  advanced = 5,
 };
 
 struct LoraTrainingPreset {
@@ -28,6 +29,8 @@ lora_training_preset(LoraTrainingStrength strength) noexcept {
     return {3e-6, 2};
   case LoraTrainingStrength::high:
     return {1e-5, 5};
+  case LoraTrainingStrength::very_high:
+    return {1e-4, 5};
   case LoraTrainingStrength::low:
   case LoraTrainingStrength::advanced:
     return {1e-6, 1};

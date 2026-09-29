@@ -1240,6 +1240,7 @@ void SettingsWindow::show_lora_training_dialog() {
         ComboBox training_strength{nullptr};
         TextBlock strength_description{nullptr};
         ToggleSwitch only_selected_sentences{nullptr};
+        ToggleSwitch train_until_remembered{nullptr};
         ToggleSwitch stabilize_intruders{nullptr};
         StackPanel advanced_settings{nullptr};
         TextBox rank{nullptr};
@@ -1569,6 +1570,7 @@ void SettingsWindow::show_lora_training_dialog() {
     state->training_strength = named<ComboBox>(dialog_root, L"TrainingStrength");
     state->strength_description = named<TextBlock>(dialog_root, L"StrengthDescription");
     state->only_selected_sentences = named<ToggleSwitch>(dialog_root, L"OnlySelectedSentences");
+    state->train_until_remembered = named<ToggleSwitch>(dialog_root, L"TrainUntilRemembered");
     state->stabilize_intruders = named<ToggleSwitch>(dialog_root, L"StabilizeIntruders");
     state->advanced_settings = named<StackPanel>(dialog_root, L"AdvancedTrainingSettings");
     state->rank = named<TextBox>(dialog_root, L"Rank");
@@ -1600,6 +1602,11 @@ void SettingsWindow::show_lora_training_dialog() {
         const auto strength = static_cast<llavon::service::LoraTrainingStrength>(
             state->training_strength.SelectedIndex());
         const bool advanced = strength == llavon::service::LoraTrainingStrength::advanced;
+        const bool supports_remember_mode =
+            strength != llavon::service::LoraTrainingStrength::ultra_low &&
+            state->only_selected_sentences.IsOn();
+        state->train_until_remembered.IsEnabled(supports_remember_mode);
+        if (!supports_remember_mode) state->train_until_remembered.IsOn(false);
         state->advanced_settings.Visibility(
             advanced ? Visibility::Visible : Visibility::Collapsed);
         state->strength_description.Text(advanced
@@ -1682,7 +1689,11 @@ void SettingsWindow::show_lora_training_dialog() {
             ? std::min(epoch_steps, static_cast<std::uint64_t>(*max_steps))
             : epoch_steps;
         state->estimated_steps.Text(
-            L"預估最多 " + std::to_wstring(estimated) + L" steps（有效資料可能較少）");
+            state->train_until_remembered.IsOn()
+                ? L"每輪約 " + std::to_wstring(updates) +
+                      L" steps，會持續訓練到所有答案正確"
+                : L"預估最多 " + std::to_wstring(estimated) +
+                      L" steps（有效資料可能較少）");
     };
 
     const auto refresh_training_selection = [this, state, refresh_estimated_steps,
@@ -1742,8 +1753,18 @@ void SettingsWindow::show_lora_training_dialog() {
         std::format(L"訓練 #{} · {}",
             history.back().id, history.back().completed_local));
     state->only_selected_sentences.Toggled(
-        [refresh_training_selection](const auto&, const auto&) {
+        [state, refresh_training_selection](const auto&, const auto&) {
+            const auto strength = static_cast<llavon::service::LoraTrainingStrength>(
+                state->training_strength.SelectedIndex());
+            const bool supports_remember_mode = state->only_selected_sentences.IsOn() &&
+                strength != llavon::service::LoraTrainingStrength::ultra_low;
+            state->train_until_remembered.IsEnabled(supports_remember_mode);
+            if (!supports_remember_mode) state->train_until_remembered.IsOn(false);
             refresh_training_selection();
+        });
+    state->train_until_remembered.Toggled(
+        [refresh_estimated_steps](const auto&, const auto&) {
+            refresh_estimated_steps();
         });
     for (const auto& field : {state->batch_size, state->gradient_accumulation,
                               state->epochs, state->max_steps}) {
@@ -2147,6 +2168,7 @@ void SettingsWindow::show_lora_training_dialog() {
                     .target_modules = nullptr,
                     .strength = state->training_strength.SelectedIndex(),
                     .only_manually_selected = state->only_selected_sentences.IsOn() ? 1 : 0,
+                    .train_until_remembered = state->train_until_remembered.IsOn() ? 1 : 0,
                     .base_run_id = state->base_run_ids[
                         static_cast<std::size_t>(state->training_base.SelectedIndex())],
                     .stabilize_intruders = state->stabilize_intruders.IsOn() ? 1 : 0,

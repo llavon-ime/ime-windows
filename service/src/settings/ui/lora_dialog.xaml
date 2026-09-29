@@ -228,7 +228,8 @@
               <ComboBoxItem Content="低"/>
               <ComboBoxItem Content="中"/>
               <ComboBoxItem Content="高"/>
-              <ComboBoxItem Content="進階"/>
+              <ComboBoxItem Content="極高"/>
+              <ComboBoxItem Content="自訂"/>
             </ComboBox>
             <TextBlock x:Name="StrengthDescription"
                 FontSize="12"
@@ -236,6 +237,9 @@
             <ToggleSwitch x:Name="OnlySelectedSentences"
                 Header="只訓練曾手動選字的句子"
                 IsOn="True"/>
+            <ToggleSwitch x:Name="TrainUntilRemembered"
+                Header="訓練直到記住"
+                IsOn="False"/>
             <Grid ColumnSpacing="8">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>

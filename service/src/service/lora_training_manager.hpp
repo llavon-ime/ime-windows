@@ -54,6 +54,7 @@ struct LoraTrainingOptions {
     std::u16string target_modules = u"q_proj,v_proj";
     LoraTrainingStrength strength = LoraTrainingStrength::low;
     bool only_manually_selected = true;
+    bool train_until_remembered = false;
     bool stabilize_intruders = true;
 };
 
