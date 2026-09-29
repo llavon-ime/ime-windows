@@ -15,13 +15,11 @@ New-Item -ItemType Directory -Path $Artifacts -Force | Out-Null
 function Invoke-Probe([string]$Name, [string]$Cache, [string]$Expected) {
     $info = New-Object Diagnostics.ProcessStartInfo
     $info.FileName = $Probe
-    $info.Arguments = '"{0}" "{1}" "{2}" --load-only' -f $Model, $Tables, $Device
+    $info.Arguments = '"{0}" "{1}" "{2}" --cache-dir "{3}" --load-only' -f $Model, $Tables, $Device, $Cache
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
-    $info.EnvironmentVariables['GGML_VK_PIPELINE_CACHE_DIR'] = $Cache
-    $info.EnvironmentVariables.Remove('GGML_VK_PIPELINE_CACHE_DISABLE')
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $info
     if (-not $process.Start()) { throw 'Cannot start Vulkan probe' }

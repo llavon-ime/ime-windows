@@ -202,17 +202,19 @@ Validation must include every first-use request, new sessions, 250 ms idle
 gaps, and longer idle periods. Long-context compute time is still workload
 dependent; the driver clock hint alone did not remove the reproduced stalls.
 
-The Windows ggml overlay also persists Vulkan's compiled pipeline data in
-`%LOCALAPPDATA%\Llavon IME\vulkan-cache`. Subsequent service starts reuse
-compatible data while still preparing the model and its inference contexts.
+The service explicitly passes `%LOCALAPPDATA%\Llavon IME\vulkan-cache` to
+ime-core. The cross-platform ggml Vulkan backend does not assume a path and
+leaves persistent caching disabled when its host supplies none. Subsequent
+starts reuse compatible data while still preparing the model and its inference
+contexts.
 Cache identities include the GPU, driver version, Vulkan cache UUID and
-backend schema. Payloads have a SHA-256 checksum and are replaced atomically.
+backend schema. Payloads have a checksum and are replaced atomically.
 Missing, corrupt or incompatible data is rebuilt; a cache I/O failure does
 not prevent inference. The core saves immediately after model preparation,
 so normal service shutdown is not required to preserve that work. There are
 no cache writes on the prediction path and no registry changes.
 `[VK_CACHE] loaded`, `miss`, and `saved` distinguish these startup outcomes.
-See `cmake/ports/README.md` for the overlay and diagnostics.
+See `ime-core/vcpkg-ports/README.md` for the pinned ggml fork and diagnostics.
 
 The clock-mode query also retained Peak-looking values after Default succeeded;
 independent ADL telemetry returned to low idle clocks. Neither API success nor

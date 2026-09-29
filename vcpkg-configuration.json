@@ -3,5 +3,5 @@
     "kind": "builtin",
     "baseline": "301856f5f2824f788a3ffa6332293861cccd23b4"
   },
-  "overlay-ports": ["./cmake/ports"]
+  "overlay-ports": ["./ime-core/vcpkg-ports"]
 }
