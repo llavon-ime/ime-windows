@@ -979,8 +979,8 @@ void LoraTrainingManager::check_trainer_worker() {
             status_.trainer_version != status_.trainer_release_version ||
             status_.trainer_commit != to_utf16(manifest.commit);
         status_.trainer_message = status_.trainer_update_available
-            ? u"可下載此 submodule 對應的發行版"
-            : u"已安裝此 submodule 對應的發行版";
+            ? u"可下載目前版本對應之訓練器"
+            : u"已安裝目前版本對應之訓練器";
         status_.stage = !status_.output_model_path.empty()
             ? LoraOperationStage::completed
             : (status_.model_available ? LoraOperationStage::model_ready
@@ -1035,7 +1035,7 @@ void LoraTrainingManager::install_trainer_worker() {
         std::lock_guard lock(status_mutex_);
         status_.trainer_release_version = to_utf16(manifest.version);
         status_.trainer_update_available = false;
-        status_.trainer_message = u"LoRA 訓練器已安裝";
+        status_.trainer_message = u"已安裝目前版本對應之訓練器";
         status_.stage = !status_.output_model_path.empty()
             ? LoraOperationStage::completed
             : (status_.model_available ? LoraOperationStage::model_ready
@@ -1124,7 +1124,7 @@ void LoraTrainingManager::install_trainer_worker() {
     std::lock_guard lock(status_mutex_);
     status_.trainer_release_version = to_utf16(manifest.version);
     status_.trainer_update_available = false;
-    status_.trainer_message = u"LoRA 訓練器安裝完成";
+    status_.trainer_message = u"已安裝目前版本對應之訓練器";
     status_.stage = !status_.output_model_path.empty()
         ? LoraOperationStage::completed
         : (status_.model_available ? LoraOperationStage::model_ready

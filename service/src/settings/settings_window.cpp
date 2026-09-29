@@ -1880,7 +1880,15 @@ void SettingsWindow::show_lora_training_dialog() {
             }
             return;
         }
-        if (status.message && *status.message) {
+        constexpr std::u16string_view trainer_ready_message =
+            u"已安裝目前版本對應之訓練器";
+        const bool repeated_trainer_ready_message =
+            status.message && status.trainer_message &&
+            std::u16string_view(status.message) == trainer_ready_message &&
+            std::u16string_view(status.trainer_message) == trainer_ready_message;
+        if (repeated_trainer_ready_message) {
+            state->status.Text(L"");
+        } else if (status.message && *status.message) {
             state->status.Text(to_hstring(std::u16string_view(status.message)));
         }
         const bool busy = status.stage == LLAVON_SETTINGS_LORA_CHECKING_MODEL ||
@@ -1966,10 +1974,10 @@ void SettingsWindow::show_lora_training_dialog() {
             ? to_hstring(std::u16string_view(trainer_detail)) : L"");
         if (state->trainer_release_available) {
             state->trainer_release_detail.Text(
-                L"目前 submodule 對應發行版：" +
+                L"目前版本對應訓練器版本: " +
                 wide_text(status.trainer_release_version));
         } else {
-            state->trainer_release_detail.Text(L"尚未取得目前 submodule 對應的發行版資訊。");
+            state->trainer_release_detail.Text(L"尚未取得目前版本對應的訓練器資訊。");
         }
         state->trainer_progress.Visibility(trainer_busy
             ? Visibility::Visible : Visibility::Collapsed);
