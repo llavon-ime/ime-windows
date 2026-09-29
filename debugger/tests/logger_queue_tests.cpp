@@ -9,6 +9,13 @@
 
 int main() {
     using Factory = llavon::debug::Logger::MessageFactory;
+    static_assert(requires(llavon::debug::Logger& logger, std::string message,
+                           Factory factory) {
+        logger.log(std::move(message));
+        logger.log(std::move(factory));
+        logger.log(llavon::debug::LogInformation::general, std::string{});
+    });
+
     std::atomic<int> evaluations{0};
     llavon::debug::internal::BoundedMpmcQueue<Factory, 2> queue;
 

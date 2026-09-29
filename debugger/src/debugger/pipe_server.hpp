@@ -1,5 +1,7 @@
 #pragma once
 
+#include <llavon-debug/logger.hpp>
+
 #include <windows.h>
 
 #include <atomic>
@@ -14,7 +16,8 @@ namespace llavon::debugger {
 class PipeServer final {
 public:
     using ConnectionCallback = std::function<void(int)>;
-    using MessageCallback = std::function<void(std::string)>;
+    using MessageCallback =
+        std::function<void(llavon::debug::LogInformation, std::string)>;
 
     PipeServer(ConnectionCallback connection_callback, MessageCallback message_callback);
     ~PipeServer();

@@ -22,6 +22,11 @@ constexpr DWORD reconnect_delay_ms = 250;
 
 using PendingMessage = std::variant<std::string, Logger::MessageFactory>;
 
+struct PendingLog {
+    LogInformation information = LogInformation::general;
+    PendingMessage message;
+};
+
 std::string materialize(PendingMessage message) {
     if (auto* text = std::get_if<std::string>(&message)) return std::move(*text);
     try {
@@ -56,9 +61,9 @@ public:
         close_events();
     }
 
-    void push(PendingMessage message) noexcept {
+    void push(LogInformation information, PendingMessage message) noexcept {
         if (!connected_.load(std::memory_order_acquire)) return;
-        if (!queue_.try_push(std::move(message))) {
+        if (!queue_.try_push(PendingLog{information, std::move(message)})) {
             dropped_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
@@ -107,18 +112,21 @@ private:
             const DWORD wait = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
             if (wait != WAIT_OBJECT_0 + 1) return;
 
-            PendingMessage pending;
+            PendingLog pending;
             while (queue_.try_pop(pending)) {
                 const auto dropped = dropped_.exchange(0, std::memory_order_relaxed);
                 if (dropped != 0 &&
-                    !write_message(pipe, "[LOGGER] dropped=" + std::to_string(dropped) +
-                                             " reason=queue_full")) return;
-                if (!write_message(pipe, materialize(std::move(pending)))) return;
+                    !write_message(pipe, LogInformation::general,
+                                   "[LOGGER] dropped=" + std::to_string(dropped) +
+                                       " reason=queue_full")) return;
+                if (!write_message(pipe, pending.information,
+                                   materialize(std::move(pending.message)))) return;
             }
         }
     }
 
-    bool write_message(HANDLE pipe, const std::string& message) noexcept {
+    bool write_message(HANDLE pipe, LogInformation information,
+                       const std::string& message) noexcept {
         std::string payload;
         payload.reserve(source_.size() + message.size() + 32);
         payload += '[';
@@ -127,13 +135,17 @@ private:
         payload += std::to_string(GetCurrentProcessId());
         payload += "] ";
         payload += message;
-        if (payload.size() > pipe_protocol::maximum_message_size) return true;
+        if (payload.size() + sizeof(std::uint8_t) >
+            pipe_protocol::maximum_message_size) return true;
 
-        const auto length = static_cast<std::uint32_t>(payload.size());
-        std::vector<std::uint8_t> frame(sizeof(length) + payload.size());
+        const auto length = static_cast<std::uint32_t>(
+            sizeof(std::uint8_t) + payload.size());
+        std::vector<std::uint8_t> frame(sizeof(length) + length);
         std::memcpy(frame.data(), &length, sizeof(length));
+        frame[sizeof(length)] = static_cast<std::uint8_t>(information);
         if (!payload.empty()) {
-            std::memcpy(frame.data() + sizeof(length), payload.data(), payload.size());
+            std::memcpy(frame.data() + sizeof(length) + sizeof(std::uint8_t),
+                        payload.data(), payload.size());
         }
         return write_exact(pipe, frame.data(), frame.size());
     }
@@ -176,13 +188,13 @@ private:
     }
 
     void discard_pending() noexcept {
-        PendingMessage pending;
+        PendingLog pending;
         while (queue_.try_pop(pending)) {
         }
     }
 
     std::string source_;
-    internal::BoundedMpmcQueue<PendingMessage, queue_capacity> queue_;
+    internal::BoundedMpmcQueue<PendingLog, queue_capacity> queue_;
     std::atomic<bool> connected_{false};
     std::atomic<std::uint64_t> dropped_{0};
     HANDLE stop_event_ = nullptr;
@@ -193,12 +205,12 @@ private:
 Logger::Logger(std::string source) : impl_(std::make_unique<Impl>(std::move(source))) {}
 Logger::~Logger() = default;
 
-void Logger::log(std::string message) noexcept {
-    impl_->push(PendingMessage(std::move(message)));
+void Logger::log(LogInformation information, std::string message) noexcept {
+    impl_->push(information, PendingMessage(std::move(message)));
 }
 
-void Logger::log(MessageFactory make_message) noexcept {
-    impl_->push(PendingMessage(std::move(make_message)));
+void Logger::log(LogInformation information, MessageFactory make_message) noexcept {
+    impl_->push(information, PendingMessage(std::move(make_message)));
 }
 
 }  // namespace llavon::debug

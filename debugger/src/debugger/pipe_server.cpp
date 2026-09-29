@@ -134,10 +134,18 @@ void PipeServer::handle_client(HANDLE pipe) noexcept {
         for (;;) {
             std::uint32_t length = 0;
             if (!read_exact(pipe, event, &length, sizeof(length)) ||
+                length < sizeof(std::uint8_t) ||
                 length > llavon::debug::pipe_protocol::maximum_message_size) break;
-            std::string message(length, '\0');
-            if (length != 0 && !read_exact(pipe, event, message.data(), length)) break;
-            message_callback_(std::move(message));
+            std::uint8_t raw_information = 0;
+            if (!read_exact(pipe, event, &raw_information, sizeof(raw_information))) break;
+            std::string message(length - sizeof(raw_information), '\0');
+            if (!message.empty() &&
+                !read_exact(pipe, event, message.data(), message.size())) break;
+            const auto information = raw_information == static_cast<std::uint8_t>(
+                                                          llavon::debug::LogInformation::context)
+                                         ? llavon::debug::LogInformation::context
+                                         : llavon::debug::LogInformation::general;
+            message_callback_(information, std::move(message));
         }
     } catch (...) {
     }

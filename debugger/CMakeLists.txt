@@ -35,11 +35,14 @@ target_include_directories(llavon-debug-client
 add_executable(llavon-ime-debugger WIN32
     src/debugger/debugger.manifest
     src/debugger/debugger.rc
+    src/debugger/debugger_resources.h
     src/debugger/debugger_window.cpp
     src/debugger/debugger_window.hpp
     src/debugger/main.cpp
     src/debugger/pipe_server.cpp
     src/debugger/pipe_server.hpp
+    src/debugger/ui/debugger_page.xaml
+    src/debugger/xaml_resource.hpp
     src/pipe_protocol.hpp
 )
 target_compile_features(llavon-ime-debugger PRIVATE cxx_std_23)
@@ -58,7 +61,10 @@ target_compile_definitions(llavon-ime-debugger PRIVATE
 )
 target_compile_options(llavon-ime-debugger PRIVATE /W4 /WX /utf-8 /permissive-)
 target_link_options(llavon-ime-debugger PRIVATE /MANIFEST:NO)
-target_include_directories(llavon-ime-debugger PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(llavon-ime-debugger PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
 target_link_libraries(llavon-ime-debugger PRIVATE
     Microsoft::CppWinRT
     WindowsApp

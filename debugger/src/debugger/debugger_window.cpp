@@ -1,4 +1,6 @@
 #include "debugger_window.hpp"
+#include "debugger_resources.h"
+#include "xaml_resource.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -8,17 +10,13 @@
 #include <utility>
 #include <vector>
 
-#include <winrt/Windows.UI.Text.h>
-#include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.h>
 
 namespace llavon::debugger {
 namespace {
 
-using namespace winrt::Windows::UI::Text;
 using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Controls;
-using namespace winrt::Windows::UI::Xaml::Media;
 
 constexpr wchar_t window_class_name[] = L"LlavonImeDebuggerWindow";
 constexpr UINT connection_message = WM_APP + 1;
@@ -26,13 +24,13 @@ constexpr UINT log_message = WM_APP + 2;
 constexpr std::size_t maximum_log_characters = 200'000;
 constexpr std::size_t latency_window_size = 120;
 
-TextBlock make_text(const wchar_t* text, double size, FontWeight weight = FontWeights::Normal()) {
-    TextBlock block;
-    block.Text(text);
-    block.FontFamily(FontFamily(L"Segoe UI Variable Text, Microsoft JhengHei UI"));
-    block.FontSize(size);
-    block.FontWeight(weight);
-    return block;
+template <typename Control>
+Control named(const FrameworkElement& root, const wchar_t* name) {
+    const auto control = root.FindName(name).try_as<Control>();
+    if (!control) {
+        throw winrt::hresult_error(E_FAIL, winrt::hstring(L"Missing XAML control: ") + name);
+    }
+    return control;
 }
 
 std::wstring utf8_to_wide(const std::string& text) {
@@ -76,7 +74,7 @@ bool DebuggerWindow::create(HINSTANCE instance) {
     if (!window_) return false;
     try {
         initialize_xaml();
-        build_page();
+        load_page(instance);
         start_server();
     } catch (...) {
         destroy();
@@ -130,7 +128,11 @@ LRESULT DebuggerWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
     }
     if (message == log_message) {
         std::unique_ptr<std::string> text(reinterpret_cast<std::string*>(lparam));
-        if (text) append_message(std::move(*text));
+        const auto information =
+            wparam == static_cast<WPARAM>(llavon::debug::LogInformation::context)
+                ? llavon::debug::LogInformation::context
+                : llavon::debug::LogInformation::general;
+        if (text) append_message(information, std::move(*text));
         return 0;
     }
     switch (message) {
@@ -172,39 +174,16 @@ void DebuggerWindow::initialize_xaml() {
     resize_island();
 }
 
-void DebuggerWindow::build_page() {
-    Grid shell;
-    shell.Padding(Thickness{24, 20, 24, 24});
-    RowDefinition header_row;
-    header_row.Height(GridLength{1, GridUnitType::Auto});
-    shell.RowDefinitions().Append(header_row);
-    RowDefinition log_row;
-    log_row.Height(GridLength{1, GridUnitType::Star});
-    shell.RowDefinitions().Append(log_row);
-
-    StackPanel header;
-    header.Spacing(6);
-    header.Margin(Thickness{0, 0, 0, 16});
-    header.Children().Append(make_text(L"End-to-end diagnostics", 22, FontWeights::SemiBold()));
-    connection_status_ = make_text(L"Waiting for producers...", 13);
-    e2e_latency_status_ = make_text(L"End-to-end: no samples", 16, FontWeights::SemiBold());
-    inference_latency_status_ = make_text(L"Inference: no samples", 13);
-    header.Children().Append(connection_status_);
-    header.Children().Append(e2e_latency_status_);
-    header.Children().Append(inference_latency_status_);
-    Grid::SetRow(header, 0);
-    shell.Children().Append(header);
-
-    log_output_ = TextBox();
-    log_output_.IsReadOnly(true);
-    log_output_.AcceptsReturn(true);
-    log_output_.TextWrapping(TextWrapping::NoWrap);
-    ScrollViewer::SetHorizontalScrollBarVisibility(log_output_, ScrollBarVisibility::Auto);
-    ScrollViewer::SetVerticalScrollBarVisibility(log_output_, ScrollBarVisibility::Auto);
-    log_output_.FontFamily(FontFamily(L"Cascadia Mono, Consolas"));
-    log_output_.FontSize(12);
-    Grid::SetRow(log_output_, 1);
-    shell.Children().Append(log_output_);
+void DebuggerWindow::load_page(const HINSTANCE instance) {
+    const auto shell = load_xaml_resource(instance, IDR_DEBUGGER_PAGE_XAML).as<Grid>();
+    debugger_tabs_ = named<Pivot>(shell, L"DebuggerTabs");
+    connection_status_ = named<TextBlock>(shell, L"ConnectionStatus");
+    e2e_latency_status_ = named<TextBlock>(shell, L"E2eLatencyStatus");
+    inference_latency_status_ = named<TextBlock>(shell, L"InferenceLatencyStatus");
+    log_output_ = named<TextBox>(shell, L"LogOutput");
+    context_status_ = named<TextBlock>(shell, L"ContextStatus");
+    captured_context_ = named<TextBox>(shell, L"CapturedContext");
+    token_round_trip_ = named<TextBox>(shell, L"TokenRoundTrip");
     xaml_source_.Content(shell);
 }
 
@@ -212,9 +191,12 @@ void DebuggerWindow::start_server() {
     const HWND target = window_;
     server_ = std::make_unique<PipeServer>(
         [target](int delta) { PostMessageW(target, connection_message, 0, delta); },
-        [target](std::string message) {
+        [target](llavon::debug::LogInformation information, std::string message) {
             auto text = std::make_unique<std::string>(std::move(message));
-            if (PostMessageW(target, log_message, 0, reinterpret_cast<LPARAM>(text.get()))) text.release();
+            if (PostMessageW(target, log_message, static_cast<WPARAM>(information),
+                             reinterpret_cast<LPARAM>(text.get()))) {
+                text.release();
+            }
         });
 }
 
@@ -228,7 +210,13 @@ void DebuggerWindow::update_connection_count(int delta) {
     }
 }
 
-void DebuggerWindow::append_message(std::string message) {
+void DebuggerWindow::append_message(llavon::debug::LogInformation information,
+                                    std::string message) {
+    if (information == llavon::debug::LogInformation::context) {
+        update_context(message);
+        return;
+    }
+
     update_latency(message);
     log_text_ += utf8_to_wide(message);
     log_text_ += L"\r\n";
@@ -240,6 +228,44 @@ void DebuggerWindow::append_message(std::string message) {
     }
     log_output_.Text(log_text_);
     log_output_.Select(static_cast<std::int32_t>(log_text_.size()), 0);
+}
+
+bool DebuggerWindow::update_context(const std::string& message) {
+    const auto source_end = message.find("] ");
+    if (message.empty() || message.front() != '[' || source_end == std::string::npos) {
+        context_status_.Text(L"Invalid context record: missing source");
+        return false;
+    }
+
+    const std::string_view payload(message.data() + source_end + 2,
+                                   message.size() - source_end - 2);
+    const auto length_end = payload.find('\n');
+    if (length_end == std::string_view::npos) {
+        context_status_.Text(L"Invalid context record: missing length");
+        return false;
+    }
+
+    std::size_t captured_size = 0;
+    const char* length_begin = payload.data();
+    const char* length_finish = payload.data() + length_end;
+    const auto parsed = std::from_chars(length_begin, length_finish, captured_size);
+    const std::string_view text = payload.substr(length_end + 1);
+    if (parsed.ec != std::errc{} || parsed.ptr != length_finish ||
+        captured_size > text.size()) {
+        context_status_.Text(L"Invalid context record: invalid length");
+        return false;
+    }
+
+    const std::string_view captured = text.substr(0, captured_size);
+    const std::string_view round_trip = text.substr(captured_size);
+    captured_context_.Text(utf8_to_wide(std::string(captured)));
+    token_round_trip_.Text(utf8_to_wide(std::string(round_trip)));
+
+    std::wstring status = utf8_to_wide(message.substr(1, source_end - 1));
+    status += captured == round_trip ? L" · Round-trip matches"
+                                     : L" · Round-trip differs";
+    context_status_.Text(status);
+    return true;
 }
 
 void DebuggerWindow::update_latency(const std::string& message) {
@@ -281,6 +307,14 @@ void DebuggerWindow::resize_island() const noexcept {
 }
 
 void DebuggerWindow::close_xaml() noexcept {
+    debugger_tabs_ = nullptr;
+    connection_status_ = nullptr;
+    e2e_latency_status_ = nullptr;
+    inference_latency_status_ = nullptr;
+    log_output_ = nullptr;
+    context_status_ = nullptr;
+    captured_context_ = nullptr;
+    token_round_trip_ = nullptr;
     island_native_ = nullptr;
     island_window_ = nullptr;
     try {

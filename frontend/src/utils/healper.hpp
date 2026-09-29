@@ -44,7 +44,8 @@ inline void operator|(HRESULT hr, const win::check& checker) {
 inline void log_com_exception(llavon::debug::Logger& logger, std::string detail,
                               std::stacktrace trace) noexcept {
     try {
-        logger.log([detail = std::move(detail), trace = std::move(trace)] {
+        logger.log(llavon::debug::LogInformation::general,
+                   [detail = std::move(detail), trace = std::move(trace)] {
             std::string message = "[ERROR] " + detail;
             for (std::size_t i = 1; i < trace.size(); ++i) {
                 const auto& entry = trace[i];

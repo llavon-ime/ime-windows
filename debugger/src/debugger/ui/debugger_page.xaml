@@ -1,0 +1,104 @@
+<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+      TabFocusNavigation="Cycle">
+  <!-- Add future debugger pages as sibling PivotItem elements. -->
+  <Pivot x:Name="DebuggerTabs">
+    <PivotItem Header="Diagnostics">
+      <Grid Padding="24,12,24,24">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0"
+                    Spacing="6"
+                    Margin="0,0,0,16">
+          <TextBlock Text="End-to-end diagnostics"
+                     FontFamily="Segoe UI Variable Text, Microsoft JhengHei UI"
+                     FontSize="22"
+                     FontWeight="SemiBold"/>
+          <TextBlock x:Name="ConnectionStatus"
+                     Text="Waiting for producers..."
+                     FontFamily="Segoe UI Variable Text, Microsoft JhengHei UI"
+                     FontSize="13"/>
+          <TextBlock x:Name="E2eLatencyStatus"
+                     Text="End-to-end: no samples"
+                     FontFamily="Segoe UI Variable Text, Microsoft JhengHei UI"
+                     FontSize="16"
+                     FontWeight="SemiBold"/>
+          <TextBlock x:Name="InferenceLatencyStatus"
+                     Text="Inference: no samples"
+                     FontFamily="Segoe UI Variable Text, Microsoft JhengHei UI"
+                     FontSize="13"/>
+        </StackPanel>
+
+        <TextBox x:Name="LogOutput"
+                 Grid.Row="1"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="NoWrap"
+                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 FontFamily="Cascadia Mono, Consolas"
+                 FontSize="12"/>
+      </Grid>
+    </PivotItem>
+
+    <PivotItem Header="Context">
+      <Grid Padding="24,12,24,24">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0"
+                    Spacing="6"
+                    Margin="0,0,0,16">
+          <TextBlock Text="Context tokenization"
+                     FontFamily="Segoe UI Variable Text, Microsoft JhengHei UI"
+                     FontSize="22"
+                     FontWeight="SemiBold"/>
+          <TextBlock x:Name="ContextStatus"
+                     Text="Waiting for a prediction request..."
+                     FontFamily="Segoe UI Variable Text, Microsoft JhengHei UI"
+                     FontSize="13"/>
+        </StackPanel>
+
+        <TextBlock Grid.Row="1"
+                   Text="Captured preceding text"
+                   FontSize="14"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,6"/>
+        <TextBox x:Name="CapturedContext"
+                 Grid.Row="2"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 FontFamily="Cascadia Mono, Consolas"
+                 FontSize="13"
+                 Margin="0,0,0,16"/>
+
+        <TextBlock Grid.Row="3"
+                   Text="Tokenize → detokenize"
+                   FontSize="14"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,6"/>
+        <TextBox x:Name="TokenRoundTrip"
+                 Grid.Row="4"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="Wrap"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 FontFamily="Cascadia Mono, Consolas"
+                 FontSize="13"/>
+      </Grid>
+    </PivotItem>
+  </Pivot>
+</Grid>
