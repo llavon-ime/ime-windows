@@ -2,8 +2,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
       TabFocusNavigation="Cycle">
-  <ScrollViewer x:Name="SettingsScroll"
-      HorizontalScrollBarVisibility="Disabled"
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled"
       VerticalScrollBarVisibility="Auto">
     <StackPanel MaxWidth="720"
         HorizontalAlignment="Center"
@@ -251,11 +250,13 @@
             Spacing="12">
           <Button x:Name="UpdateButton"
               Content="檢查更新"
+              AllowFocusOnInteraction="False"
               MinWidth="112"
               MinHeight="32"
               FontSize="14"/>
           <Button x:Name="UpdateInstall"
               Content="立即更新"
+              AllowFocusOnInteraction="False"
               Visibility="Collapsed"
               MinHeight="32"
               FontSize="14"

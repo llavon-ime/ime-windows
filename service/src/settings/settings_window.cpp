@@ -687,7 +687,6 @@ void SettingsWindow::initialize_xaml_island() {
 
 void SettingsWindow::build_page() {
     shell_ = load_xaml_resource(IDR_SETTINGS_PAGE_XAML).as<Grid>();
-    settings_scroll_ = named<ScrollViewer>(shell_, L"SettingsScroll");
 
     model_path_ = named<TextBox>(shell_, L"ModelPath");
     model_path_.Text(to_hstring(configuration_.model_path));
@@ -2893,24 +2892,12 @@ void SettingsWindow::update_inference_save_state() {
     }
 }
 
-void SettingsWindow::preserve_settings_scroll_position() {
-    if (!settings_scroll_) return;
-
-    const auto scroll = settings_scroll_;
-    const double vertical_offset = scroll.VerticalOffset();
-    scroll.Focus(FocusState::Programmatic);
-    scroll.DispatcherQueue().TryEnqueue([scroll, vertical_offset] {
-        scroll.ChangeView(nullptr, vertical_offset, nullptr, true);
-    });
-}
-
 void SettingsWindow::begin_update_check() {
     if (!update_button_ || !update_status_ || !update_target_ ||
         update_installer_.installing()) {
         return;
     }
 
-    preserve_settings_scroll_position();
     update_button_.IsEnabled(false);
     update_status_.Text(L"正在檢查 latest 建置…");
     set_update_status_tone(UpdateStatusTone::secondary);
@@ -3007,7 +2994,6 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
 void SettingsWindow::begin_update_install() {
     if (!available_setup_ || !update_target_) return;
 
-    preserve_settings_scroll_position();
     update_button_.IsEnabled(false);
     update_install_.IsEnabled(false);
     update_status_.Text(L"正在下載更新…");
@@ -3166,7 +3152,6 @@ void SettingsWindow::close_xaml() noexcept {
         }
     }
     island_window_ = nullptr;
-    settings_scroll_ = nullptr;
     model_path_ = nullptr;
     model_history_button_ = nullptr;
     browse_model_button_ = nullptr;
