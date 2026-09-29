@@ -14,7 +14,7 @@
 - **完全本機運作**：模型與推論引擎皆在本機執行，輸入內容無須傳送至雲端。
 - **熟悉的操作方式**：使用標準注音鍵盤配置，選字操作力求與微軟注音相似。
 - **可自訂常用名字**：可在設定中加入名字及其注音，改善人名輸入結果。
-- **推論裝置設定**：可查看目前使用的推論裝置，並依電腦環境選擇自動、CPU 或可用的 GPU 後端。
+- **推論裝置設定**：可查看目前使用的推論裝置，並依電腦環境選擇自動、CPU 或可用的 GPU 後端；AMD XDNA 2 機器另提供[實驗性 NPU 後端](service/README-RyzenAI.md)。
 - **內建更新檢查**：可從設定視窗檢查是否有新的測試版本。
 - **重大更新通知**：開發者標記重大版本時，Windows 會在每次啟動後提醒尚未更新的使用者；安裝更新仍由你決定。
 
@@ -110,6 +110,14 @@ cmake --preset windows
 cmake --build --preset windows --parallel
 ```
 
+建立含 AMD NPU 支援的安裝包前，先匯出隨 MSI 部署的 ONNX 模型：
+
+```powershell
+python -m pip install onnxruntime-genai==0.15.2 torch transformers onnx onnx-ir
+python ime-core/tools/export_onnx.py `
+  --output build/windows/models/llavon-ime-llama-250m-Q4_K_M-onnx
+```
+
 產生 MSI 安裝檔：
 
 ```powershell
@@ -125,7 +133,11 @@ build/windows/llavon-ime-1.0.0-setup.exe
 
 安裝器與 MSI 的內部版號固定為 `1.0.0`；CalVer 只用於 GitHub 發布 tag 與其 `latest.json` 發布資訊。從舊的 CalVer 安裝器轉換時，須先從 Windows「已安裝的應用程式」解除安裝舊的安裝套件一次（選顯示 CalVer 的項目，不是舊版另外顯示的 MSI）；否則 WiX 會把 `1.0.0` 視為降版。新安裝套件只會顯示一個解除安裝項目。本機之後只需執行 `cmake --build build/windows --config Release --target llavon-ime-setup --parallel`，不必為版號重新 configure。
 
-建置 `*-setup.exe` 時會記錄 Hugging Face 模型 revision、大小及 SHA-256，模型檔不會打包進安裝檔。安裝時會下載至 `%ProgramData%\Llavon IME\models`；同一模型更新時會驗證既有檔案並略過下載。LoRA Trainer 可在訓練視窗選擇 CPU、CUDA 或 ROCm 版本下載。首次打包仍需從網路取得 vcpkg 相依套件及 WiX 工具。
+建置 `*-setup.exe` 時會記錄 GGUF 的 Hugging Face revision、大小及 SHA-256。GGUF
+會在安裝時下載至 `%ProgramData%\Llavon IME\models`；同一版本會驗證既有檔案並
+略過下載。約 188 MiB 的混合 INT4/INT8 ONNX 模型會直接打包進 MSI。LoRA Trainer
+可在訓練視窗選擇 CPU、CUDA 或 ROCm 版本下載。首次打包仍需從網路取得 vcpkg
+相依套件及 WiX 工具。
 
 ## 授權
 

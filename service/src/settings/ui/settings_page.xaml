@@ -2,7 +2,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
       TabFocusNavigation="Cycle">
-  <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+  <ScrollViewer x:Name="SettingsContent" HorizontalScrollBarVisibility="Disabled"
       VerticalScrollBarVisibility="Auto">
     <StackPanel MaxWidth="720"
         HorizontalAlignment="Center"
@@ -98,7 +98,7 @@
             HorizontalAlignment="Stretch">
           <Button x:Name="SaveInferenceButton"
               Style="{StaticResource AccentButtonStyle}"
-              Content="儲存裝置設定"
+              Content="套用裝置"
               MinWidth="132"
               MinHeight="32"
               FontSize="14"
@@ -268,4 +268,41 @@
       </StackPanel>
     </StackPanel>
   </ScrollViewer>
+  <Grid x:Name="InferenceApplyOverlay"
+      Background="#80000000"
+      Visibility="Collapsed"
+      TabFocusNavigation="Cycle">
+    <Border MaxWidth="460"
+        Margin="24"
+        Padding="28"
+        HorizontalAlignment="Center"
+        VerticalAlignment="Center"
+        Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+        BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"
+        BorderThickness="1"
+        CornerRadius="12">
+      <StackPanel Spacing="16">
+        <TextBlock x:Name="InferenceApplyTitle"
+            FontSize="22"
+            FontWeight="SemiBold"
+            TextWrapping="Wrap"
+            AutomationProperties.LiveSetting="Polite"/>
+        <ProgressBar x:Name="InferenceApplyProgress"
+            IsIndeterminate="False"
+            IsTabStop="True"
+            AutomationProperties.Name="正在編譯與套用模型"/>
+        <TextBlock x:Name="InferenceApplyDetail"
+            FontSize="14"
+            TextWrapping="Wrap"/>
+        <TextBlock x:Name="InferenceApplyElapsed"
+            FontSize="12"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        <Button x:Name="InferenceApplyClose"
+            Content="關閉"
+            HorizontalAlignment="Right"
+            MinWidth="88"
+            Visibility="Collapsed"/>
+      </StackPanel>
+    </Border>
+  </Grid>
 </Grid>

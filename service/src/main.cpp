@@ -12,10 +12,14 @@
 #include "service/user_settings.hpp"
 #include "service/settings_ui_loader.hpp"
 #include "service/tray_icon.hpp"
+#ifdef LLAVON_IME_RYZENAI
+#include "service/ryzen_ai_settings.hpp"
+#endif
 
 #include <algorithm>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <iostream>
 #include <fstream>
 #include <memory>
@@ -27,6 +31,17 @@
 #include <vector>
 
 namespace {
+
+void configure_accelerator(llavon::ime::core::CoreConfig& config) {
+    config.accelerator.reset();
+    if (config.inference_device.backend != llavon::ime::core::InferenceBackend::ryzen_ai) return;
+#ifdef LLAVON_IME_RYZENAI
+    config.accelerator = llavon::service::ryzen_ai::create_accelerator(
+        config.model_path, config.logger);
+#else
+    throw std::runtime_error("This build does not include the AMD NPU backend");
+#endif
+}
 
 constexpr const wchar_t* kModelFilename = L"llavon-ime-llama-250m-Q4_K_M.gguf";
 constexpr const wchar_t* kModelPathEnv = L"LLAVON_IME_MODEL_PATH";
@@ -217,7 +232,8 @@ int main(int argc, char* argv[]) {
         std::clog << "[SRV] IME Windows Service starting\n";
 
         auto config = parse_core_config(service_argc, argv);
-        config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
+        const auto logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
+        config.logger = logger;
         const auto user_settings = llavon::service::load_settings();
         if (service_argc == 1 && !user_settings.model_path.empty()) {
             config.model_path = resolve_configured_model_path(
@@ -229,10 +245,27 @@ int main(int argc, char* argv[]) {
         try {
             inference_devices = llavon::ime::core::enumerate_inference_devices();
         } catch (const std::exception& error) {
-            std::clog << "[WARN] unable to enumerate inference devices: " << error.what() << '\n';
+            logger->log(std::format("[WARN] unable to enumerate inference devices: {}", error.what()));
         }
-        auto core = std::make_shared<llavon::ime::core::Core>(config);
-        const auto active_inference = core->inference_runtime_info();
+#ifdef LLAVON_IME_RYZENAI
+        if (auto device = llavon::service::ryzen_ai::available_device()) inference_devices.push_back(std::move(*device));
+#endif
+        std::shared_ptr<llavon::ime::core::Core> core;
+        bool npu_startup_failed = false;
+        try {
+            configure_accelerator(config);
+            core = std::make_shared<llavon::ime::core::Core>(config);
+        } catch (const std::exception& error) {
+            if (config.inference_device.backend != llavon::ime::core::InferenceBackend::ryzen_ai) throw;
+            logger->log(std::format("[ERR] AMD NPU startup failed: {}; "
+                                   "starting CPU so the device setting can be repaired", error.what()));
+            npu_startup_failed = true;
+            config.inference_device = {llavon::ime::core::InferenceBackend::cpu, {}};
+            config.accelerator.reset();
+            core = std::make_shared<llavon::ime::core::Core>(config);
+        }
+        auto active_inference = core->inference_runtime_info();
+        active_inference.fell_back_to_cpu = active_inference.fell_back_to_cpu || npu_startup_failed;
 
         llavon::service::CandidateUiLoader candidate_ui;
         auto custom_names =
@@ -245,6 +278,8 @@ int main(int argc, char* argv[]) {
         auto custom_names_update_mutex = std::make_shared<std::mutex>();
         llavon::service::SettingsUiLoader settings_ui;
         auto active_config = std::make_shared<llavon::ime::core::CoreConfig>(config);
+        config.accelerator.reset(); // active_config and the loaded core own its lifetime
+        auto core_config_mutex = std::make_shared<std::mutex>();
         std::u16string displayed_model_path;
         if (service_argc != 1) {
             displayed_model_path = config.model_path.u16string();
@@ -257,50 +292,68 @@ int main(int argc, char* argv[]) {
         }
         settings_ui.configure(
             inference_devices, user_settings.inference, active_inference,
-            [&server, active_config](
+            [&server, &settings_ui, active_config, core_config_mutex, logger](
                 const llavon::ime::core::InferenceDeviceSelection& selection) {
+                logger->log(std::format("[SRV] applying inference settings: backend={} device={}",
+                    static_cast<int>(selection.backend), selection.device_id));
                 try {
+                    std::lock_guard lock(*core_config_mutex);
                     auto reload_config = *active_config;
                     reload_config.inference_device = selection;
-                    (void)server.replace_core(std::move(reload_config));
-                    if (!llavon::service::save_inference_settings(selection)) return false;
-                    active_config->inference_device = selection;
+                    configure_accelerator(reload_config);
+                    const auto runtime = server.replace_core(reload_config);
+                    *active_config = std::move(reload_config);
+                    settings_ui.notify_active_inference(runtime);
+                    if (!llavon::service::save_inference_settings(selection)) {
+                        logger->log("[ERR] inference core reloaded, but could not save settings.json");
+                        return false;
+                    }
+                    logger->log("[SRV] inference settings applied and saved");
                     return true;
                 } catch (const std::exception& error) {
-                    std::cerr << "[ERR] unable to reload inference core: "
-                              << error.what() << '\n';
+                    logger->log(std::format("[ERR] unable to reload inference core: {}", error.what()));
                     return false;
                 }
             },
             std::move(displayed_model_path),
             installed_base_model_path().u16string(),
-            [&server, active_config, &lora_training](
+            [&server, &settings_ui, active_config, core_config_mutex, &lora_training, logger](
                 const std::filesystem::path& model_path) {
+                logger->log("[SRV] applying model setting");
                 try {
+                    std::lock_guard lock(*core_config_mutex);
                     const auto resolved_model_path =
                         resolve_configured_model_path(model_path);
                     std::error_code error;
                     if (!std::filesystem::is_regular_file(resolved_model_path, error) &&
                         !lora_training.ensure_model_exported(resolved_model_path)) {
+                        logger->log("[ERR] selected model is unavailable and could not be exported");
                         return false;
                     }
 
                     auto reload_config = *active_config;
                     reload_config.model_path = resolved_model_path;
-                    (void)server.replace_core(std::move(reload_config));
+                    configure_accelerator(reload_config);
+                    const auto runtime = server.replace_core(reload_config);
+                    *active_config = std::move(reload_config);
+                    settings_ui.notify_active_inference(runtime);
                     const auto model_path_utf8 = utf8::utf16to8(model_path.u16string());
-                    if (!llavon::service::save_model_path(model_path_utf8)) return false;
+                    if (!llavon::service::save_model_path(model_path_utf8)) {
+                        logger->log("[ERR] model reloaded, but could not save its path in settings.json");
+                        return false;
+                    }
                     active_config->model_path = resolved_model_path;
                     lora_training.on_model_applied(resolved_model_path);
+                    logger->log("[SRV] model setting applied and saved");
                     return true;
                 } catch (const std::exception& error) {
-                    std::cerr << "[ERR] unable to reload model: "
-                              << error.what() << '\n';
+                    logger->log(std::format("[ERR] unable to reload model: {}", error.what()));
                     return false;
                 }
             },
-            [active_config, &lora_training](
+            [active_config, core_config_mutex, &lora_training](
                 const std::filesystem::path& model_path, std::int32_t action) {
+                std::lock_guard lock(*core_config_mutex);
                 const auto resolved_model_path =
                     resolve_configured_model_path(model_path);
                 if (action == LLAVON_MODEL_PREPARE)

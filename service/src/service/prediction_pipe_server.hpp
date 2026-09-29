@@ -278,9 +278,8 @@ public:
     }
 
     llavon::ime::core::InferenceRuntimeInfo replace_core(
-        llavon::ime::core::CoreConfig config) {
-        auto replacement =
-            std::make_shared<llavon::ime::core::Core>(std::move(config));
+        std::shared_ptr<llavon::ime::core::Core> replacement) {
+        if (!replacement) throw std::invalid_argument("replacement core is required");
         sessions_.clear();
         idle_.clear();
         recency_.clear();
@@ -628,10 +627,13 @@ public:
         auto completion =
             std::make_shared<std::promise<llavon::ime::core::InferenceRuntimeInfo>>();
         auto result = completion->get_future();
+        // NPU compilation can take minutes. Prepare it outside the prediction
+        // IO thread so the current model remains usable until the swap.
+        auto replacement = std::make_shared<llavon::ime::core::Core>(std::move(config));
         asio::post(io_ctx_,
-                   [sessions = sessions_, config = std::move(config), completion]() mutable {
+                   [sessions = sessions_, replacement = std::move(replacement), completion]() mutable {
                        try {
-                           completion->set_value(sessions->replace_core(std::move(config)));
+                           completion->set_value(sessions->replace_core(std::move(replacement)));
                        } catch (...) {
                            completion->set_exception(std::current_exception());
                        }

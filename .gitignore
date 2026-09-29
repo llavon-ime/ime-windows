@@ -3,3 +3,19 @@
 /diagnostics/
 /ime-windows-settings/
 /CMakeUserPresets.json
+/tmp/
+/output/
+/.onnx-export-cache/
+
+# Local IDE and CMake state
+.vs/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Local dependency installation and NPU validation output
+vcpkg_installed/
+npu-cache/
+npu-report.json

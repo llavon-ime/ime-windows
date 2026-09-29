@@ -48,6 +48,8 @@ const char* backend_name(InferenceBackend backend) {
             return "cuda";
         case InferenceBackend::vulkan:
             return "vulkan";
+        case InferenceBackend::ryzen_ai:
+            return "ryzen_ai";
         default:
             return "auto";
     }
@@ -58,6 +60,7 @@ std::optional<InferenceBackend> parse_backend(const std::string& value) {
     if (value == "cpu") return InferenceBackend::cpu;
     if (value == "cuda") return InferenceBackend::cuda;
     if (value == "vulkan") return InferenceBackend::vulkan;
+    if (value == "ryzen_ai") return InferenceBackend::ryzen_ai;
     return std::nullopt;
 }
 
@@ -117,7 +120,8 @@ std::optional<UserSettings> decode(std::string_view json) {
 std::string encode(const UserSettings& settings) {
     const auto& selection = settings.inference;
     const bool device_is_relevant = selection.backend == InferenceBackend::cuda ||
-                                    selection.backend == InferenceBackend::vulkan;
+                                    selection.backend == InferenceBackend::vulkan ||
+                                    selection.backend == InferenceBackend::ryzen_ai;
     std::vector<CustomNameDocument> custom_names;
     custom_names.reserve(settings.custom_names.size());
     for (const auto& entry : settings.custom_names) {

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -30,6 +31,7 @@ constexpr UINT hide_message = WM_APP + 2;
 constexpr UINT stop_message = WM_APP + 3;
 constexpr UINT show_context_menu_message = WM_APP + 4;
 constexpr UINT pending_count_message = WM_APP + 5;
+constexpr UINT active_inference_message = WM_APP + 6;
 constexpr DWORD shutdown_timeout_ms = 10000;
 
 void report_settings_error(std::wstring_view message) noexcept {
@@ -104,6 +106,19 @@ public:
         pending_count_.store(count, std::memory_order_release);
         has_pending_count_.store(true, std::memory_order_release);
         post(settings_thread_, pending_count_message);
+    }
+
+    void set_active_inference(const llavon_settings_inference_device& device,
+                              bool gpu_offload, bool fell_back_to_cpu) {
+        {
+            std::lock_guard lock(active_inference_mutex_);
+            active_inference_ = ActiveInference{
+                .device = {device.backend, device.device_type,
+                    device.device_id ? device.device_id : u"", device.name ? device.name : u"",
+                    device.description ? device.description : u"", device.memory_total},
+                .gpu_offload = gpu_offload, .fell_back_to_cpu = fell_back_to_cpu};
+        }
+        post(settings_thread_, active_inference_message);
     }
 
     int32_t configure(const llavon_settings_inference_device* devices,
@@ -472,6 +487,10 @@ private:
                 }
                 return 0;
             }
+            if (message == active_inference_message) {
+                self->apply_active_inference();
+                return 0;
+            }
             if (message == stop_message) {
                 if (self->settings_menu_) self->settings_menu_->destroy();
                 if (self->settings_window_) {
@@ -502,7 +521,20 @@ private:
             settings_window_->set_pending_count(
                 pending_count_.load(std::memory_order_acquire));
         }
+        apply_active_inference();
         settings_window_->show();
+    }
+
+    void apply_active_inference() {
+        std::optional<ActiveInference> snapshot;
+        {
+            std::lock_guard lock(active_inference_mutex_);
+            snapshot = active_inference_;
+        }
+        if (snapshot && settings_window_) {
+            settings_window_->set_active_inference(std::move(snapshot->device),
+                snapshot->gpu_offload, snapshot->fell_back_to_cpu);
+        }
     }
 
     static void post(const UiThreadState& state, UINT message) noexcept {
@@ -521,6 +553,13 @@ private:
     }
 
     mutable std::mutex mutex_;
+    struct ActiveInference {
+        InferenceDeviceOption device;
+        bool gpu_offload;
+        bool fell_back_to_cpu;
+    };
+    std::mutex active_inference_mutex_;
+    std::optional<ActiveInference> active_inference_;
     UiThreadState settings_thread_;
     SettingsWindow* settings_window_ = nullptr;
     SettingsMenuWindow* settings_menu_ = nullptr;
@@ -537,6 +576,16 @@ Runtime& runtime() {
 
 }  // namespace
 }  // namespace llavon::settings
+
+extern "C" void llavon_settings_ui_set_active_inference(
+    const llavon_settings_inference_device* device, int32_t gpu_offload, int32_t fell_back_to_cpu) {
+    if (!device) return;
+    try {
+        llavon::settings::runtime().set_active_inference(*device, gpu_offload != 0, fell_back_to_cpu != 0);
+    } catch (...) {
+        OutputDebugStringW(L"[settings-ui] unable to update the active inference device\n");
+    }
+}
 
 extern "C" int32_t llavon_settings_ui_configure_v5(
     const struct llavon_settings_inference_device* devices,

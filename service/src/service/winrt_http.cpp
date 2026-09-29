@@ -15,7 +15,12 @@ namespace {
 class WinrtApartment final {
 public:
     WinrtApartment() { winrt::init_apartment(winrt::apartment_type::multi_threaded); }
-    ~WinrtApartment() { winrt::uninit_apartment(); }
+    ~WinrtApartment() {
+        // The last worker can tear down COM and unload the cached factories.
+        // Release them first so a later download can initialize COM again.
+        winrt::clear_factory_cache();
+        winrt::uninit_apartment();
+    }
     WinrtApartment(const WinrtApartment&) = delete;
     WinrtApartment& operator=(const WinrtApartment&) = delete;
 };

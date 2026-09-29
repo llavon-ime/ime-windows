@@ -25,12 +25,14 @@ enum llavon_settings_inference_backend {
     LLAVON_SETTINGS_BACKEND_CPU = 1,
     LLAVON_SETTINGS_BACKEND_CUDA = 2,
     LLAVON_SETTINGS_BACKEND_VULKAN = 3,
+    LLAVON_SETTINGS_BACKEND_RYZENAI = 4,
 };
 
 enum llavon_settings_inference_device_type {
     LLAVON_SETTINGS_DEVICE_CPU = 0,
     LLAVON_SETTINGS_DEVICE_GPU = 1,
     LLAVON_SETTINGS_DEVICE_INTEGRATED_GPU = 2,
+    LLAVON_SETTINGS_DEVICE_NPU = 3,
 };
 
 struct llavon_settings_inference_device {
@@ -264,6 +266,11 @@ LLAVON_SETTINGS_UI_API void llavon_settings_ui_show(void);
 LLAVON_SETTINGS_UI_API void llavon_settings_ui_hide(void);
 // May be called from the service writer thread; queues the count for the UI.
 LLAVON_SETTINGS_UI_API void llavon_settings_ui_set_pending_count(size_t count);
+
+// Copies the runtime snapshot and queues the active device display update.
+LLAVON_SETTINGS_UI_API void llavon_settings_ui_set_active_inference(
+    const struct llavon_settings_inference_device* device,
+    int32_t gpu_offload, int32_t fell_back_to_cpu);
 
 // Shows the input-mode context menu at a screen-coordinate anchor.
 LLAVON_SETTINGS_UI_API void llavon_settings_ui_show_context_menu(

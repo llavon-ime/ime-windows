@@ -26,6 +26,13 @@
     "llama-vulkan"
   ],
   "features": {
+    "ryzen-ai": {
+      "description": "Build ime-core with the AMD Ryzen AI backend.",
+      "dependencies": [
+        "windows-ml",
+        "onnxruntime-genai-winml"
+      ]
+    },
     "llama-cuda": {
       "description": "Build llama.cpp with CUDA support for GPU offload.",
       "dependencies": [

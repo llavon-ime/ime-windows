@@ -5,11 +5,16 @@ cmake_minimum_required(VERSION 3.31)
 set(LLAVON_IME_VERSION "1.0.0" CACHE STRING "Fixed installer version" FORCE)
 set(LLAVON_IME_MSI_VERSION "1.0.0" CACHE STRING "Fixed MSI product version" FORCE)
 option(LLAVON_IME_ENABLE_CUDA "Build ime-core with the CUDA backend" OFF)
+option(LLAVON_IME_ENABLE_RYZENAI "Build the experimental AMD NPU inference backend" ON)
 
 # vcpkg's toolchain is loaded by project(). Select optional manifest features
 # before that happens so one configure owns the complete dependency graph.
 if(LLAVON_IME_ENABLE_CUDA)
     list(APPEND VCPKG_MANIFEST_FEATURES "llama-cuda")
+    list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
+endif()
+if(LLAVON_IME_ENABLE_RYZENAI)
+    list(APPEND VCPKG_MANIFEST_FEATURES "ryzen-ai")
     list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
 endif()
 
@@ -102,6 +107,12 @@ set(LLAVON_IME_MODEL_REVISION
 set(LLAVON_IME_MODEL_FILENAME "llavon-ime-llama-250m-Q4_K_M.gguf")
 set(LLAVON_IME_MODEL_SHA256 "" CACHE STRING "Pinned GGUF SHA-256 for the web setup")
 set(LLAVON_IME_MODEL_SIZE "" CACHE STRING "Pinned GGUF size for the web setup")
+set(LLAVON_IME_ONNX_MODEL_NAME "llavon-ime-llama-250m-Q4_K_M-onnx")
+set(LLAVON_IME_ONNX_MODEL_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/models/${LLAVON_IME_ONNX_MODEL_NAME}"
+    CACHE PATH
+    "Exported ONNX Runtime GenAI model bundled for AMD NPU inference"
+)
 
 set(LLAVON_IME_WIX_VERSION "7.0.0" CACHE STRING "WiX .NET tool version used by CPack")
 set(LLAVON_IME_WIX_UI_EXTENSION_VERSION "7.0.0" CACHE STRING "WiX UI extension version used by CPack")
@@ -163,7 +174,16 @@ if(NOT VCPKG_TARGET_TRIPLET OR NOT VCPKG_INSTALLED_DIR)
     message(FATAL_ERROR "Configure with the repository's vcpkg toolchain")
 endif()
 
+set(IME_CORE_ENABLE_RYZENAI ${LLAVON_IME_ENABLE_RYZENAI})
 add_subdirectory(ime-core EXCLUDE_FROM_ALL)
+if(LLAVON_IME_ENABLE_RYZENAI)
+    install(FILES service/README-RyzenAI.md DESTINATION . RENAME AMD-NPU.md COMPONENT Runtime)
+    install(FILES ime-core/docs/ryzen-ai.md DESTINATION docs RENAME ryzen-ai-core.md COMPONENT Runtime)
+    install(DIRECTORY "${LLAVON_IME_ONNX_MODEL_DIR}/"
+        DESTINATION "models/${LLAVON_IME_ONNX_MODEL_NAME}"
+        COMPONENT Runtime
+    )
+endif()
 add_subdirectory(debugger)
 add_subdirectory(service)
 add_subdirectory(frontend)
@@ -239,7 +259,14 @@ add_custom_target(llavon-ime-package-inputs
         llavon-ime-vcpkg-licenses
         llavon-ime-wix
 )
-
+if(LLAVON_IME_ENABLE_RYZENAI)
+    add_custom_command(TARGET llavon-ime-package-inputs PRE_BUILD
+        COMMAND "${CMAKE_COMMAND}"
+            "-DLLAVON_IME_ONNX_MODEL_DIR=${LLAVON_IME_ONNX_MODEL_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ValidateOnnxModel.cmake"
+        VERBATIM
+    )
+endif()
 add_custom_target(llavon-ime-msi
     COMMAND
         "${CMAKE_COMMAND}" -E env

@@ -59,6 +59,8 @@ std::int32_t backend_value(llavon::ime::core::InferenceBackend backend) {
             return LLAVON_SETTINGS_BACKEND_CUDA;
         case InferenceBackend::vulkan:
             return LLAVON_SETTINGS_BACKEND_VULKAN;
+        case InferenceBackend::ryzen_ai:
+            return LLAVON_SETTINGS_BACKEND_RYZENAI;
         default:
             return LLAVON_SETTINGS_BACKEND_AUTO;
     }
@@ -71,6 +73,8 @@ std::int32_t device_type_value(llavon::ime::core::InferenceDeviceType type) {
             return LLAVON_SETTINGS_DEVICE_GPU;
         case InferenceDeviceType::integrated_gpu:
             return LLAVON_SETTINGS_DEVICE_INTEGRATED_GPU;
+        case InferenceDeviceType::npu:
+            return LLAVON_SETTINGS_DEVICE_NPU;
         case InferenceDeviceType::cpu:
         default:
             return LLAVON_SETTINGS_DEVICE_CPU;
@@ -86,6 +90,8 @@ llavon::ime::core::InferenceBackend core_backend(std::int32_t backend) {
             return InferenceBackend::cuda;
         case LLAVON_SETTINGS_BACKEND_VULKAN:
             return InferenceBackend::vulkan;
+        case LLAVON_SETTINGS_BACKEND_RYZENAI:
+            return InferenceBackend::ryzen_ai;
         case LLAVON_SETTINGS_BACKEND_AUTO:
         default:
             return InferenceBackend::automatic;
@@ -122,7 +128,8 @@ void SettingsUiLoader::configure(
     devices_.reserve(devices.size());
     for (const auto& device : devices) {
         if (device.backend != llavon::ime::core::InferenceBackend::cuda &&
-            device.backend != llavon::ime::core::InferenceBackend::vulkan) {
+            device.backend != llavon::ime::core::InferenceBackend::vulkan &&
+            device.backend != llavon::ime::core::InferenceBackend::ryzen_ai) {
             continue;
         }
         devices_.push_back(DeviceStorage{
@@ -182,11 +189,16 @@ SettingsUiLoader::~SettingsUiLoader() {
 
     bool can_unload = true;
     if (started_ && stop_) {
-        can_unload = stop_() == 0;
+        // A model compiler may still be using service callbacks. Keep their
+        // owners alive until the UI's workers have joined.
+        std::int32_t result;
+        do { result = stop_(); } while (result == ERROR_TIMEOUT);
+        can_unload = result == 0;
     }
     if (can_unload) {
         std::lock_guard lock(pending_count_mutex_);
         set_pending_count_ = nullptr;
+        set_active_inference_ = nullptr;
         FreeLibrary(module_);
     }
 }
@@ -195,6 +207,23 @@ void SettingsUiLoader::notify_pending_count(std::size_t count) noexcept {
     std::lock_guard lock(pending_count_mutex_);
     latest_pending_count_ = count;
     if (set_pending_count_) set_pending_count_(count);
+}
+
+void SettingsUiLoader::notify_active_inference(
+    const llavon::ime::core::InferenceRuntimeInfo& active) noexcept {
+    try {
+        const auto id = utf8_to_utf16(active.device.device_id);
+        const auto name = utf8_to_utf16(active.device.name);
+        const auto description = utf8_to_utf16(active.device.description);
+        const llavon_settings_inference_device device{
+            backend_value(active.device.backend), device_type_value(active.device.type),
+            id.c_str(), name.c_str(), description.c_str(), active.device.memory_total};
+        if (set_active_inference_) {
+            set_active_inference_(&device, active.gpu_offload ? 1 : 0, active.fell_back_to_cpu ? 1 : 0);
+        }
+    } catch (...) {
+        OutputDebugStringW(L"[settings-ui] unable to update the active inference device display\n");
+    }
 }
 
 bool SettingsUiLoader::show() {
@@ -262,10 +291,12 @@ bool SettingsUiLoader::load() {
     show_context_menu_ =
         resolve<ShowContextMenuFunction>(module_, "llavon_settings_ui_show_context_menu");
     stop_ = resolve<StopFunction>(module_, "llavon_settings_ui_stop");
+    set_active_inference_ = resolve<SetActiveInferenceFunction>(
+        module_, "llavon_settings_ui_set_active_inference");
     const auto set_pending_count = resolve<SetPendingCountFunction>(
         module_, "llavon_settings_ui_set_pending_count");
     if (!configure_ || !configure_update_notifications_ || !configure_gpu_boost_ ||
-        !configure_model_preparation_ || !start_ || !show_ ||
+        !configure_model_preparation_ || !set_active_inference_ || !start_ || !show_ ||
         !show_context_menu_ || !stop_ ||
         !set_pending_count ||
         !configure_module()) {

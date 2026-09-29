@@ -54,6 +54,32 @@ add_executable(llavon-ime-service
     src/service.rc
 )
 
+if(LLAVON_IME_ENABLE_RYZENAI)
+    add_executable(llavon-ime-npu-compiler src/npu_compiler_main.cpp)
+    target_compile_features(llavon-ime-npu-compiler PRIVATE cxx_std_23)
+    target_compile_options(llavon-ime-npu-compiler PRIVATE /W4 /WX /utf-8)
+    target_compile_definitions(llavon-ime-npu-compiler PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(llavon-ime-npu-compiler PRIVATE ime-core::ime-core)
+    add_custom_command(TARGET llavon-ime-npu-compiler POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/onnxruntime.dll"
+            "$<TARGET_FILE_DIR:llavon-ime-npu-compiler>"
+        VERBATIM)
+    add_dependencies(llavon-ime-service llavon-ime-npu-compiler)
+    install(TARGETS llavon-ime-npu-compiler RUNTIME DESTINATION bin COMPONENT Runtime)
+    target_sources(llavon-ime-service PRIVATE
+        src/service/ryzen_ai_settings.cpp src/service/ryzen_ai_settings.hpp
+        src/service/npu_compiler_process.cpp src/service/npu_compiler_process.hpp)
+    target_link_libraries(llavon-ime-service PRIVATE setupapi)
+    target_compile_definitions(llavon-ime-service PRIVATE LLAVON_IME_RYZENAI=1)
+    add_custom_command(TARGET llavon-ime-service POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/onnxruntime.dll"
+            "$<TARGET_FILE_DIR:llavon-ime-service>"
+        VERBATIM
+    )
+endif()
+
 # Embedded only in the web setup. The MSI never carries the GGUF payload.
 add_executable(llavon-ime-model-installer
     src/model_installer_main.cpp
@@ -234,6 +260,24 @@ target_link_libraries(llavon-ime-candidate-ui PRIVATE
 )
 
 if(BUILD_TESTING)
+    if(LLAVON_IME_ENABLE_RYZENAI)
+        add_executable(npu-compiler-process-tests
+            tests/npu_compiler_process_tests.cpp src/service/npu_compiler_process.cpp)
+        target_compile_features(npu-compiler-process-tests PRIVATE cxx_std_23)
+        target_compile_options(npu-compiler-process-tests PRIVATE /W4 /WX /utf-8)
+        target_compile_definitions(npu-compiler-process-tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+        target_include_directories(npu-compiler-process-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        add_test(NAME npu-compiler-process COMMAND npu-compiler-process-tests)
+        set_tests_properties(npu-compiler-process PROPERTIES TIMEOUT 20)
+    endif()
+    add_executable(inference-settings-tests
+        tests/inference_settings_tests.cpp src/service/user_settings_codec.cpp)
+    target_compile_features(inference-settings-tests PRIVATE cxx_std_23)
+    target_compile_options(inference-settings-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(inference-settings-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(inference-settings-tests PRIVATE ime-core::ime-core reflectcpp::reflectcpp utf8cpp::utf8cpp)
+    add_test(NAME inference-settings COMMAND inference-settings-tests)
+
     add_executable(lora-history-lca-tests
         tests/lora_history_lca_tests.cpp
         src/settings/lora_history_lca.cpp

@@ -72,6 +72,7 @@ public:
     bool show();
     bool show_context_menu(POINT location);
     void notify_pending_count(std::size_t count) noexcept;
+    void notify_active_inference(const llavon::ime::core::InferenceRuntimeInfo& active) noexcept;
 
 private:
     struct DeviceStorage {
@@ -138,6 +139,7 @@ private:
     using ShowContextMenuFunction = void (*)(std::int32_t, std::int32_t);
     using StopFunction = std::int32_t (*)();
     using SetPendingCountFunction = void (*)(std::size_t);
+    using SetActiveInferenceFunction = void (*)(const llavon_settings_inference_device*, std::int32_t, std::int32_t);
 
     bool load();
     bool start();
@@ -192,6 +194,7 @@ private:
     std::mutex pending_count_mutex_;
     std::optional<std::size_t> latest_pending_count_;
     SetPendingCountFunction set_pending_count_ = nullptr;
+    SetActiveInferenceFunction set_active_inference_ = nullptr;
     std::vector<DeviceStorage> devices_;
     DeviceStorage active_device_;
     bool gpu_offload_ = false;

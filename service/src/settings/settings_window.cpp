@@ -198,6 +198,8 @@ const char16_t* backend_label(std::int32_t backend) {
             return u"CUDA";
         case LLAVON_SETTINGS_BACKEND_VULKAN:
             return u"Vulkan";
+        case LLAVON_SETTINGS_BACKEND_RYZENAI:
+            return u"AMD NPU";
         case LLAVON_SETTINGS_BACKEND_CPU:
             return u"CPU";
         default:
@@ -572,14 +574,16 @@ void SettingsWindow::set_pending_count(std::size_t count) {
 }
 
 void SettingsWindow::hide() const noexcept {
-    if (window_) {
+    if (window_ && !saving_inference_) {
         ShowWindow(window_, SW_HIDE);
     }
 }
 
 void SettingsWindow::destroy() noexcept {
     restore_ui_alive_->store(false, std::memory_order_release);
+    if (inference_apply_timer_) inference_apply_timer_.Stop();
     if (lora_restore_worker_.joinable()) lora_restore_worker_.join();
+    if (inference_worker_.joinable()) inference_worker_.join();
     deactivate_update_target();
     discard_pending_update_results();
     hide();
@@ -688,6 +692,21 @@ void SettingsWindow::initialize_xaml_island() {
 void SettingsWindow::build_page() {
     shell_ = load_xaml_resource(IDR_SETTINGS_PAGE_XAML).as<Grid>();
 
+    inference_apply_overlay_ = named<Grid>(shell_, L"InferenceApplyOverlay");
+    inference_apply_progress_ = named<ProgressBar>(shell_, L"InferenceApplyProgress");
+    inference_apply_title_ = named<TextBlock>(shell_, L"InferenceApplyTitle");
+    inference_apply_detail_ = named<TextBlock>(shell_, L"InferenceApplyDetail");
+    inference_apply_elapsed_ = named<TextBlock>(shell_, L"InferenceApplyElapsed");
+    inference_apply_close_ = named<Button>(shell_, L"InferenceApplyClose");
+    inference_apply_close_.Click([this](const auto&, const auto&) { close_inference_apply(); });
+    inference_apply_timer_ = DispatcherTimer();
+    inference_apply_timer_.Interval(std::chrono::seconds(1));
+    inference_apply_timer_.Tick([this](const auto&, const auto&) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - inference_apply_started_).count();
+        inference_apply_elapsed_.Text(std::format(L"已經過 {} 分 {:02} 秒", elapsed / 60, elapsed % 60));
+    });
+
     model_path_ = named<TextBox>(shell_, L"ModelPath");
     model_path_.Text(to_hstring(configuration_.model_path));
     model_path_.TextChanged(
@@ -703,53 +722,17 @@ void SettingsWindow::build_page() {
     model_note_ = named<TextBlock>(shell_, L"ModelNote");
 
     const auto active_row = named<Grid>(shell_, L"ActiveDeviceRow");
-    const auto& active = configuration_.active_device;
-    const std::u16string active_name =
-        !active.description.empty() ? active.description
-                                    : (!active.name.empty() ? active.name : active.device_id);
-    const auto active_name_text = to_hstring(active_name);
     active_device_status_ = named<TextBlock>(shell_, L"ActiveDeviceStatus");
-    active_device_status_.Text(active_name_text);
-    std::u16string active_state = u"使用中 · ";
-    active_state += backend_label(active.backend);
-    named<TextBlock>(shell_, L"ActiveBackend").Text(to_hstring(active_state));
-
-    ToolTip active_tooltip;
-    StackPanel tooltip_content;
-    tooltip_content.Spacing(4);
-    tooltip_content.Children().Append(
-        make_text(active_name_text.c_str(), body_text_size, FontWeights::SemiBold()));
-    std::u16string backend_detail = u"後端：";
-    backend_detail += backend_label(active.backend);
-    const auto backend_detail_text = to_hstring(backend_detail);
-    tooltip_content.Children().Append(make_text(backend_detail_text.c_str(), caption_text_size));
-    if (active.backend != LLAVON_SETTINGS_BACKEND_CPU && active.memory_total != 0) {
-        std::wostringstream memory;
-        memory << L"顯示記憶體：" << std::fixed << std::setprecision(1)
-               << static_cast<double>(active.memory_total) / 1024.0 / 1024.0 / 1024.0
-               << L" GB";
-        tooltip_content.Children().Append(make_text(memory.str().c_str(), caption_text_size));
-    }
-    if (!active.device_id.empty()) {
-        const std::u16string device_id = u"裝置 ID：" + active.device_id;
-        const auto device_id_text = to_hstring(device_id);
-        tooltip_content.Children().Append(make_text(device_id_text.c_str(), caption_text_size));
-    }
-    const wchar_t* offload = configuration_.gpu_offload ? L"GPU offload：啟用"
-                                                        : L"GPU offload：未啟用";
-    tooltip_content.Children().Append(make_text(offload, caption_text_size));
-    if (configuration_.fell_back_to_cpu) {
-        tooltip_content.Children().Append(
-            make_text(L"偏好裝置目前無法使用，已改用 CPU。", caption_text_size));
-    }
-    active_tooltip.Content(tooltip_content);
-    ToolTipService::SetToolTip(active_row, active_tooltip);
+    active_device_tooltip_ = ToolTip();
+    ToolTipService::SetToolTip(active_row, active_device_tooltip_);
+    const auto active_tooltip = active_device_tooltip_;
     active_row.PointerEntered([active_tooltip](const auto&, const auto&) {
         active_tooltip.IsOpen(true);
     });
     active_row.PointerExited([active_tooltip](const auto&, const auto&) {
         active_tooltip.IsOpen(false);
     });
+    update_active_inference_display();
 
     inference_options_.clear();
     inference_options_.push_back(InferenceDeviceOption{
@@ -761,7 +744,8 @@ void SettingsWindow::build_page() {
     });
     for (const auto& device : configuration_.devices) {
         if (device.backend == LLAVON_SETTINGS_BACKEND_CUDA ||
-            device.backend == LLAVON_SETTINGS_BACKEND_VULKAN) {
+            device.backend == LLAVON_SETTINGS_BACKEND_VULKAN ||
+            device.backend == LLAVON_SETTINGS_BACKEND_RYZENAI) {
             inference_options_.push_back(device);
         }
     }
@@ -809,6 +793,7 @@ void SettingsWindow::build_page() {
     save_inference_button_ = named<Button>(shell_, L"SaveInferenceButton");
     save_inference_button_.Click([this](const auto&, const auto&) { save_inference_setting(); });
     note_ = named<TextBlock>(shell_, L"InferenceNote");
+    update_inference_save_state();
 
     const auto gpu_boost_toggle = named<ToggleSwitch>(shell_, L"GpuBoostToggle");
     auto saved_gpu_boost = std::make_shared<bool>(configuration_.gpu_boost_enabled);
@@ -2770,7 +2755,20 @@ bool SettingsWindow::begin_lora_history_operation(
     std::u16string model_path,
     std::function<std::int32_t(const char16_t*)> operation,
     bool apply_model, std::function<void(bool)> finished) {
-    if (restoring_lora_model_ || !operation) return false;
+    if (restoring_lora_model_ || saving_inference_ || !operation) return false;
+    if (apply_model && configuration_.active_device.backend == LLAVON_SETTINGS_BACKEND_RYZENAI) {
+        return begin_inference_apply(true,
+            [model_path, operation = std::move(operation)] { return operation(model_path.c_str()); },
+            [this, model_path, finished = std::move(finished)](std::int32_t result) {
+                const bool success = result == ERROR_SUCCESS;
+                if (success) {
+                    configuration_.model_path = model_path;
+                    model_path_.Text(to_hstring(model_path));
+                    update_model_path_save_state();
+                }
+                finished(success);
+            });
+    }
     if (lora_restore_worker_.joinable()) lora_restore_worker_.join();
     restoring_lora_model_ = true;
     const auto dispatcher = shell_.DispatcherQueue();
@@ -2803,7 +2801,7 @@ bool SettingsWindow::begin_lora_history_operation(
 }
 
 void SettingsWindow::save_model_path() {
-    if (!model_path_ || !save_model_button_ || !model_note_ ||
+    if (saving_inference_ || restoring_lora_model_ || !model_path_ || !save_model_button_ || !model_note_ ||
         !configuration_.save_model_path_callback) {
         return;
     }
@@ -2815,17 +2813,21 @@ void SettingsWindow::save_model_path() {
         return;
     }
 
-    const std::int32_t result = configuration_.save_model_path_callback(
-        configuration_.save_model_path_context, path.c_str());
-    if (result == ERROR_SUCCESS) {
-        configuration_.model_path = path;
-        model_path_.Text(to_hstring(path));
-        save_model_button_.IsEnabled(false);
-        model_note_.Text(L"已載入並儲存模型檔案位置。");
-    } else {
-        model_note_.Text(L"無法載入模型；請確認檔案存在且為有效的 GGUF 模型。");
-    }
-    model_note_.Visibility(Visibility::Visible);
+    const auto callback = configuration_.save_model_path_callback;
+    const auto context = configuration_.save_model_path_context;
+    const bool npu = configuration_.active_device.backend == LLAVON_SETTINGS_BACKEND_RYZENAI;
+    begin_inference_apply(npu, [callback, context, path] { return callback(context, path.c_str()); },
+        [this, path, npu](std::int32_t result) {
+            if (result == ERROR_SUCCESS) {
+                configuration_.model_path = path;
+                model_path_.Text(to_hstring(path));
+                save_model_button_.IsEnabled(false);
+                model_note_.Text(npu ? L"模型已完成 NPU 編譯、驗證並套用。" : L"已載入並儲存模型檔案位置。");
+            } else {
+                model_note_.Text(L"無法完成模型套用，請確認模型與執行環境設定後重試。");
+            }
+            model_note_.Visibility(Visibility::Visible);
+        });
 }
 
 void SettingsWindow::update_model_path_save_state() {
@@ -2844,8 +2846,58 @@ void SettingsWindow::update_model_path_save_state() {
     }
 }
 
+void SettingsWindow::set_active_inference(
+    InferenceDeviceOption device, bool gpu_offload, bool fell_back_to_cpu) {
+    configuration_.active_device = std::move(device);
+    configuration_.gpu_offload = gpu_offload;
+    configuration_.fell_back_to_cpu = fell_back_to_cpu;
+    if (active_device_status_ && active_device_tooltip_) update_active_inference_display();
+}
+
+void SettingsWindow::update_active_inference_display() {
+    const auto& active = configuration_.active_device;
+    const std::u16string active_name =
+        !active.description.empty() ? active.description
+                                    : (!active.name.empty() ? active.name : active.device_id);
+    const auto active_name_text = to_hstring(active_name);
+    active_device_status_.Text(active_name_text);
+    std::u16string active_state = u"使用中 · ";
+    active_state += backend_label(active.backend);
+    named<TextBlock>(shell_, L"ActiveBackend").Text(to_hstring(active_state));
+
+    StackPanel tooltip_content;
+    tooltip_content.Spacing(4);
+    tooltip_content.Children().Append(
+        make_text(active_name_text.c_str(), body_text_size, FontWeights::SemiBold()));
+    std::u16string backend_detail = u"後端：";
+    backend_detail += backend_label(active.backend);
+    const auto backend_detail_text = to_hstring(backend_detail);
+    tooltip_content.Children().Append(make_text(backend_detail_text.c_str(), caption_text_size));
+    if (active.backend != LLAVON_SETTINGS_BACKEND_CPU && active.memory_total != 0) {
+        std::wostringstream memory;
+        memory << L"顯示記憶體：" << std::fixed << std::setprecision(1)
+               << static_cast<double>(active.memory_total) / 1024.0 / 1024.0 / 1024.0
+               << L" GB";
+        tooltip_content.Children().Append(make_text(memory.str().c_str(), caption_text_size));
+    }
+    if (!active.device_id.empty()) {
+        const std::u16string device_id = u"裝置 ID：" + active.device_id;
+        const auto device_id_text = to_hstring(device_id);
+        tooltip_content.Children().Append(make_text(device_id_text.c_str(), caption_text_size));
+    }
+    const wchar_t* offload = active.backend == LLAVON_SETTINGS_BACKEND_RYZENAI
+        ? L"NPU 模型推論：啟用（實驗性）"
+        : (configuration_.gpu_offload ? L"GPU offload：啟用" : L"GPU offload：未啟用");
+    tooltip_content.Children().Append(make_text(offload, caption_text_size));
+    if (configuration_.fell_back_to_cpu) {
+        tooltip_content.Children().Append(
+            make_text(L"偏好裝置目前無法使用，已改用 CPU。", caption_text_size));
+    }
+    active_device_tooltip_.Content(tooltip_content);
+}
+
 void SettingsWindow::save_inference_setting() {
-    if (!inference_device_ || !note_ || !configuration_.save_callback) {
+    if (saving_inference_ || restoring_lora_model_ || !inference_device_ || !note_ || !configuration_.save_callback) {
         return;
     }
     const std::int32_t selected_index = inference_device_.SelectedIndex();
@@ -2855,22 +2907,104 @@ void SettingsWindow::save_inference_setting() {
         return;
     }
 
-    const auto& option = inference_options_[static_cast<std::size_t>(selected_index)];
-    const std::int32_t result = configuration_.save_callback(
-        configuration_.save_context, option.backend, option.device_id.c_str());
+    const auto option = inference_options_[static_cast<std::size_t>(selected_index)];
+    const auto callback = configuration_.save_callback;
+    const auto context = configuration_.save_context;
+    const bool npu = option.backend == LLAVON_SETTINGS_BACKEND_RYZENAI;
+    begin_inference_apply(npu,
+        [callback, context, option] { return callback(context, option.backend, option.device_id.c_str()); },
+        [this, option, npu](std::int32_t result) {
+            if (result == ERROR_SUCCESS) {
+                configuration_.selected_backend = option.backend;
+                configuration_.selected_device_id = option.device_id;
+                note_.Text(npu ? L"AMD NPU 已完成編譯、驗證並套用。" : L"已套用並儲存裝置設定。");
+            } else {
+                note_.Text(npu ? L"AMD NPU 套用失敗，請檢查 Ryzen AI 設定與驅動後重試。"
+                              : L"無法套用或儲存推論裝置設定，請稍後再試。");
+            }
+            save_inference_button_.IsEnabled(result != ERROR_SUCCESS || configuration_.fell_back_to_cpu);
+            note_.Visibility(Visibility::Visible);
+        });
+}
+
+bool SettingsWindow::begin_inference_apply(bool npu, std::function<std::int32_t()> operation,
+                                         std::function<void(std::int32_t)> finished) {
+    if (saving_inference_ || restoring_lora_model_ || !operation) return false;
+    if (inference_worker_.joinable()) inference_worker_.join();
+    saving_inference_ = true;
+    named<ScrollViewer>(shell_, L"SettingsContent").IsEnabled(false);
+    inference_apply_title_.Text(npu ? L"正在編譯並套用 AMD NPU" : L"正在套用推論設定");
+    inference_apply_detail_.Text(npu
+        ? L"首次編譯可能需要數分鐘。編譯與驗證全部完成後才會切換至 AMD NPU，請等待此流程完成。"
+        : L"正在載入並驗證模型，完成後會自動切換。請稍候。");
+    inference_apply_elapsed_.Text(L"已經過 0 分 00 秒");
+    inference_apply_close_.Visibility(Visibility::Collapsed);
+    inference_apply_progress_.Visibility(Visibility::Visible);
+    inference_apply_progress_.IsIndeterminate(true);
+    // A model history picker can already be open. Keep the compilation panel
+    // above it so every model application has the same visible waiting state.
+    const auto children = shell_.Children();
+    std::uint32_t overlay_index = 0;
+    if (children.IndexOf(inference_apply_overlay_, overlay_index)) children.RemoveAt(overlay_index);
+    children.Append(inference_apply_overlay_);
+    inference_apply_overlay_.Visibility(Visibility::Visible);
+    inference_apply_progress_.Focus(FocusState::Programmatic);
+    inference_apply_started_ = std::chrono::steady_clock::now();
+    inference_apply_timer_.Start();
+    const auto dispatcher = shell_.DispatcherQueue();
+    const auto alive = restore_ui_alive_;
+    try {
+        inference_worker_ = std::jthread([this, dispatcher, alive, npu,
+            operation = std::move(operation), finished = std::move(finished)] {
+            std::int32_t result = ERROR_GEN_FAILURE;
+            // The callback returns only after compilation, provider verification,
+            // the core swap and settings persistence have finished.
+            try { result = operation(); } catch (...) {}
+            try {
+                dispatcher.TryEnqueue([this, alive, npu, result, finished] {
+                    if (!alive->load(std::memory_order_acquire)) return;
+                    finished(result);
+                    finish_inference_apply(npu, result);
+                });
+            } catch (...) {}
+        });
+        return true;
+    } catch (...) {
+        finish_inference_apply(npu, ERROR_GEN_FAILURE);
+        return false;
+    }
+}
+
+void SettingsWindow::finish_inference_apply(bool npu, std::int32_t result) {
+    inference_apply_timer_.Stop();
+    inference_apply_progress_.IsIndeterminate(false);
+    saving_inference_ = false;
     if (result == ERROR_SUCCESS) {
-        configuration_.selected_backend = option.backend;
-        configuration_.selected_device_id = option.device_id;
-        save_inference_button_.IsEnabled(false);
-        note_.Text(L"已套用並儲存");
-        note_.Visibility(Visibility::Visible);
+        close_inference_apply();
+        return;
+    }
+    inference_apply_title_.Text(npu ? L"AMD NPU 套用失敗" : L"推論設定套用失敗");
+    inference_apply_detail_.Text(npu
+        ? L"無法完成模型編譯或套用。請從輸入法圖示的右鍵選單「開啟偵錯器」，待連線後重試，在 Diagnostics 頁查看 service 的錯誤。"
+        : L"無法完成套用或儲存。請從輸入法圖示的右鍵選單「開啟偵錯器」，待連線後重試，在 Diagnostics 頁查看 service 的錯誤。");
+    inference_apply_progress_.Visibility(Visibility::Collapsed);
+    inference_apply_close_.Visibility(Visibility::Visible);
+    inference_apply_close_.Focus(FocusState::Programmatic);
+}
+
+void SettingsWindow::close_inference_apply() {
+    if (saving_inference_ || !inference_apply_overlay_) return;
+    inference_apply_overlay_.Visibility(Visibility::Collapsed);
+    named<ScrollViewer>(shell_, L"SettingsContent").IsEnabled(true);
+    if (history_picker_overlay_ && history_picker_close_button_) {
+        history_picker_close_button_.Focus(FocusState::Programmatic);
     } else {
-        note_.Text(L"無法套用或儲存推論裝置設定，請稍後再試。");
-        note_.Visibility(Visibility::Visible);
+        inference_device_.Focus(FocusState::Programmatic);
     }
 }
 
 void SettingsWindow::update_inference_save_state() {
+    if (saving_inference_) return;
     if (!inference_device_ || !save_inference_button_ || !note_) return;
     const std::int32_t selected_index = inference_device_.SelectedIndex();
     if (selected_index < 0 ||
@@ -2881,11 +3015,16 @@ void SettingsWindow::update_inference_save_state() {
     }
 
     const auto& option = inference_options_[static_cast<std::size_t>(selected_index)];
+    save_inference_button_.Content(winrt::box_value(option.backend == LLAVON_SETTINGS_BACKEND_RYZENAI
+        ? L"編譯並套用 NPU" : L"套用裝置"));
     const bool changed = option.backend != configuration_.selected_backend ||
-                         option.device_id != configuration_.selected_device_id;
+                         option.device_id != configuration_.selected_device_id ||
+                         configuration_.fell_back_to_cpu;
     save_inference_button_.IsEnabled(changed);
     if (changed) {
-        note_.Text(L"儲存後立即套用");
+        note_.Text(option.backend == LLAVON_SETTINGS_BACKEND_RYZENAI
+            ? L"按下套用後開始編譯，完成編譯與驗證後才會啟用 AMD NPU（實驗性）。"
+            : L"按下套用後載入並切換裝置");
         note_.Visibility(Visibility::Visible);
     } else {
         note_.Visibility(Visibility::Collapsed);
@@ -3129,6 +3268,16 @@ void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
 }
 
 void SettingsWindow::close_xaml() noexcept {
+    if (inference_apply_timer_) {
+        inference_apply_timer_.Stop();
+        inference_apply_timer_ = nullptr;
+    }
+    inference_apply_overlay_ = nullptr;
+    inference_apply_progress_ = nullptr;
+    inference_apply_title_ = nullptr;
+    inference_apply_detail_ = nullptr;
+    inference_apply_elapsed_ = nullptr;
+    inference_apply_close_ = nullptr;
     if (history_picker_new_export_ && configuration_.prepare_model_callback &&
         !history_picker_prepared_model_path_.empty()) {
         configuration_.prepare_model_callback(
@@ -3156,6 +3305,7 @@ void SettingsWindow::close_xaml() noexcept {
     save_model_button_ = nullptr;
     model_note_ = nullptr;
     active_device_status_ = nullptr;
+    active_device_tooltip_ = nullptr;
     inference_device_ = nullptr;
     save_inference_button_ = nullptr;
     update_button_ = nullptr;

@@ -15,6 +15,7 @@
 
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include <optional>
 #include <functional>
 #include <string>
@@ -34,6 +35,7 @@ public:
     bool create(HINSTANCE instance);
     void show() noexcept;
     void set_pending_count(std::size_t count);
+    void set_active_inference(InferenceDeviceOption device, bool gpu_offload, bool fell_back_to_cpu);
     void hide() const noexcept;
     void destroy() noexcept;
 
@@ -49,7 +51,12 @@ private:
     void save_model_path();
     void update_model_path_save_state();
     void save_inference_setting();
+    bool begin_inference_apply(bool npu, std::function<std::int32_t()> operation,
+                               std::function<void(std::int32_t)> finished);
+    void finish_inference_apply(bool npu, std::int32_t result);
+    void close_inference_apply();
     void update_inference_save_state();
+    void update_active_inference_display();
     void add_custom_name_row(
         std::u16string name = {}, std::vector<std::u16string> readings = {});
     void remove_custom_name_row(
@@ -120,6 +127,16 @@ private:
     bool lora_dialog_open_ = false;
     bool restoring_lora_model_ = false;
     std::jthread lora_restore_worker_;
+    std::jthread inference_worker_;
+    bool saving_inference_ = false;
+    std::chrono::steady_clock::time_point inference_apply_started_;
+    winrt::Microsoft::UI::Xaml::DispatcherTimer inference_apply_timer_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Grid inference_apply_overlay_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::ProgressBar inference_apply_progress_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock inference_apply_title_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock inference_apply_detail_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock inference_apply_elapsed_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button inference_apply_close_{nullptr};
     std::shared_ptr<std::atomic_bool> restore_ui_alive_ =
         std::make_shared<std::atomic_bool>(true);
     winrt::Microsoft::UI::Xaml::DispatcherTimer lora_dialog_timer_{nullptr};
@@ -130,6 +147,7 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::Button save_model_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock model_note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock active_device_status_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::ToolTip active_device_tooltip_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::ComboBox inference_device_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button save_inference_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button update_button_{nullptr};
