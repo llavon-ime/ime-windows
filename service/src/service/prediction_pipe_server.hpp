@@ -285,7 +285,7 @@ public:
         idle_.clear();
         recency_.clear();
         core_ = std::move(replacement);
-        // Release the previous ADLX runtime before initializing its replacement.
+        // Restore the previous GPU and stop its driver worker before replacement.
         gpu_activity_.set_backend({});
         gpu_activity_.set_backend(gpu_boost_enabled_
             ? make_gpu_latency_boost(core_->inference_runtime_info())

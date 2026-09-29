@@ -1,5 +1,6 @@
 #include "gpu_latency_boost.hpp"
 #include "amd_gpu_latency_boost.hpp"
+#include "amd_vulkan_identity.hpp"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -11,6 +12,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -68,10 +70,10 @@ std::optional<std::array<unsigned, 4>> pci_address(std::string_view id) noexcept
     return address;
 }
 
-bool matches_adapter(LUID luid, const std::array<unsigned, 4>& expected) noexcept {
+std::optional<std::array<unsigned, 4>> adapter_address(LUID luid) noexcept {
     D3DKMT_OPENADAPTERFROMLUID request{};
     request.AdapterLuid = luid;
-    if (D3DKMTOpenAdapterFromLuid(&request) < 0) return false;
+    if (D3DKMTOpenAdapterFromLuid(&request) < 0) return std::nullopt;
 
     const D3dKmtAdapterHandle adapter{request.hAdapter};
     D3DKMT_ADAPTERADDRESS address{};
@@ -81,14 +83,15 @@ bool matches_adapter(LUID luid, const std::array<unsigned, 4>& expected) noexcep
     query.pPrivateDriverData = &address;
     query.PrivateDriverDataSize = sizeof(address);
 
-    return D3DKMTQueryAdapterInfo(&query) >= 0 && address.BusNumber == expected[1] &&
-           address.DeviceNumber == expected[2] && address.FunctionNumber == expected[3];
+    if (D3DKMTQueryAdapterInfo(&query) < 0) return std::nullopt;
+    return std::array<unsigned, 4>{0, address.BusNumber, address.DeviceNumber, address.FunctionNumber};
 }
 
 winrt::com_ptr<IDXGIAdapter1> find_adapter(std::string_view device_id,
-                                          std::uint32_t vendor_id) {
+                                          std::uint32_t vendor_id,
+                                          std::optional<LUID> luid = std::nullopt) {
     const auto address = pci_address(device_id);
-    if (!address) return {};
+    if (!address && !luid) return {};
 
     winrt::com_ptr<IDXGIFactory1> factory;
     factory.capture(CreateDXGIFactory1);
@@ -103,7 +106,9 @@ winrt::com_ptr<IDXGIAdapter1> find_adapter(std::string_view device_id,
         winrt::check_hresult(adapter->GetDesc1(&description));
         if (description.VendorId == vendor_id &&
             (description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0 &&
-            matches_adapter(description.AdapterLuid, *address)) {
+            (luid ? description.AdapterLuid.HighPart == luid->HighPart &&
+                        description.AdapterLuid.LowPart == luid->LowPart
+                  : adapter_address(description.AdapterLuid) == address)) {
             return adapter;
         }
     }
@@ -244,8 +249,21 @@ GpuActivityLease::Boost make_gpu_latency_boost(
                                            : GpuActivityLease::Result::unavailable;
             };
         }
-        if (find_adapter(runtime.device.device_id, amd_vendor_id)) {
-            return make_amd_gpu_latency_boost(runtime.device.device_id);
+        auto amd_adapter = find_adapter(runtime.device.device_id, amd_vendor_id);
+        if (!amd_adapter && !pci_address(runtime.device.device_id)) {
+            if (const auto luid = amd_vulkan_luid(runtime.device)) {
+                amd_adapter = find_adapter({}, amd_vendor_id, luid);
+            }
+        }
+        if (amd_adapter) {
+            DXGI_ADAPTER_DESC1 description{};
+            winrt::check_hresult(amd_adapter->GetDesc1(&description));
+            if (const auto address = adapter_address(description.AdapterLuid)) {
+                const auto id = std::format("0000:{:02x}:{:02x}.{:x}", (*address)[1], (*address)[2], (*address)[3]);
+                std::clog << "[SRV] AMD boost adapter resolved: inference=" << runtime.device.device_id
+                          << " pci=" << id << '\n';
+                return make_amd_gpu_latency_boost(id);
+            }
         }
         return {};
     } catch (...) {

@@ -1,346 +1,160 @@
 #include "amd_gpu_latency_boost.hpp"
-#include "amd_gpu_clock_target.hpp"
+#include "amd_gpu_boost_worker.hpp"
+#include "amd_gpu_pci_address.hpp"
 
 #include <windows.h>
 
 #include <array>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string_view>
 
 namespace llavon::service {
 namespace {
 
-// The slots and signatures below match AMD ADLX 2.0's published C ABI
-// (GPUOpen-LibrariesAndSDKs/ADLX, commit 32b5a740). ADLX is loaded only at
-// runtime, so builds and non-AMD machines have no SDK or driver dependency.
-namespace adlx {
-using Result = int;
-constexpr Result ok = 0;
-constexpr Result not_supported = 12;
-constexpr Result reset_needed = 18;
-constexpr std::uint64_t version = (2ull << 48) | 125ull;
-constexpr std::size_t mapping_get_gpu_slot = 0;
-constexpr std::size_t release_slot = 1;
-constexpr std::size_t query_interface_slot = 2;
-constexpr std::size_t system_gpu_tuning_slot = 8;
-constexpr std::size_t tuning_supported_manual_gfx_slot = 8;
-constexpr std::size_t tuning_get_manual_gfx_slot = 14;
-constexpr std::size_t manual_min_range_slot = 3;
-constexpr std::size_t manual_get_min_slot = 4;
-constexpr std::size_t manual_set_min_slot = 5;
-constexpr std::size_t manual_max_range_slot = 6;
-constexpr std::size_t manual_get_max_slot = 7;
-constexpr std::size_t gpu_name_slot = 7;
+// AMD CLR's opencl/amdocl/cl_profile_amd.h and khronos/headers/opencl2.2/CL/cl_ext.h:
+// https://github.com/ROCm/clr/blob/develop/opencl/amdocl/cl_profile_amd.h
+// This profiling extension reaches PAL::IDevice::SetClockMode. It needs neither
+// an OpenCL context nor submitted work, and also affects Vulkan inference.
+namespace cl {
+using Int = std::int32_t;
+using UInt = std::uint32_t;
+using Id = void*;
+using Platforms = Int(__stdcall*)(UInt, Id*, UInt*);
+using Devices = Int(__stdcall*)(Id, std::uint64_t, UInt, Id*, UInt*);
+using Info = Int(__stdcall*)(Id, UInt, std::size_t, void*, std::size_t*);
+using Extension = void*(__stdcall*)(Id, const char*);
+enum class Mode : Int { normal = 0, query = 1, peak = 5 };
+struct Input { Mode mode; };
+// Drivers differ in output units (ratios versus clocks). Treat these bytes as
+// opaque; neither target selection nor capability checks depend on those units.
+struct Output { std::array<std::uint32_t, 2> opaque{}; };
+using ClockMode = Int(__stdcall*)(Id, Input, Output*);
+struct Topology {
+    UInt type;
+    std::array<unsigned char, 17> unused;
+    unsigned char bus;
+    unsigned char device;
+    unsigned char function;
+};
+static_assert(sizeof(Input) == 4 && sizeof(Output) == 8 && sizeof(Topology) == 24);
+static_assert(offsetof(Topology, bus) == 21);
+constexpr UInt device_vendor_id = 0x1001;
+constexpr UInt device_topology_amd = 0x4037;
+constexpr UInt topology_pcie = 1;
+constexpr Int success = 0;
+constexpr Int invalid_operation = -59;
+constexpr Int invalid_device = -33;
+} // namespace cl
 
-using IntRange = AmdClockRange;
-static_assert(sizeof(IntRange) == 12);
-static_assert(sizeof(void*) == 8);
-
-using Initialize = Result(__cdecl*)(std::uint64_t, void**, void**);
-using Terminate = Result(__cdecl*)();
-using Release = long(__stdcall*)(void*);
-using MapGpu = Result(__stdcall*)(void*, int, int, int, void**);
-using GetService = Result(__stdcall*)(void*, void**);
-using IsSupported = Result(__stdcall*)(void*, void*, bool*);
-using GetManual = Result(__stdcall*)(void*, void*, void**);
-using QueryInterface = Result(__stdcall*)(void*, const wchar_t*, void**);
-using GetRange = Result(__stdcall*)(void*, IntRange*);
-using GetFrequency = Result(__stdcall*)(void*, std::int32_t*);
-using SetFrequency = Result(__stdcall*)(void*, std::int32_t);
-using GetName = Result(__stdcall*)(void*, const char**);
-
-template <typename Function, typename... Args>
-auto call(void* object, std::size_t slot, Args... args) noexcept {
-    const auto vtable = *static_cast<void***>(object);
-    return reinterpret_cast<Function>(vtable[slot])(object, args...);
-}
-} // namespace adlx
-
-struct PciAddress {
-    int bus;
-    int device;
-    int function;
+struct ModuleRelease {
+    void operator()(HINSTANCE__* module) const noexcept { if (module) FreeLibrary(module); }
 };
 
-std::optional<PciAddress> pci_address(std::string_view id) noexcept {
-    std::array<unsigned, 4> address{};
-    constexpr std::array separators{':', ':', '.'};
-    for (std::size_t i = 0; i < address.size(); ++i) {
-        const auto length = i < separators.size() ? id.find(separators[i]) : id.size();
-        if (length == std::string_view::npos || length == 0) return std::nullopt;
-        const auto [end, error] =
-            std::from_chars(id.data(), id.data() + length, address[i], 16);
-        if (error != std::errc{} || end != id.data() + length) return std::nullopt;
-        id.remove_prefix(length + (i < separators.size() ? 1 : 0));
-    }
-    if (address[0] != 0 || address[1] > 255 || address[2] > 31 || address[3] > 7) {
-        return std::nullopt;
-    }
-    return PciAddress{static_cast<int>(address[1]), static_cast<int>(address[2]),
-                      static_cast<int>(address[3])};
-}
-
-struct AdlxRelease {
-    void operator()(void* pointer) const noexcept {
-        if (pointer) (void)adlx::call<adlx::Release>(pointer, adlx::release_slot);
-    }
-};
-
-using AdlxPtr = std::unique_ptr<void, AdlxRelease>;
-
-class AdlxModule final {
+class AmdDriverClock final {
 public:
-    AdlxModule()
-        : handle_(LoadLibraryExW(L"amdadlx64.dll", nullptr,
-                                 LOAD_LIBRARY_SEARCH_SYSTEM32)) {
-        if (!handle_) throw std::runtime_error("AMD ADLX driver library is missing");
-    }
-    ~AdlxModule() { (void)FreeLibrary(handle_); }
-
-    AdlxModule(const AdlxModule&) = delete;
-    AdlxModule& operator=(const AdlxModule&) = delete;
-
-    HMODULE get() const noexcept { return handle_; }
-
-private:
-    HMODULE handle_;
-};
-
-class AdlxRuntime final {
-public:
-    AdlxRuntime() {
-        const auto initialize = reinterpret_cast<adlx::Initialize>(
-            GetProcAddress(module_.get(), "ADLXInitialize2"));
-        terminate_ = reinterpret_cast<adlx::Terminate>(
-            GetProcAddress(module_.get(), "ADLXTerminate"));
-        if (!initialize || !terminate_) {
-            throw std::runtime_error("AMD ADLX entry points are missing");
+    explicit AmdDriverClock(AmdPciAddress address)
+        : module_(LoadLibraryExW(L"OpenCL.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
+        if (!module_) throw std::runtime_error("AMD OpenCL driver loader is missing");
+        const auto platforms = entry<cl::Platforms>("clGetPlatformIDs");
+        const auto devices = entry<cl::Devices>("clGetDeviceIDs");
+        const auto info = entry<cl::Info>("clGetDeviceInfo");
+        const auto extension = entry<cl::Extension>("clGetExtensionFunctionAddressForPlatform");
+        std::array<cl::Id, 32> platform_ids{};
+        cl::UInt platform_count = 0;
+        if (platforms(static_cast<cl::UInt>(platform_ids.size()), platform_ids.data(),
+                      &platform_count) != cl::success || platform_count > platform_ids.size()) {
+            throw std::runtime_error("OpenCL platforms are unavailable");
         }
-        const auto result = initialize(adlx::version, &system_, &mapping_);
-        if (result != adlx::ok || !system_ || !mapping_) {
-            std::clog << "[WARN] AMD ADLX initialization: adlx_status=" << result << '\n';
-            if (result == adlx::ok) (void)terminate_();
-            throw std::runtime_error("AMD ADLX initialization failed");
+        for (cl::UInt p = 0; p < platform_count; ++p) {
+            const auto clock = reinterpret_cast<cl::ClockMode>(
+                extension(platform_ids[p], "clSetDeviceClockModeAMD"));
+            if (!clock) continue;
+            std::array<cl::Id, 64> device_ids{};
+            cl::UInt count = 0;
+            constexpr std::uint64_t gpu_device_type = 4;
+            if (devices(platform_ids[p], gpu_device_type, static_cast<cl::UInt>(device_ids.size()),
+                        device_ids.data(), &count) != cl::success || count > device_ids.size()) continue;
+            for (cl::UInt i = 0; i < count; ++i) {
+                cl::UInt vendor = 0;
+                cl::Topology topology{};
+                if (info(device_ids[i], cl::device_vendor_id, sizeof(vendor), &vendor, nullptr) !=
+                        cl::success || vendor != 0x1002 ||
+                    info(device_ids[i], cl::device_topology_amd, sizeof(topology), &topology, nullptr) !=
+                        cl::success || topology.type != cl::topology_pcie ||
+                    AmdPciAddress{topology.bus, topology.device, topology.function} != address) continue;
+                cl::Output output{};
+                if (clock(device_ids[i], {cl::Mode::query}, &output) != cl::success) continue;
+                device_ = device_ids[i];
+                clock_ = clock;
+                return;
+            }
         }
-    }
-
-    ~AdlxRuntime() {
-        (void)terminate_();
-    }
-
-    AdlxRuntime(const AdlxRuntime&) = delete;
-    AdlxRuntime& operator=(const AdlxRuntime&) = delete;
-
-    void* system() const noexcept { return system_; }
-    void* mapping() const noexcept { return mapping_; }
-
-private:
-    AdlxModule module_;
-    adlx::Terminate terminate_ = nullptr;
-    void* system_ = nullptr;
-    void* mapping_ = nullptr;
-};
-
-class AmdLatencyBoost final {
-public:
-    explicit AmdLatencyBoost(PciAddress address) {
-        void* gpu = nullptr;
-        const auto mapped = adlx::call<adlx::MapGpu>(
-            runtime_.mapping(), adlx::mapping_get_gpu_slot,
-            address.bus, address.device, address.function, &gpu);
-        gpu_.reset(gpu);
-        if (mapped != adlx::ok || !gpu_) {
-            throw std::runtime_error("inference GPU is not an ADLX device");
-        }
-        const char* name = nullptr;
-        if (adlx::call<adlx::GetName>(gpu_.get(), adlx::gpu_name_slot, &name) == adlx::ok && name) {
-            std::clog << "[SRV] AMD GPU boost probe: gpu=" << name << '\n';
-        }
-
-        void* service = nullptr;
-        const auto service_result = adlx::call<adlx::GetService>(
-            runtime_.system(), adlx::system_gpu_tuning_slot, &service);
-        tuning_service_.reset(service);
-        if (service_result != adlx::ok || !tuning_service_) {
-            throw std::runtime_error("AMD GPU tuning is unavailable");
-        }
-
-        bool supported = false;
-        if (adlx::call<adlx::IsSupported>(tuning_service_.get(),
-                                           adlx::tuning_supported_manual_gfx_slot,
-                                           gpu_.get(), &supported) != adlx::ok ||
-            !supported) {
-            throw std::runtime_error(
-                "AMD manual GPU tuning is unsupported by this GPU/driver "
-                "(including some integrated GPUs); ordinary inference remains available");
-        }
-
-        void* generic = nullptr;
-        const auto manual_result = adlx::call<adlx::GetManual>(
-            tuning_service_.get(), adlx::tuning_get_manual_gfx_slot,
-            gpu_.get(), &generic);
-        const AdlxPtr generic_holder(generic);
-        if (manual_result != adlx::ok || !generic_holder) {
-            throw std::runtime_error("AMD manual GPU tuning interface is unavailable");
-        }
-        void* tuning = nullptr;
-        const auto query_result = adlx::call<adlx::QueryInterface>(
-            generic, adlx::query_interface_slot,
-            L"IADLXManualGraphicsTuning2", &tuning);
-        tuning_.reset(tuning);
-        if (query_result != adlx::ok || !tuning_) {
-            throw std::runtime_error("AMD minimum clock tuning is unsupported");
-        }
+        throw std::runtime_error("inference GPU does not expose AMD driver clock-mode control");
     }
 
-    ~AmdLatencyBoost() {
-        if (active_ && set(false) != GpuActivityLease::Result::success) {
-            std::clog << "[WARN] AMD GPU minimum clock could not be restored: saved_min_mhz="
-                      << previous_min_ << " boosted_min_mhz=" << boosted_min_ << '\n';
-        }
-    }
-
-    AmdLatencyBoost(const AmdLatencyBoost&) = delete;
-    AmdLatencyBoost& operator=(const AmdLatencyBoost&) = delete;
+    ~AmdDriverClock() { if (restore_pending_) (void)set(false); }
+    AmdDriverClock(const AmdDriverClock&) = delete;
+    AmdDriverClock& operator=(const AmdDriverClock&) = delete;
 
     GpuActivityLease::Result set(bool enabled) noexcept {
         using Result = GpuActivityLease::Result;
-        if (enabled) {
-            // Never replace the original snapshot while restoration is pending.
-            if (active_) return Result::success;
-            adlx::IntRange range{};
-            adlx::IntRange max_range{};
-            std::int32_t current_min = 0;
-            std::int32_t current_max = 0;
-            adlx::Result query_status = adlx::ok;
-            const auto check_query = [&](adlx::Result status, std::string_view operation) {
-                query_status = status;
-                return checked(status, operation);
-            };
-            if (!check_query(adlx::call<adlx::GetRange>(tuning_.get(), adlx::manual_min_range_slot,
-                                                      &range), "GetGPUMinFrequencyRange") ||
-                !check_query(adlx::call<adlx::GetRange>(tuning_.get(), adlx::manual_max_range_slot,
-                                                      &max_range), "GetGPUMaxFrequencyRange") ||
-                !check_query(adlx::call<adlx::GetFrequency>(tuning_.get(), adlx::manual_get_min_slot,
-                                                          &current_min), "GetGPUMinFrequency") ||
-                !check_query(adlx::call<adlx::GetFrequency>(tuning_.get(), adlx::manual_get_max_slot,
-                                                          &current_max), "GetGPUMaxFrequency")) {
-                return activation_failure(query_status);
-            }
-
-            const auto target = amd_gpu_clock_target(range, max_range, current_min, current_max);
-            if (!target) {
-                std::clog << "[WARN] AMD GPU boost skipped: reason="
-                          << (target.error() == AmdClockTargetError::offset_or_unknown_maximum
-                                  ? "maximum_clock_is_offset_or_unknown" : "invalid_clock_values")
-                          << " min_mhz=" << current_min << " max_raw=" << current_max
-                          << " min_range=[" << range.minValue << ',' << range.maxValue
-                          << ',' << range.step << "] max_range=[" << max_range.minValue
-                          << ',' << max_range.maxValue << ',' << max_range.step << "]\n";
-                return Result::unavailable;
-            }
-            if (*target == current_min) {
-                if (!logged_no_change_) {
-                    std::clog << "[SRV] AMD GPU boost needs no clock change: min_mhz="
-                              << current_min << " max_mhz=" << current_max << '\n';
-                    logged_no_change_ = true;
-                }
-                return Result::success;
-            }
-
-            const auto result = adlx::call<adlx::SetFrequency>(
-                tuning_.get(), adlx::manual_set_min_slot, *target);
-            if (result != adlx::ok) {
-                // ADLX_RESET_NEEDED means another tuning mode is in use. Do not
-                // reset the user's GPU settings merely to enable this hint.
-                std::clog << "[WARN] AMD GPU latency boost enable failed: adlx_status="
-                          << result << '\n';
-                return activation_failure(result);
-            }
-            previous_min_ = current_min;
-            boosted_min_ = *target;
-            active_ = true;
-            if (!logged_adjustment_) {
-                std::clog << "[SRV] AMD GPU boost applied: saved_min_mhz=" << previous_min_
-                          << " requested_min_mhz=" << boosted_min_
-                          << " max_mhz=" << current_max << '\n';
-                logged_adjustment_ = true;
-            }
-            return Result::success;
+        if (!enabled && !restore_pending_) return Result::success;
+        // Even a failed Peak request may have partially changed driver state.
+        if (enabled) restore_pending_ = true;
+        cl::Output output{};
+        const auto status = clock_(device_, {enabled ? cl::Mode::peak : cl::Mode::normal}, &output);
+        if (status != cl::success) {
+            std::clog << "[WARN] AMD driver clock mode failed: mode=" << (enabled ? "Peak" : "Default")
+                      << " cl_status=" << status << '\n';
+            return enabled && (status == cl::invalid_operation || status == cl::invalid_device)
+                ? Result::unavailable : Result::retry_later;
         }
-
-        if (!active_) return Result::success;
-        std::int32_t current_min = 0;
-        if (!checked(adlx::call<adlx::GetFrequency>(tuning_.get(), adlx::manual_get_min_slot,
-                                                      &current_min), "restore/GetGPUMinFrequency")) {
-            return Result::retry_later;
-        }
-        if (current_min == boosted_min_) {
-            if (!checked(adlx::call<adlx::SetFrequency>(tuning_.get(), adlx::manual_set_min_slot,
-                                                          previous_min_), "restore/SetGPUMinFrequency")) {
-                return Result::retry_later;
-            }
-            if (!logged_restoration_) {
-                std::clog << "[SRV] AMD GPU boost restored: min_mhz=" << previous_min_ << '\n';
-                logged_restoration_ = true;
-            }
-        } else {
-            std::clog << "[SRV] AMD GPU boost restore skipped: minimum changed externally, min_mhz="
-                      << current_min << '\n';
-        }
-        // A user or another application may have changed tuning meanwhile.
-        // Never overwrite a value that is no longer ours.
-        active_ = false;
+        if (!enabled) restore_pending_ = false;
         return Result::success;
     }
 
 private:
-    static GpuActivityLease::Result activation_failure(adlx::Result result) noexcept {
-        return result == adlx::not_supported || result == adlx::reset_needed
-            ? GpuActivityLease::Result::unavailable : GpuActivityLease::Result::retry_later;
+    template <typename Function>
+    Function entry(const char* name) const {
+        const auto function = reinterpret_cast<Function>(GetProcAddress(module_.get(), name));
+        if (!function) throw std::runtime_error("OpenCL entry point is missing");
+        return function;
     }
-
-    static bool checked(adlx::Result result, std::string_view operation) noexcept {
-        if (result == adlx::ok) return true;
-        std::clog << "[WARN] AMD GPU boost " << operation << " failed: adlx_status=" << result << '\n';
-        return false;
-    }
-
-    AdlxRuntime runtime_;
-    AdlxPtr gpu_;
-    AdlxPtr tuning_service_;
-    AdlxPtr tuning_;
-    std::int32_t previous_min_ = 0;
-    std::int32_t boosted_min_ = 0;
-    bool active_ = false;
-    bool logged_no_change_ = false;
-    bool logged_adjustment_ = false;
-    bool logged_restoration_ = false;
+    std::unique_ptr<HINSTANCE__, ModuleRelease> module_;
+    cl::Id device_ = nullptr;
+    cl::ClockMode clock_ = nullptr;
+    bool restore_pending_ = false;
 };
+
+GpuActivityLease::Boost make_driver(std::string_view device_id) {
+    const auto address = amd_pci_address(device_id);
+    if (!address) return {};
+    auto driver = std::make_unique<AmdDriverClock>(*address);
+    return [driver = std::move(driver)](bool enabled) { return driver->set(enabled); };
+}
 
 } // namespace
 
 GpuActivityLease::Boost make_amd_gpu_latency_boost(std::string_view device_id) noexcept {
-    const auto address = pci_address(device_id);
-    if (!address) return {};
+    if (!amd_pci_address(device_id)) return {};
     try {
-        auto boost = std::make_unique<AmdLatencyBoost>(*address);
+        auto boost = make_amd_boost_worker(device_id);
         std::clog << "[SRV] AMD GPU latency boost available: device=" << device_id
-                  << " idle_timeout_ms=2000\n";
-        return [boost = std::move(boost)](bool enabled) { return boost->set(enabled); };
+                  << " api=clSetDeviceClockModeAMD mode=Peak idle_timeout_ms=2000\n";
+        return boost;
     } catch (const std::exception& error) {
         std::clog << "[WARN] AMD GPU latency boost unavailable: " << error.what() << '\n';
-        return {};
     } catch (...) {
         std::clog << "[WARN] AMD GPU latency boost unavailable\n";
-        return {};
     }
+    return {};
+}
+
+std::optional<int> run_amd_gpu_latency_boost_worker(int argc, char** argv) noexcept {
+    return run_amd_boost_worker(argc, argv, make_driver);
 }
 
 } // namespace llavon::service

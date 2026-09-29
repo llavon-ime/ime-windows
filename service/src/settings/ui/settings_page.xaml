@@ -114,7 +114,7 @@
             Header="GPU Boost"
             OnContent="開啟"
             OffContent="關閉"/>
-        <TextBlock Text="使用 GPU 推論時短暫提高回應速度；停止輸入約 2 秒後恢復。AMD 顯示卡會暫時調整最低時脈。"
+        <TextBlock Text="使用 GPU 推論時要求驅動提高效能；停止輸入約 2 秒後恢復。AMD 會暫時使用 Peak 時脈模式，可能增加耗電、溫度及風扇轉速。"
             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
             FontSize="12"
             TextWrapping="Wrap"/>

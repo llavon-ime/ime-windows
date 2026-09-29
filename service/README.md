@@ -25,32 +25,42 @@ The service also owns the interactive per-user process shell:
   Turning the setting off stops renewing an active boost, so it expires at the
   usual two-second deadline; the choice persists across service restarts.
   NVIDIA uses the NVAPI low-latency hint on an offscreen D3D11
-  device matched to the inference GPU's PCI address. AMD uses the driver-provided
-  ADLX API to temporarily raise that GPU's minimum frequency to 75% of the gap
-  from its current minimum to its configured maximum. This AMD tuning affects
-  the entire GPU while active. The previous minimum is restored on idle, model
-  or device switch, and normal shutdown, provided another application has not
-  changed it meanwhile. An abnormal service exit can leave the AMD minimum
-  frequency at the raised value until it is reset in AMD Software or by a later
-  tuning change. AMD automatic tuning modes that require a factory reset are
-  left untouched. Inference still uses the selected backend; no background
-  inference work is added. Missing or unsupported drivers retain ordinary
-  inference, and boost errors are logged. The AMD driver DLL is loaded only
-  when the active inference GPU is AMD; no AMD installation is needed to build
-  or run the service on other hardware.
-  AMD clock tuning requires a supported manual-tuning interface; some laptop
-  integrated GPUs do not expose it. Such devices continue ordinary inference.
-  Maximum-frequency ranges containing zero or negative values (Navi4+ offsets)
-  are skipped with `maximum_clock_is_offset_or_unknown`: the service does not
-  guess a base frequency or use the tuning range as an overclocking target.
-  An already-high minimum is a successful no-op. Temporary enable failures
-  can retry on later input, at most once per second. Failed restoration is
-  attempted up to four times, one second apart. If those attempts fail, further
-  boosts are suspended and the saved clock state is retained for a final attempt
-  at shutdown or backend replacement. Process termination still cannot guarantee
-  restoration. The first successful adjustment and restoration per backend are
-  logged as `AMD GPU boost applied` and `AMD GPU boost restored`; `available`
-  alone only indicates that the tuning interface was found, not a clock change.
+  device matched to the inference GPU's PCI address. AMD dynamically resolves
+  [`clSetDeviceClockModeAMD`](https://github.com/ROCm/clr/blob/develop/opencl/amdocl/cl_profile_amd.h)
+  from the system OpenCL driver and requests `Peak` while the lease is active,
+  then `Default` on idle, model/device replacement, or shutdown. The OpenCL
+  device must match both AMD's vendor ID and the inference GPU's PCI address.
+  If the inference backend supplies only `VulkanN` (as on the Radeon 860M),
+  the service resolves a uniquely named Vulkan physical device, obtains its
+  Windows LUID, and queries that DXGI adapter's PCI address. Duplicate names,
+  missing LUIDs, and ambiguous identities are rejected; Vulkan and DXGI
+  enumeration indices are never assumed to match.
+  This is a device-wide driver power-mode request, subject to power and thermal
+  limits; it can raise memory clocks, power consumption, temperature, and fan
+  speed. No OpenCL context, queue, kernel, keepalive workload, manual frequency
+  target, overclock, or registry write is used. Inference remains on Vulkan.
+  This AMD profiling extension is optional, not a universal consumer low-latency
+  API. Missing entry points, topology information, or driver support disable
+  boost without disabling inference. A successful read-only query establishes
+  availability; only a successful `Peak` request logs `AMD GPU boost applied`.
+  Driver output units and freshness vary, so those fields are not interpreted
+  as live clocks, MHz, or ratios. Verify actual clocks with independent telemetry.
+  Temporary enable failures can retry on later input, at most once per second.
+  Failed enable requests are followed by `Default` before allowing another try.
+  A hidden instance of the service executable owns the AMD driver calls and
+  watches an inherited handle to the parent service. It runs before singleton,
+  model, or UI initialization. Thus terminating the parent still causes the
+  surviving worker to release Peak. IPC uses unnamed events and shared memory
+  with an explicit inherited-handle list; no public command pipe is exposed.
+  The worker retries restoration up to 30 times independently of the parent.
+  A per-device mutex prevents a replacement worker from enabling Peak while
+  its predecessor still owns restoration. IPC timeouts suspend further boosts
+  and tell the worker to restore; driver waits on the inference thread are bounded.
+  This cannot guarantee restoration if the driver hangs, restoration repeatedly
+  fails, or the worker itself (including the whole process tree) is forcibly
+  terminated. The API restores Default, not a snapshot of another profiling
+  application's mode; avoid simultaneous external clock-mode controllers.
+  `AMD GPU boost restored` records a successful Default acknowledgement.
   Performance verification must include 250 ms request spacing and resumption
   after more than two seconds idle, not only continuous token throughput.
 - `llavon-ime-candidate-ui.dll` is loaded on the first candidate presentation.
@@ -147,8 +157,8 @@ pre-release schema intentionally does not import the former JSONL prototype.
    then launch the new build from PowerShell in its `bin` directory:
    `./llavon-ime-service.exe 2> amd-boost.log`.
    If automatic startup wins the race, the log reports `already running`;
-   repeat after exiting that instance. A forced process kill is not a normal
-   shutdown test because it bypasses clock restoration.
+   repeat after exiting that instance. The hidden instance with the internal
+   `--amd-gpu-boost-worker` argument is the clock owner, not a second IME service.
 3. Type several characters about 250 ms apart, pause for at least five seconds,
    then resume. Look for `AMD GPU boost applied` followed by
    `AMD GPU boost restored`. These messages are logged once per backend;
@@ -156,10 +166,57 @@ pre-release schema intentionally does not import the former JSONL prototype.
 4. Compare GPU Boost enabled and disabled, especially the first prediction
    after idle. Also check switching models/devices and exiting normally.
    Monitor observed GPU clocks and power separately if available.
-5. If the log reports an unsupported manual-tuning interface, an offset/unknown
-   maximum, or a missing ADLX DLL, attach that message with the GPU name and
-   driver version. Inference should continue. Support for AMD Vulkan inference
-   does not imply support for ADLX clock tuning on the same integrated GPU.
+5. For crash recovery testing, terminate only the parent service while Peak is
+   active and independently verify that the surviving worker restores Default.
+   Killing the entire process tree also kills the restoration worker.
+6. If the log reports the clock-mode worker unavailable, record the GPU name and
+   driver version. Inference should continue. Vulkan support alone does not
+   imply support for AMD's optional OpenCL clock-mode extension.
+
+`amd-gpu-boost-worker-tests` exercises the actual child-process/IPC lifecycle
+with a fake driver, including parent termination, delayed calls, and failed
+restoration. It never changes hardware clocks. Hardware validation must also
+check Peak/Default on the target driver and measure actual candidate latency.
+On a Radeon 860M with Windows driver 32.0.22032.6002, Peak/Default requests were
+accepted. In a local benchmark that excluded the warmup block, with a full
+250 ms idle gap after each completed prediction, 56 samples per
+setting measured 9.227 ms median with boost off and 9.119 ms on; P95 was
+15.668 ms off and 15.857 ms on. Actual idle gaps were 250.022–250.530 ms.
+This small mixed difference does not establish a consistent latency benefit.
+These are warm-request statistics, not a bound on interactive latency. An
+earlier raw benchmark recorded a 473.767 ms request in the excluded warmup
+block. The live service also recorded 603.283 ms and 764.094 ms predictions
+among otherwise 3–15 ms requests, with almost all of each spike inside the
+cache-alignment `llama_decode()` call. Backend instrumentation reproduced
+these stalls in lazy Vulkan matrix pipeline creation. The idle `ready()`
+warmup decodes one token in a separate context and does not prepare the
+small-batch variants needed by actual input.
+
+The core now prepares Vulkan inference pipelines once during model loading,
+before serving requests. It covers small batches, larger matrix kernels,
+and populated attention caches, clears the synthetic KV state, and retains
+the prepared context for the first session. Without a compatible disk cache,
+this adds roughly 4–5 seconds on the tested 860M, without periodic GPU work or changing
+the actual inference batch size. CUDA and CPU initialization are unchanged.
+Validation must include every first-use request, new sessions, 250 ms idle
+gaps, and longer idle periods. Long-context compute time is still workload
+dependent; the driver clock hint alone did not remove the reproduced stalls.
+
+The Windows ggml overlay also persists Vulkan's compiled pipeline data in
+`%LOCALAPPDATA%\Llavon IME\vulkan-cache`. Subsequent service starts reuse
+compatible data while still preparing the model and its inference contexts.
+Cache identities include the GPU, driver version, Vulkan cache UUID and
+backend schema. Payloads have a SHA-256 checksum and are replaced atomically.
+Missing, corrupt or incompatible data is rebuilt; a cache I/O failure does
+not prevent inference. The core saves immediately after model preparation,
+so normal service shutdown is not required to preserve that work. There are
+no cache writes on the prediction path and no registry changes.
+`[VK_CACHE] loaded`, `miss`, and `saved` distinguish these startup outcomes.
+See `cmake/ports/README.md` for the overlay and diagnostics.
+
+The clock-mode query also retained Peak-looking values after Default succeeded;
+independent ADL telemetry returned to low idle clocks. Neither API success nor
+its clock-query output proves an actual frequency or latency improvement.
 
 ## Local LoRA training
 

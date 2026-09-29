@@ -4,6 +4,7 @@
 #include <shlobj.h>
 
 #include "service/prediction_pipe_server.hpp"
+#include "service/amd_gpu_latency_boost.hpp"
 #include "service/candidate_ui_loader.hpp"
 #include "service/custom_name_matcher.hpp"
 #include "service/debug/core_logger_adapter.hpp"
@@ -194,6 +195,9 @@ int run_server(
 }  // namespace
 
 int main(int argc, char* argv[]) {
+    if (const auto worker = llavon::service::run_amd_gpu_latency_boost_worker(argc, argv)) {
+        return *worker;
+    }
     try {
         if (argc == 2 && std::string(argv[1]) == "--help") {
             print_usage(argv[0]);

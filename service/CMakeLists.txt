@@ -8,6 +8,7 @@ find_package(cppwinrt CONFIG REQUIRED)
 find_package(reflectcpp CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(utf8cpp CONFIG REQUIRED)
+find_package(VulkanHeaders CONFIG REQUIRED)
 
 add_executable(llavon-ime-service
     src/assets/llavon_tray.jpg
@@ -22,7 +23,11 @@ add_executable(llavon-ime-service
     src/service/custom_name_matcher.hpp
     src/service/amd_gpu_latency_boost.cpp
     src/service/amd_gpu_latency_boost.hpp
-    src/service/amd_gpu_clock_target.hpp
+    src/service/amd_gpu_pci_address.hpp
+    src/service/amd_gpu_boost_worker.cpp
+    src/service/amd_gpu_boost_worker.hpp
+    src/service/amd_vulkan_identity.cpp
+    src/service/amd_vulkan_identity.hpp
     src/service/gpu_activity_lease.hpp
     src/service/gpu_latency_boost.cpp
     src/service/gpu_latency_boost.hpp
@@ -200,6 +205,7 @@ target_link_libraries(llavon-ime-service PRIVATE
     Microsoft::CppWinRT
     WindowsApp
     asio::asio
+    Vulkan::Headers
     reflectcpp::reflectcpp
     utf8cpp::utf8cpp
     unofficial-sodium::sodium
@@ -252,6 +258,18 @@ if(BUILD_TESTING)
     target_include_directories(gpu-activity-lease-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(gpu-activity-lease-tests PRIVATE asio::asio ws2_32)
     add_test(NAME gpu-activity-lease COMMAND gpu-activity-lease-tests)
+
+    add_executable(amd-gpu-boost-worker-tests
+        tests/amd_gpu_boost_worker_tests.cpp
+        src/service/amd_gpu_boost_worker.cpp)
+    target_compile_features(amd-gpu-boost-worker-tests PRIVATE cxx_std_23)
+    target_compile_definitions(amd-gpu-boost-worker-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+    target_compile_options(amd-gpu-boost-worker-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(amd-gpu-boost-worker-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(amd-gpu-boost-worker-tests PRIVATE asio::asio ws2_32)
+    add_test(NAME amd-gpu-boost-worker COMMAND amd-gpu-boost-worker-tests)
+    set_tests_properties(amd-gpu-boost-worker PROPERTIES TIMEOUT 45)
 
     add_executable(candidate-pipe-protocol-tests
         tests/candidate_pipe_protocol_tests.cpp

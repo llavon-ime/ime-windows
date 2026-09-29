@@ -20,6 +20,10 @@
     {
       "name": "utfcpp",
       "platform": "windows"
+    },
+    {
+      "name": "vulkan-headers",
+      "platform": "windows"
     }
   ],
   "default-features": [

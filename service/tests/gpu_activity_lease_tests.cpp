@@ -1,39 +1,26 @@
 #include "service/gpu_activity_lease.hpp"
-#include "service/amd_gpu_clock_target.hpp"
+#include "service/amd_gpu_pci_address.hpp"
 
-#include <limits>
 #include <stdexcept>
 #include <vector>
 
 using llavon::service::GpuActivityLease;
 using Result = GpuActivityLease::Result;
-using llavon::service::AmdClockRange;
-using llavon::service::AmdClockTargetError;
-using llavon::service::amd_gpu_clock_target;
+using llavon::service::amd_pci_address;
+using llavon::service::AmdPciAddress;
 using namespace std::chrono_literals;
 
-constexpr AmdClockRange min_range{500, 3000, 10};
-constexpr AmdClockRange max_range{1000, 4000, 10};
-static_assert(amd_gpu_clock_target(min_range, max_range, 500, 2500).value() == 2000);
-static_assert(amd_gpu_clock_target(min_range, max_range, 500, 4000).value() == 2370);
-static_assert(amd_gpu_clock_target(min_range, max_range, 2500, 2500).value() == 2500);
-static_assert(amd_gpu_clock_target(min_range, max_range, 2490, 2500).value() == 2490);
-static_assert(amd_gpu_clock_target({0, 3000, 1}, max_range, 0, 2500).value() == 1875);
-// Zero and positive offsets must never be mistaken for an absolute MHz ceiling.
-static_assert(amd_gpu_clock_target(min_range, {-1000, 1000, 10}, 500, 0).error() ==
-              AmdClockTargetError::offset_or_unknown_maximum);
-static_assert(amd_gpu_clock_target(min_range, {-1000, 1000, 10}, 500, 900).error() ==
-              AmdClockTargetError::offset_or_unknown_maximum);
-static_assert(amd_gpu_clock_target(min_range, {-1000, 1000, 10}, 500, -200).error() ==
-              AmdClockTargetError::offset_or_unknown_maximum);
-static_assert(!amd_gpu_clock_target({500, 3000, 0}, max_range, 500, 2500));
-static_assert(!amd_gpu_clock_target({3000, 500, 10}, max_range, 500, 2500));
-static_assert(!amd_gpu_clock_target(min_range, max_range, 499, 2500));
-static_assert(!amd_gpu_clock_target(min_range, max_range, 500, 4001));
-constexpr auto int_max = std::numeric_limits<std::int32_t>::max();
-static_assert(amd_gpu_clock_target({1, int_max, 1}, {1, int_max, 1}, 1, int_max).value() ==
-              1610612735);
-
+static_assert(amd_pci_address("0000:65:00.0").value() == AmdPciAddress{101, 0, 0});
+static_assert(amd_pci_address("0000:ff:1f.7").value() == AmdPciAddress{255, 31, 7});
+static_assert(!amd_pci_address("0001:65:00.0"));
+static_assert(!amd_pci_address("0000:100:00.0"));
+static_assert(!amd_pci_address("0000:65:20.0"));
+static_assert(!amd_pci_address("0000:65:00.8"));
+static_assert(!amd_pci_address("0000:65:00.0extra"));
+static_assert(!amd_pci_address("0000::00.0"));
+static_assert(!amd_pci_address("0000:65:00"));
+static_assert(!amd_pci_address("0000:gg:00.0"));
+static_assert(!amd_pci_address(""));
 int main() {
     // Repeated keys renew one lease; stopping the service releases it even if
     // its io_context was stopped before the idle timer could run.
