@@ -81,6 +81,7 @@ private:
     std::function<void()> close_lora_dialog_;
     bool collect_custom_names(std::vector<CustomNameEntry>& entries) const;
     const std::vector<std::u16string>& lookup_bopomofo(char32_t character) const;
+    void preserve_settings_scroll_position();
     void begin_update_check();
     void apply_update_result(UpdateCheckResult result);
     void begin_update_install();
@@ -106,6 +107,7 @@ private:
     HWND island_window_ = nullptr;
     winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Grid shell_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::ScrollViewer settings_scroll_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Grid history_picker_overlay_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::ContentControl history_picker_tree_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::ScrollViewer history_picker_graph_view_{nullptr};
