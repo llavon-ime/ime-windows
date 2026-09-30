@@ -249,9 +249,13 @@ void TrayIcon::show_context_menu(POINT location) {
     }
     AppendMenuW(menu, MF_STRING | MF_DEFAULT, open_settings_command, L"開啟設定");
     AppendMenuW(menu, MF_STRING, open_debugger_command, L"開啟偵錯器");
+    SetWindowPos(window_, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     SetForegroundWindow(window_);
     const UINT command = TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, location.x, location.y, 0, window_, nullptr);
+    SetWindowPos(window_, HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     DestroyMenu(menu);
     if (command == open_settings_command) {
         open_settings();
