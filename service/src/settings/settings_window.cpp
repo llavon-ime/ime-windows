@@ -1241,6 +1241,7 @@ void SettingsWindow::show_lora_training_dialog() {
         TextBlock strength_description{nullptr};
         ToggleSwitch only_selected_sentences{nullptr};
         ToggleSwitch train_until_remembered{nullptr};
+        ToggleSwitch only_train_incorrect{nullptr};
         ToggleSwitch stabilize_intruders{nullptr};
         StackPanel advanced_settings{nullptr};
         TextBox rank{nullptr};
@@ -1571,6 +1572,7 @@ void SettingsWindow::show_lora_training_dialog() {
     state->strength_description = named<TextBlock>(dialog_root, L"StrengthDescription");
     state->only_selected_sentences = named<ToggleSwitch>(dialog_root, L"OnlySelectedSentences");
     state->train_until_remembered = named<ToggleSwitch>(dialog_root, L"TrainUntilRemembered");
+    state->only_train_incorrect = named<ToggleSwitch>(dialog_root, L"OnlyTrainIncorrect");
     state->stabilize_intruders = named<ToggleSwitch>(dialog_root, L"StabilizeIntruders");
     state->advanced_settings = named<StackPanel>(dialog_root, L"AdvancedTrainingSettings");
     state->rank = named<TextBox>(dialog_root, L"Rank");
@@ -2177,6 +2179,7 @@ void SettingsWindow::show_lora_training_dialog() {
                     .strength = state->training_strength.SelectedIndex(),
                     .only_manually_selected = state->only_selected_sentences.IsOn() ? 1 : 0,
                     .train_until_remembered = state->train_until_remembered.IsOn() ? 1 : 0,
+                    .only_train_incorrect = state->only_train_incorrect.IsOn() ? 1 : 0,
                     .base_run_id = state->base_run_ids[
                         static_cast<std::size_t>(state->training_base.SelectedIndex())],
                     .stabilize_intruders = state->stabilize_intruders.IsOn() ? 1 : 0,

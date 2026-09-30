@@ -638,6 +638,7 @@ bool LoraTrainingManager::start_training_async(
         const auto strength = options.strength;
         const bool only_selected = options.only_manually_selected;
         const bool train_until_remembered = options.train_until_remembered;
+        const bool only_train_incorrect = options.only_train_incorrect;
         const bool stabilize_intruders = options.stabilize_intruders;
         const auto base_run_id = options.base_run_id;
         options = LoraTrainingOptions{};
@@ -648,6 +649,7 @@ bool LoraTrainingManager::start_training_async(
         options.epochs = preset.epochs;
         options.only_manually_selected = only_selected;
         options.train_until_remembered = train_until_remembered;
+        options.only_train_incorrect = only_train_incorrect;
         options.stabilize_intruders = stabilize_intruders;
     }
     if (options.train_until_remembered &&
@@ -1224,7 +1226,9 @@ int LoraTrainingManager::run_process(
                         }
                     }
                 }
-            } else if (parse_training_progress && line.starts_with("remembered=")) {
+            } else if (parse_training_progress &&
+                       (line.starts_with("remembered=") ||
+                        line.starts_with("only-train-incorrect="))) {
                 set_status(LoraOperationStage::training, 0.05, to_utf16(line));
             }
         }
@@ -1343,6 +1347,7 @@ void LoraTrainingManager::training_worker() {
             std::int32_t preset_version;
             bool only_manually_selected;
             bool train_until_remembered;
+            bool only_train_incorrect;
             bool stabilize_intruders;
             std::int64_t parent_id;
             std::string base_model_revision;
@@ -1384,6 +1389,7 @@ void LoraTrainingManager::training_worker() {
             .preset_version = 1,
             .only_manually_selected = pending_options_.only_manually_selected,
             .train_until_remembered = pending_options_.train_until_remembered,
+            .only_train_incorrect = pending_options_.only_train_incorrect,
             .stabilize_intruders = pending_options_.stabilize_intruders,
             .parent_id = previous_run ? previous_run->id : 0,
             .base_model_revision = revision,
@@ -1462,6 +1468,9 @@ void LoraTrainingManager::training_worker() {
     }
     if (pending_options_.train_until_remembered) {
         train_arguments.push_back(L"--train-until-remembered");
+    }
+    if (pending_options_.only_train_incorrect) {
+        train_arguments.push_back(L"--only-train-incorrect");
     }
     if (!pending_options_.shuffle) train_arguments.push_back(L"--no-shuffle");
     run_process(trainer, train_arguments, true);

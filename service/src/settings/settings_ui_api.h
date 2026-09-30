@@ -140,6 +140,7 @@ struct llavon_settings_lora_options {
     int32_t strength;
     int32_t only_manually_selected;
     int32_t train_until_remembered;
+    int32_t only_train_incorrect;
     int64_t base_run_id;
     int32_t stabilize_intruders;
 };

@@ -55,6 +55,7 @@ struct LoraTrainingOptions {
     LoraTrainingStrength strength = LoraTrainingStrength::low;
     bool only_manually_selected = true;
     bool train_until_remembered = false;
+    bool only_train_incorrect = false;
     bool stabilize_intruders = true;
 };
 
