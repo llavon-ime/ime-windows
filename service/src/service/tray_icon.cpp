@@ -18,6 +18,10 @@ constexpr UINT open_settings_command = 1;
 constexpr UINT open_debugger_command = 2;
 constexpr UINT_PTR tray_retry_timer = 1;
 constexpr UINT tray_retry_interval_ms = 2000;
+constexpr DWORD tray_window_band = 16;
+
+using CreateWindowInBandFunction = HWND(WINAPI*)(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int,
+                                                  int, int, HWND, HMENU, HINSTANCE, void*, DWORD);
 
 // Stable identity for the notification-area icon across Explorer restarts.
 constexpr GUID tray_icon_guid = {
@@ -56,8 +60,20 @@ bool TrayIcon::create(HINSTANCE instance, OpenSettingsCallback open_settings,
     show_input_mode_menu_message_ = RegisterWindowMessageW(L"LlavonIme.ShowInputModeMenu");
     shutdown_message_ = RegisterWindowMessageW(L"LlavonIme.Shutdown");
     safe_shutdown_message_ = RegisterWindowMessageW(L"LlavonIme.SafeShutdownV2");
-    window_ = CreateWindowExW(WS_EX_TOOLWINDOW, tray_window_class, L"Llavon IME Service",
-                              WS_OVERLAPPED, 0, 0, 0, 0, nullptr, nullptr, instance_, this);
+    const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    const auto create_window_in_band = user32
+        ? reinterpret_cast<CreateWindowInBandFunction>(
+              GetProcAddress(user32, "CreateWindowInBand"))
+        : nullptr;
+    if (create_window_in_band) {
+        window_ = create_window_in_band(
+            WS_EX_TOOLWINDOW, tray_window_class, L"Llavon IME Service", WS_OVERLAPPED,
+            0, 0, 0, 0, nullptr, nullptr, instance_, this, tray_window_band);
+    }
+    if (!window_) {
+        window_ = CreateWindowExW(WS_EX_TOOLWINDOW, tray_window_class, L"Llavon IME Service",
+                                  WS_OVERLAPPED, 0, 0, 0, 0, nullptr, nullptr, instance_, this);
+    }
     notification_window_.store(window_, std::memory_order_release);
     if (!window_) {
         return false;
@@ -249,13 +265,9 @@ void TrayIcon::show_context_menu(POINT location) {
     }
     AppendMenuW(menu, MF_STRING | MF_DEFAULT, open_settings_command, L"開啟設定");
     AppendMenuW(menu, MF_STRING, open_debugger_command, L"開啟偵錯器");
-    SetWindowPos(window_, HWND_TOPMOST, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     SetForegroundWindow(window_);
     const UINT command = TrackPopupMenu(
         menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, location.x, location.y, 0, window_, nullptr);
-    SetWindowPos(window_, HWND_NOTOPMOST, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     DestroyMenu(menu);
     if (command == open_settings_command) {
         open_settings();
