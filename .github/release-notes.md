@@ -4,4 +4,4 @@
 
 **`llavon-ime-*-windows.msi` 僅供特殊需求使用。**
 
-如果下載很慢 建議下載 cloudflare warp 以加速網路，中華電信連 github 不知道有什麼毛病
+如果下載很慢 建議下載 cloudflare warp 以加速網路，中華電信連 github 不知道有什麼毛病，中華電信拉完了
