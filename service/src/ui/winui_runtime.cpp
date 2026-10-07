@@ -1,5 +1,4 @@
 #include "winui_runtime.hpp"
-#include "settings_resources.h"
 #include "xaml_resource.hpp"
 
 #include <windows.h>
@@ -17,13 +16,13 @@
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 extern "C" HRESULT __stdcall WindowsAppRuntime_EnsureIsLoaded();
 
-namespace llavon::settings {
+namespace llavon::ui {
 namespace {
 using namespace winrt::Microsoft::UI::Xaml;
 
 struct IslandApplication : ApplicationT<IslandApplication, Markup::IXamlMetadataProvider> {
     IslandApplication() {
-        // Loose settings XAML is embedded as RCDATA. Only the native control
+        // Loose UI XAML is embedded as RCDATA. Only the native control
         // library needs a PRI; resolve it explicitly without taking ownership
         // of the host executable's default resources.pri.
         ResourceManagerRequested([](const auto&, const ResourceManagerRequestedEventArgs& args) {
@@ -65,6 +64,9 @@ struct WinuiRuntime::State {
         // ShutdownQueue pumps pending work and raises the framework shutdown
         // notifications before the STA and its activation context disappear.
         try {
+            // Activation factories are cached separately in each DLL. Release
+            // this module's factories while the XAML Application is still alive.
+            winrt::clear_factory_cache();
             if (manager) {
                 manager.Close();
                 manager = nullptr;
@@ -75,7 +77,7 @@ struct WinuiRuntime::State {
                 dispatcher = nullptr;
             }
         } catch (...) {
-            OutputDebugStringW(L"[settings-ui] WinUI dispatcher shutdown failed\n");
+            OutputDebugStringW(L"[winui] WinUI dispatcher shutdown failed\n");
         }
         if (activation_cookie) DeactivateActCtx(0, activation_cookie);
         if (activation_context != INVALID_HANDLE_VALUE) ReleaseActCtx(activation_context);
@@ -103,8 +105,6 @@ WinuiRuntime::WinuiRuntime() : state_(std::make_unique<State>()) {
         state_->manager = Hosting::WindowsXamlManager::InitializeForCurrentThread();
         stage = L"control resources";
         state_->application.Resources().MergedDictionaries().Append(Controls::XamlControlsResources());
-        state_->application.Resources().MergedDictionaries().Append(
-            load_xaml_resource(IDR_SETTINGS_THEME_XAML).as<ResourceDictionary>());
     } catch (const winrt::hresult_error& error) {
         throw winrt::hresult_error(error.code(), winrt::hstring(stage) + L": " + error.message());
     }
@@ -112,4 +112,4 @@ WinuiRuntime::WinuiRuntime() : state_(std::make_unique<State>()) {
 
 WinuiRuntime::~WinuiRuntime() = default;
 
-} // namespace llavon::settings
+} // namespace llavon::ui

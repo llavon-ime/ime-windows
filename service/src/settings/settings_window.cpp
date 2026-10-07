@@ -3,7 +3,7 @@
 #include "../resource.h"
 #include "settings_resources.h"
 #include "lora_history_tree.hpp"
-#include "xaml_resource.hpp"
+#include "../ui/xaml_resource.hpp"
 #include "../service/lora_training_presets.hpp"
 #include "../service/lora_dataset_builder.hpp"
 
@@ -319,7 +319,7 @@ void render_training_item(const TrainingDataOption& item, const Grid& root,
         (context_characters && context_characters->size() > maximum_context_characters) ||
         (characters && characters->size() > maximum_answer_characters);
     if (truncated) {
-        const auto tooltip = load_xaml_resource(IDR_LORA_ITEM_TOOLTIP_XAML).as<ToolTip>();
+        const auto tooltip = ui::load_xaml_resource(IDR_LORA_ITEM_TOOLTIP_XAML).as<ToolTip>();
         const auto tooltip_root = tooltip.as<FrameworkElement>();
         const auto full_context = named<TextBlock>(tooltip_root, L"FullContext");
         full_context.Text(to_hstring(item.context));
@@ -361,7 +361,7 @@ void render_training_item(const TrainingDataOption& item, const Grid& root,
                 line.Orientation(Orientation::Horizontal);
                 lines.Children().Append(line);
             }
-            auto cell = load_xaml_resource(IDR_LORA_RUBY_CELL_XAML).as<Grid>();
+            auto cell = ui::load_xaml_resource(IDR_LORA_RUBY_CELL_XAML).as<Grid>();
             const bool ellipsis = omitted && index == 0;
             if (ellipsis) {
                 named<TextBlock>(cell, L"Character").Text(L"…");
@@ -686,7 +686,7 @@ void SettingsWindow::initialize_xaml_island() {
 }
 
 void SettingsWindow::build_page() {
-    shell_ = load_xaml_resource(IDR_SETTINGS_PAGE_XAML).as<Grid>();
+    shell_ = ui::load_xaml_resource(IDR_SETTINGS_PAGE_XAML).as<Grid>();
 
     model_path_ = named<TextBox>(shell_, L"ModelPath");
     model_path_.Text(to_hstring(configuration_.model_path));
@@ -1308,7 +1308,7 @@ void SettingsWindow::show_lora_training_dialog() {
     state->items = std::move(configuration_.training_items);
     state->deleted_items.assign(state->items.size(), false);
     state->active_count = state->items.size();
-    state->overlay = load_xaml_resource(IDR_LORA_DIALOG_XAML).as<Grid>();
+    state->overlay = ui::load_xaml_resource(IDR_LORA_DIALOG_XAML).as<Grid>();
     const auto dialog_root = state->overlay.as<FrameworkElement>();
     state->content = named<ContentControl>(dialog_root, L"DialogContent");
     state->title = named<TextBlock>(dialog_root, L"DialogTitle");
@@ -1399,7 +1399,7 @@ void SettingsWindow::show_lora_training_dialog() {
         state->training_data_button.IsEnabled(false);
     } else {
         state->training_data_page =
-            load_xaml_resource(IDR_LORA_SELECTION_XAML).as<StackPanel>();
+            ui::load_xaml_resource(IDR_LORA_SELECTION_XAML).as<StackPanel>();
         state->training_items =
             named<ListView>(state->training_data_page, L"TrainingItems");
         const bool dark_selection = system_uses_dark_theme();
@@ -1467,7 +1467,7 @@ void SettingsWindow::show_lora_training_dialog() {
                 row.Children().Append(remove);
                 FrameworkElement content{nullptr};
                 try {
-                    auto root = load_xaml_resource(
+                    auto root = ui::load_xaml_resource(
                         IDR_LORA_TRAINING_ITEM_XAML).as<Grid>();
                     render_training_item(item, root, root, dark_selection);
                     Automation::AutomationProperties::SetName(
@@ -2289,7 +2289,7 @@ void SettingsWindow::add_custom_name_row(
     }
 
     CustomNameRow row;
-    row.container = load_xaml_resource(IDR_CUSTOM_NAME_ROW_XAML).as<Grid>();
+    row.container = ui::load_xaml_resource(IDR_CUSTOM_NAME_ROW_XAML).as<Grid>();
     row.name = named<TextBox>(row.container, L"Name");
     row.name.Text(to_hstring(name));
     row.pronunciations = named<StackPanel>(row.container, L"Pronunciations");
@@ -2362,7 +2362,7 @@ void SettingsWindow::refresh_custom_name_pronunciations(const TextBox& name_box)
     const auto characters = split_characters(name);
     if (!characters) {
         row->missing_pronunciation = true;
-        auto warning = load_xaml_resource(IDR_CUSTOM_NAME_WARNING_XAML).as<TextBlock>();
+        auto warning = ui::load_xaml_resource(IDR_CUSTOM_NAME_WARNING_XAML).as<TextBlock>();
         warning.Text(L"名字含有無效字元。");
         row->pronunciations.Children().Append(warning);
         update_custom_names_save_state();
@@ -2376,13 +2376,13 @@ void SettingsWindow::refresh_custom_name_pronunciations(const TextBox& name_box)
             row->missing_pronunciation = true;
             const std::u16string missing = u"「" + character_text + u"」查無注音";
             const auto missing_text = to_hstring(missing);
-            auto warning = load_xaml_resource(IDR_CUSTOM_NAME_WARNING_XAML).as<TextBlock>();
+            auto warning = ui::load_xaml_resource(IDR_CUSTOM_NAME_WARNING_XAML).as<TextBlock>();
             warning.Text(missing_text);
             row->pronunciations.Children().Append(warning);
             continue;
         }
 
-        ComboBox choice = load_xaml_resource(IDR_CUSTOM_NAME_READING_XAML).as<ComboBox>();
+        ComboBox choice = ui::load_xaml_resource(IDR_CUSTOM_NAME_READING_XAML).as<ComboBox>();
         choice.Header(winrt::box_value(to_hstring(character_text)));
         for (const auto& reading : readings) {
             choice.Items().Append(winrt::box_value(to_hstring(reading)));

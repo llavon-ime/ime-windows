@@ -34,6 +34,19 @@ constexpr const wchar_t* kModelPathEnv = L"LLAVON_IME_MODEL_PATH";
 constexpr const wchar_t* kTablesDirEnv = L"LLAVON_IME_TABLES_DIR";
 constexpr const wchar_t* kServiceInstanceMutexName = L"Local\\LlavonImeServiceInstance";
 
+// Keep WinUI alive while the service can reopen either UI client. Its
+// process-wide control resources cannot be initialized again after shutdown.
+struct UiRuntimeShutdown final {
+    ~UiRuntimeShutdown() {
+        HMODULE module = nullptr;
+        if (!GetModuleHandleExW(0, L"llavon-ime-ui-runtime.dll", &module)) return;
+        using Shutdown = std::int32_t (*)();
+        const auto shutdown = reinterpret_cast<Shutdown>(GetProcAddress(module, "llavon_ui_thread_shutdown"));
+        if (shutdown) shutdown();
+        FreeLibrary(module);
+    }
+};
+
 class ServiceInstanceLock {
 public:
     ServiceInstanceLock() {
@@ -256,6 +269,7 @@ int main(int argc, char* argv[]) {
         auto core = std::make_shared<llavon::ime::core::Core>(config);
         const auto active_inference = core->inference_runtime_info();
 
+        UiRuntimeShutdown ui_runtime_shutdown;
         llavon::service::CandidateUiLoader candidate_ui;
         auto custom_names =
             std::make_shared<llavon::service::CustomNameMatcher>(user_settings.custom_names);

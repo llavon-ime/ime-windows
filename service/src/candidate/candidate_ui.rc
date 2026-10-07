@@ -1,0 +1,5 @@
+#include "candidate_resources.h"
+
+IDR_CANDIDATE_PAGE_XAML RCDATA "ui/candidate_page.xaml"
+IDR_CANDIDATE_ITEM_XAML RCDATA "ui/candidate_item.xaml"
+IDR_CANDIDATE_THEME_XAML RCDATA "ui/theme.xaml"

@@ -245,7 +245,7 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_model_preparation_v2
     llavon_settings_prepare_model_callback callback, void* context,
     const llavon_char16_t* base_model_path);
 
-// Configures the major update notification setting before the UI thread starts.
+// Configures the major update notification setting before the settings UI starts.
 LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_update_notifications(
     int32_t enabled,
     llavon_settings_save_update_notifications_callback save_callback,
@@ -256,7 +256,7 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_gpu_boost(
     llavon_settings_save_gpu_boost_callback save_callback,
     void* save_context);
 
-// Starts the settings UI's dedicated STA thread. Calling this function more
+// Acquires the shared WinUI STA for the settings UI. Calling this function more
 // than once is safe. Returns zero on success.
 LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_start(void);
 
@@ -271,8 +271,8 @@ LLAVON_SETTINGS_UI_API void llavon_settings_ui_set_pending_count(size_t count);
 LLAVON_SETTINGS_UI_API void llavon_settings_ui_show_context_menu(
     int32_t screen_x, int32_t screen_y);
 
-// Stops and joins the dedicated UI thread. Returns zero when the thread has
-// completed its XAML shutdown sequence.
+// Closes settings windows and releases its shared STA reference. The shared
+// framework remains available until service shutdown. Returns zero on success.
 LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_stop(void);
 
 #ifdef __cplusplus

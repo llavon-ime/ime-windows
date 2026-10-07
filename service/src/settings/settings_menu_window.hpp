@@ -24,7 +24,6 @@ public:
     bool show(HINSTANCE instance, POINT anchor);
     void hide() const noexcept;
     void destroy() noexcept;
-    bool pretranslate(MSG& message) const;
 
 private:
     static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,

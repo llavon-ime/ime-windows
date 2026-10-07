@@ -2,9 +2,9 @@
 
 #include <memory>
 
-namespace llavon::settings {
+namespace llavon::ui {
 
-// Lives on the settings STA, outside all windows and XAML objects on that STA.
+// Lives on a UI STA, outside all windows and XAML objects on that STA.
 class WinuiRuntime final {
 public:
     WinuiRuntime();
@@ -17,4 +17,4 @@ private:
     std::unique_ptr<State> state_;
 };
 
-} // namespace llavon::settings
+} // namespace llavon::ui

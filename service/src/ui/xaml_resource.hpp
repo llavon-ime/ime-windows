@@ -6,7 +6,7 @@
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
-namespace llavon::settings {
+namespace llavon::ui {
 
 inline winrt::Windows::Foundation::IInspectable load_xaml_resource(int id) {
     const auto module = reinterpret_cast<HINSTANCE>(&__ImageBase);
@@ -21,4 +21,4 @@ inline winrt::Windows::Foundation::IInspectable load_xaml_resource(int id) {
         winrt::to_hstring(std::string_view(bytes, length)));
 }
 
-} // namespace llavon::settings
+} // namespace llavon::ui

@@ -1,0 +1,35 @@
+<Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Background="{ThemeResource CandidateSurfaceBrush}"
+        BorderBrush="{ThemeResource CandidateBorderBrush}"
+        BorderThickness="1" CornerRadius="10" UseLayoutRounding="True"
+        IsHitTestVisible="False">
+  <Border.Resources>
+    <DataTemplate x:Key="CandidateColumnTemplate">
+      <StackPanel Style="{StaticResource CandidateColumnStyle}" />
+    </DataTemplate>
+  </Border.Resources>
+  <StackPanel>
+    <StackPanel x:Name="CandidateColumns" Orientation="Horizontal" Spacing="12" Margin="7,7,7,0" />
+    <Border BorderThickness="0,1,0,0" BorderBrush="{ThemeResource CandidateDividerBrush}"
+            Margin="0,3,0,0" Padding="6,4,6,4" Height="31">
+      <Grid>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Spacing="6">
+          <TextBlock x:Name="PreviousPageIcon" Text="&#x25B2;" FontFamily="Segoe UI Symbol"
+                     FontSize="9.5" Width="11" VerticalAlignment="Center"
+                     Foreground="{ThemeResource CandidateTextBrush}" />
+          <TextBlock x:Name="NextPageIcon" Text="&#x25BC;" FontFamily="Segoe UI Symbol"
+                     FontSize="9.5" Width="11" VerticalAlignment="Center"
+                     Foreground="{ThemeResource CandidateTextBrush}" />
+        </StackPanel>
+        <Border Width="16" Height="16" Margin="0,0,6,0" CornerRadius="3"
+                BorderThickness="1" BorderBrush="{ThemeResource CandidateTextBrush}"
+                HorizontalAlignment="Right">
+          <TextBlock Text="&#x2665;" FontFamily="Segoe UI Symbol" FontSize="9.5"
+                     Foreground="{ThemeResource CandidateTextBrush}"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Border>
+      </Grid>
+    </Border>
+  </StackPanel>
+</Border>

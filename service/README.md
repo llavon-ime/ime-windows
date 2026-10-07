@@ -8,9 +8,8 @@ The service also owns the interactive per-user process shell:
 - `llavon-ime-service.exe` keeps the named-pipe server on an inference worker
   while its main thread owns the notification-area icon.
 - `llavon-ime-settings-ui.dll` is loaded on demand from the executable
-  directory. It owns a dedicated STA thread, Win32 message loop, settings HWND,
-  and inbox `Windows.UI.Xaml` island.
-- Settings UI calls are queued to the DLL's STA thread and never execute XAML
+  directory. It owns the settings HWND and WinUI 3 `Microsoft.UI.Xaml` island.
+- Settings UI calls are queued to the shared WinUI STA and never execute XAML
   or model work on the inference worker.
 - The model path and inference-device setting are stored in
   `%LOCALAPPDATA%\Llavon IME\settings.json`. The service reads it at process
@@ -64,7 +63,7 @@ The service also owns the interactive per-user process shell:
   Performance verification must include 250 ms request spacing and resumption
   after more than two seconds idle, not only continuous token throughput.
 - `llavon-ime-candidate-ui.dll` is loaded on the first candidate presentation.
-  It owns one dedicated STA thread, one candidate HWND, and its own XAML island.
+  It owns one candidate HWND and its own WinUI 3 XAML island on the shared STA.
 - Candidate presentation snapshots arrive through the independent
   `\\.\pipe\llavon-ime-candidate-ui` pipe. This transport does not share the
   prediction pipe's connection or protocol.
@@ -94,16 +93,21 @@ The service also owns the interactive per-user process shell:
   other apps are left running. Windows may need a restart if an app still holds
   the old TSF DLL.
 
-The settings and candidate modules are intentionally separate DLLs rather than
-additional executables. They do not share an HWND or STA thread.
+The settings and candidate modules are separate DLLs with separate HWNDs.
+`llavon-ime-ui-runtime.dll` owns their common STA, Win32 message loop, dispatcher,
+and process-wide WinUI Application. Each UI client acquires a runtime reference;
+closing one client leaves the other alive. The framework stays available for
+reopening clients until the service exits, when the host shuts down the runtime
+after both clients have closed.
 
 Source code is divided by runtime responsibility rather than operating-system
 name:
 
 - `src/service/`: resident EXE responsibilities, including prediction IPC,
   tray ownership, and loading UI modules.
-- `src/settings/`: the settings DLL, its STA runtime, HWND, and XAML island.
-- `src/candidate/`: the candidate UI DLL, its STA runtime, single HWND, and XAML
+- `src/ui/`: the shared WinUI STA runtime and XAML resource helpers.
+- `src/settings/`: the settings DLL, its UI client, HWND, and XAML island.
+- `src/candidate/`: the candidate UI DLL, its UI client, single HWND, and XAML
   island.
 - `src/service/debug/`: the thin adapter between `ime-core::Logger` and the
   separately installed `llavon::debug-client` producer.
@@ -299,6 +303,18 @@ root and `LLAVON_IME_LORA_CLI_PATH` overrides the trainer executable.
 
 ## Build
 
+The candidate and settings DLLs both host WinUI 3 `DesktopWindowXamlSource`
+islands on one shared STA thread. They share the activation, dispatcher, XAML
+metadata, and embedded-resource helpers in `src/ui`. Neither UI runs inside
+the application's TSF thread.
+
+Candidate UI changes belong in `src/candidate/ui/candidate_page.xaml`
+(columns and footer), `candidate_item.xaml` (each candidate row), and
+`theme.xaml` (fonts, column widths, light/dark/high-contrast brushes). These
+files are embedded as RCDATA by `candidate_ui.rc`; rebuild the DLL after
+editing them. C++ updates candidate text, selection, numbering, and page state;
+the popup measures the XAML tree to obtain its native size in the current DPI.
+
 Configure and build the complete Windows project from the repository root:
 
 ```powershell
@@ -310,3 +326,13 @@ cmake --build --preset windows
 The top-level project adds `ime-core` and this component to one CMake build
 graph backed by one vcpkg manifest. Vulkan support is enabled by default. CUDA
 support is optional and requires configuring with `LLAVON_IME_ENABLE_CUDA=ON`.
+
+On an interactive Windows desktop, enable the optional candidate/settings
+integration tests to check both startup orders, non-activating presentation,
+column sizing, monitor-edge placement, hide/show, and UI client restart:
+
+```powershell
+cmake --preset windows -DLLAVON_IME_ENABLE_UI_TESTS=ON
+cmake --build build/windows --config Release --target candidate-ui-tests candidate-pipe-protocol-tests
+ctest --test-dir build/windows -C Release -R 'candidate-(ui|pipe-protocol)' --output-on-failure
+```

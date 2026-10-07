@@ -1,6 +1,7 @@
 #include "candidate_ui_api.h"
 
 #include "candidate_window.hpp"
+#include "../ui/ui_thread.hpp"
 
 #include <windows.h>
 
@@ -8,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -23,8 +25,6 @@ namespace {
 constexpr wchar_t command_window_class[] = L"LlavonImeCandidateUiCommandWindow";
 constexpr UINT present_message = WM_APP + 1;
 constexpr UINT hide_message = WM_APP + 2;
-constexpr UINT stop_message = WM_APP + 3;
-constexpr DWORD shutdown_timeout_ms = 10000;
 constexpr uint32_t maximum_candidate_count = 36;
 constexpr uint32_t maximum_candidate_length = 256;
 constexpr uint32_t maximum_layout_columns = 4;
@@ -46,40 +46,21 @@ class Runtime final {
 public:
     int32_t start() {
         std::lock_guard lock(lifecycle_mutex_);
-        if (thread_) {
+        if (connected_)
             return 0;
+        const auto result = llavon_ui_thread_acquire();
+        if (result != 0)
+            return result;
+        connected_ = true;
+        const auto initialized = llavon_ui_thread_invoke(
+            [](void* context) { static_cast<Runtime*>(context)->initialize_on_thread(); }, this);
+        if (initialized != 0) {
+            llavon_ui_thread_invoke([](void* context) { static_cast<Runtime*>(context)->destroy_on_thread(); }, this);
+            if (llavon_ui_thread_release() == 0)
+                connected_ = false;
         }
-
-        ready_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!ready_event_) {
-            return static_cast<int32_t>(GetLastError());
-        }
-
-        start_result_.store(ERROR_GEN_FAILURE, std::memory_order_relaxed);
-        thread_ = CreateThread(nullptr, 0, thread_entry, this, 0, nullptr);
-        if (!thread_) {
-            const DWORD error = GetLastError();
-            CloseHandle(ready_event_);
-            ready_event_ = nullptr;
-            return static_cast<int32_t>(error);
-        }
-
-        const DWORD wait_result = WaitForSingleObject(ready_event_, INFINITE);
-        CloseHandle(ready_event_);
-        ready_event_ = nullptr;
-        if (wait_result != WAIT_OBJECT_0) {
-            return static_cast<int32_t>(GetLastError());
-        }
-
-        const int32_t result = start_result_.load(std::memory_order_relaxed);
-        if (result != 0) {
-            WaitForSingleObject(thread_, shutdown_timeout_ms);
-            CloseHandle(thread_);
-            thread_ = nullptr;
-        }
-        return result;
+        return initialized;
     }
-
     int32_t present(const llavon_candidate_ui_presentation* source) {
         Presentation presentation;
         const int32_t copy_result = copy_presentation(source, presentation);
@@ -104,51 +85,40 @@ public:
 
     int32_t stop() {
         std::lock_guard lock(lifecycle_mutex_);
-        if (!thread_) {
+        if (!connected_)
             return 0;
-        }
-
         {
             std::lock_guard presentation_lock(presentation_mutex_);
             pending_presentation_.reset();
         }
-        post(stop_message);
-
-        const DWORD wait_result = WaitForSingleObject(thread_, shutdown_timeout_ms);
-        if (wait_result != WAIT_OBJECT_0) {
-            return wait_result == WAIT_TIMEOUT ? static_cast<int32_t>(ERROR_TIMEOUT)
-                                               : static_cast<int32_t>(GetLastError());
-        }
-
-        CloseHandle(thread_);
-        thread_ = nullptr;
-        return 0;
+        const auto destroyed =
+            llavon_ui_thread_invoke([](void* context) { static_cast<Runtime*>(context)->destroy_on_thread(); }, this);
+        if (destroyed != 0)
+            return destroyed;
+        const auto result = llavon_ui_thread_release();
+        if (result == 0)
+            connected_ = false;
+        return result;
     }
 
 private:
-    static int32_t copy_presentation(
-        const llavon_candidate_ui_presentation* source,
-        Presentation& destination) {
-        constexpr std::size_t legacy_presentation_size =
-            offsetof(llavon_candidate_ui_presentation, anchor_top);
-        constexpr std::size_t anchor_top_end =
-            offsetof(llavon_candidate_ui_presentation, anchor_top) + sizeof(int32_t);
-        if (!source || source->struct_size < legacy_presentation_size ||
-            source->candidate_count == 0 || source->candidate_count > maximum_candidate_count ||
-            !source->candidates || source->selection_index >= source->candidate_count ||
-            source->layout_columns == 0 || source->layout_columns > maximum_layout_columns ||
-            source->number_column >= source->layout_columns) {
+    static int32_t copy_presentation(const llavon_candidate_ui_presentation* source, Presentation& destination) {
+        constexpr std::size_t legacy_presentation_size = offsetof(llavon_candidate_ui_presentation, anchor_top);
+        constexpr std::size_t anchor_top_end = offsetof(llavon_candidate_ui_presentation, anchor_top) + sizeof(int32_t);
+        if (!source || source->struct_size < legacy_presentation_size || source->candidate_count == 0 ||
+            source->candidate_count > maximum_candidate_count || !source->candidates ||
+            source->selection_index >= source->candidate_count || source->layout_columns == 0 ||
+            source->layout_columns > maximum_layout_columns || source->number_column >= source->layout_columns) {
             return static_cast<int32_t>(ERROR_INVALID_PARAMETER);
         }
 
         try {
-            destination.owner_window = reinterpret_cast<HWND>(
-                static_cast<ULONG_PTR>(source->owner_window));
+            destination.owner_window = reinterpret_cast<HWND>(static_cast<ULONG_PTR>(source->owner_window));
             destination.anchor_x = source->anchor_x;
             destination.anchor_y = source->anchor_y;
-            destination.anchor_top =
-                source->struct_size >= anchor_top_end ? std::min(source->anchor_top, source->anchor_y)
-                                                      : source->anchor_y;
+            destination.anchor_top = source->struct_size >= anchor_top_end
+                                         ? std::min(source->anchor_top, source->anchor_y)
+                                         : source->anchor_y;
             destination.selection_index = source->selection_index;
             destination.layout_columns = source->layout_columns;
             destination.number_column = source->number_column;
@@ -168,70 +138,47 @@ private:
         return 0;
     }
 
-    static DWORD WINAPI thread_entry(void* context) noexcept {
-        return static_cast<Runtime*>(context)->thread_main();
+    void initialize_on_thread() {
+        using namespace winrt::Microsoft::UI::Xaml;
+        theme_ = ui::load_xaml_resource(IDR_CANDIDATE_THEME_XAML).as<ResourceDictionary>();
+        Application::Current().Resources().MergedDictionaries().Append(theme_);
+        const HINSTANCE instance = reinterpret_cast<HINSTANCE>(&__ImageBase);
+        WNDCLASSEXW window_class{sizeof(window_class)};
+        window_class.lpfnWndProc = command_window_proc;
+        window_class.hInstance = instance;
+        window_class.lpszClassName = command_window_class;
+        if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            winrt::throw_last_error();
+        }
+        candidate_window_ = std::make_unique<CandidateWindow>();
+        const HWND command_window =
+            CreateWindowExW(0, command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
+        if (!command_window)
+            winrt::throw_last_error();
+        command_window_.store(command_window, std::memory_order_release);
     }
 
-    DWORD thread_main() noexcept {
-        bool apartment_initialized = false;
-        DWORD exit_code = ERROR_GEN_FAILURE;
-        try {
-            winrt::init_apartment(winrt::apartment_type::single_threaded);
-            apartment_initialized = true;
-
-            const HINSTANCE instance = reinterpret_cast<HINSTANCE>(&__ImageBase);
-            WNDCLASSEXW window_class{sizeof(window_class)};
-            window_class.lpfnWndProc = command_window_proc;
-            window_class.hInstance = instance;
-            window_class.lpszClassName = command_window_class;
-            if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-                throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
-            }
-
-            CandidateWindow candidate_window;
-            candidate_window_ = &candidate_window;
-            const HWND command_window = CreateWindowExW(
-                0, command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
-            if (!command_window) {
-                throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
-            }
-
-            command_window_.store(command_window, std::memory_order_release);
-            start_result_.store(0, std::memory_order_relaxed);
-            SetEvent(ready_event_);
-
+    void destroy_on_thread() {
+        const HWND command = command_window_.exchange(nullptr, std::memory_order_acq_rel);
+        if (command) {
+            DestroyWindow(command);
             MSG message{};
-            while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
-
-            candidate_window.destroy();
-            candidate_window_ = nullptr;
-            command_window_.store(nullptr, std::memory_order_release);
-            exit_code = 0;
-        } catch (const winrt::hresult_error& error) {
-            DebugSink::instance().send(L"ERROR", L"runtime failed: " + std::wstring(error.message()));
-            start_result_.store(static_cast<int32_t>(error.code().value), std::memory_order_relaxed);
-            if (ready_event_) {
-                SetEvent(ready_event_);
-            }
-        } catch (...) {
-            DebugSink::instance().send(L"ERROR", L"runtime failed with an unknown error");
-            start_result_.store(ERROR_GEN_FAILURE, std::memory_order_relaxed);
-            if (ready_event_) {
-                SetEvent(ready_event_);
+            while (PeekMessageW(&message, command, 0, 0, PM_REMOVE)) {
             }
         }
-
-        candidate_window_ = nullptr;
-        command_window_.store(nullptr, std::memory_order_release);
-        if (apartment_initialized) {
-            winrt::uninit_apartment();
+        candidate_window_.reset();
+        if (theme_) {
+            const auto dictionaries =
+                winrt::Microsoft::UI::Xaml::Application::Current().Resources().MergedDictionaries();
+            uint32_t index = 0;
+            if (dictionaries.IndexOf(theme_, index))
+                dictionaries.RemoveAt(index);
+            theme_ = nullptr;
         }
-        return exit_code;
+        UnregisterClassW(command_window_class, reinterpret_cast<HINSTANCE>(&__ImageBase));
+        UnregisterClassW(L"TSF_CandidatePopupWindow", reinterpret_cast<HINSTANCE>(&__ImageBase));
+        winrt::clear_factory_cache();
     }
-
     static LRESULT CALLBACK command_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
         Runtime* self = nullptr;
         if (message == WM_NCCREATE) {
@@ -246,21 +193,23 @@ private:
             return DefWindowProcW(window, message, wparam, lparam);
         }
         if (message == present_message) {
-            self->present_on_thread();
+            try {
+                self->present_on_thread();
+            } catch (const winrt::hresult_error& error) {
+                DebugSink::instance().send(L"ERROR", L"Presentation failed: " + std::wstring(error.message()));
+                if (self->candidate_window_)
+                    self->candidate_window_->hide();
+            } catch (...) {
+                DebugSink::instance().send(L"ERROR", L"Presentation failed with an unknown error");
+                if (self->candidate_window_)
+                    self->candidate_window_->hide();
+            }
             return 0;
         }
         if (message == hide_message) {
             if (self->candidate_window_) {
                 self->candidate_window_->hide();
             }
-            return 0;
-        }
-        if (message == stop_message) {
-            if (self->candidate_window_) {
-                self->candidate_window_->destroy();
-            }
-            DestroyWindow(window);
-            PostQuitMessage(0);
             return 0;
         }
         return DefWindowProcW(window, message, wparam, lparam);
@@ -279,12 +228,10 @@ private:
         candidate_window_->set_owner_window(presentation->owner_window);
         candidate_window_->set_layout_columns(presentation->layout_columns);
         candidate_window_->set_number_column(presentation->number_column);
-        candidate_window_->set_page_navigation(
-            presentation->can_prev_page, presentation->can_next_page);
+        candidate_window_->set_page_navigation(presentation->can_prev_page, presentation->can_next_page);
         candidate_window_->update_candidates(presentation->candidates);
         candidate_window_->set_selection(presentation->selection_index);
-        candidate_window_->show_at(
-            presentation->anchor_x, presentation->anchor_top, presentation->anchor_y);
+        candidate_window_->show_at(presentation->anchor_x, presentation->anchor_top, presentation->anchor_y);
     }
 
     bool post(UINT message) const noexcept {
@@ -295,11 +242,10 @@ private:
     std::mutex lifecycle_mutex_;
     std::mutex presentation_mutex_;
     std::optional<Presentation> pending_presentation_;
-    HANDLE thread_ = nullptr;
-    HANDLE ready_event_ = nullptr;
+    bool connected_ = false;
     std::atomic<HWND> command_window_{nullptr};
-    std::atomic<int32_t> start_result_{ERROR_GEN_FAILURE};
-    CandidateWindow* candidate_window_ = nullptr;
+    std::unique_ptr<CandidateWindow> candidate_window_;
+    winrt::Microsoft::UI::Xaml::ResourceDictionary theme_{nullptr};
 };
 
 Runtime& runtime() {
@@ -307,22 +253,15 @@ Runtime& runtime() {
     return instance;
 }
 
-}  // namespace
-}  // namespace llavon::candidate
+} // namespace
+} // namespace llavon::candidate
 
-extern "C" int32_t llavon_candidate_ui_start(void) {
-    return llavon::candidate::runtime().start();
-}
+extern "C" int32_t llavon_candidate_ui_start(void) { return llavon::candidate::runtime().start(); }
 
-extern "C" int32_t llavon_candidate_ui_present(
-    const llavon_candidate_ui_presentation* presentation) {
+extern "C" int32_t llavon_candidate_ui_present(const llavon_candidate_ui_presentation* presentation) {
     return llavon::candidate::runtime().present(presentation);
 }
 
-extern "C" void llavon_candidate_ui_hide(void) {
-    llavon::candidate::runtime().hide();
-}
+extern "C" void llavon_candidate_ui_hide(void) { llavon::candidate::runtime().hide(); }
 
-extern "C" int32_t llavon_candidate_ui_stop(void) {
-    return llavon::candidate::runtime().stop();
-}
+extern "C" int32_t llavon_candidate_ui_stop(void) { return llavon::candidate::runtime().stop(); }

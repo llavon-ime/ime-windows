@@ -3,11 +3,13 @@
 #include <dwmapi.h>
 #include <winrt/Microsoft.UI.Interop.h>
 #include "settings_resources.h"
-#include "xaml_resource.hpp"
+#include "../ui/xaml_resource.hpp"
 
 #include <winrt/Windows.UI.Text.h>
+#include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Windows.UI.h>
 
 #include <algorithm>
@@ -101,15 +103,6 @@ void SettingsMenuWindow::destroy() noexcept {
         DestroyWindow(window);
         if (window_ == window) window_ = nullptr;
     }
-}
-
-bool SettingsMenuWindow::pretranslate(MSG& message) const {
-    if (message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE && window_ &&
-        IsWindowVisible(window_)) {
-        hide();
-        return true;
-    }
-    return false;
 }
 
 LRESULT CALLBACK SettingsMenuWindow::window_proc(HWND window, UINT message, WPARAM wparam,
@@ -215,7 +208,13 @@ void SettingsMenuWindow::build_content() {
     using namespace winrt::Microsoft::UI::Xaml::Controls;
 
     const bool dark = system_uses_dark_theme();
-    const auto root = load_xaml_resource(IDR_SETTINGS_MENU_XAML).as<Border>();
+    const auto root = ui::load_xaml_resource(IDR_SETTINGS_MENU_XAML).as<Border>();
+    root.KeyDown([this](const auto&, const auto& args) {
+        if (args.Key() == winrt::Windows::System::VirtualKey::Escape) {
+            hide();
+            args.Handled(true);
+        }
+    });
     root.RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Light);
     const auto button = root.FindName(L"OpenSettingsButton").as<Button>();
     button.Click([this](const auto&, const auto&) {

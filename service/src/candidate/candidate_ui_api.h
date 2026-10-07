@@ -41,7 +41,7 @@ typedef struct llavon_candidate_ui_presentation {
     int32_t anchor_top;
 } llavon_candidate_ui_presentation;
 
-// Starts the candidate UI's dedicated STA thread. Calling this function more
+// Acquires the shared WinUI STA for the candidate UI. Calling this function more
 // than once is safe. Returns zero on success.
 LLAVON_CANDIDATE_UI_API int32_t llavon_candidate_ui_start(void);
 
@@ -53,7 +53,8 @@ LLAVON_CANDIDATE_UI_API int32_t llavon_candidate_ui_present(
 // These calls only enqueue work and never execute XAML on the caller's thread.
 LLAVON_CANDIDATE_UI_API void llavon_candidate_ui_hide(void);
 
-// Stops and joins the dedicated UI thread.
+// Closes the candidate UI and releases its shared STA reference. The shared
+// framework remains available until service shutdown so this client can reopen.
 LLAVON_CANDIDATE_UI_API int32_t llavon_candidate_ui_stop(void);
 
 #ifdef __cplusplus

@@ -50,6 +50,11 @@ function(llavon_target_winui3 target)
         Microsoft.WindowsAppSDK.InteractiveExperiences_SelfContained
         Microsoft.WindowsAppSDK.DWrite_SelfContained
         Microsoft.WindowsAppSDK.WinUI_SelfContained)
+    # UI clients share the runtime DLL's deployment directory. Deploy these
+    # assets once to avoid concurrent copy_directory operations to the same files.
+    if(ARGV1 STREQUAL "NO_DEPLOY")
+        return()
+    endif()
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_COMMAND};-E;$<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:${target}>>,copy_if_different;$<TARGET_RUNTIME_DLLS:${target}>;$<TARGET_FILE_DIR:${target}>,true>"
         COMMAND_EXPAND_LISTS VERBATIM)

@@ -1,9 +1,11 @@
 #include "settings_ui_api.h"
+#include "settings_resources.h"
 
 #include "settings_configuration.hpp"
 #include "settings_menu_window.hpp"
 #include "settings_window.hpp"
-#include "winui_runtime.hpp"
+#include "../ui/ui_thread.hpp"
+#include "../ui/xaml_resource.hpp"
 
 #include <commctrl.h>
 #include <windows.h>
@@ -13,11 +15,12 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <string_view>
 
 #include <winrt/base.h>
-#include <microsoft.ui.dispatching.interop.h>
+
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -27,10 +30,8 @@ namespace {
 constexpr wchar_t settings_command_window_class[] = L"LlavonImeSettingsUiCommandWindow";
 constexpr UINT show_message = WM_APP + 1;
 constexpr UINT hide_message = WM_APP + 2;
-constexpr UINT stop_message = WM_APP + 3;
 constexpr UINT show_context_menu_message = WM_APP + 4;
 constexpr UINT pending_count_message = WM_APP + 5;
-constexpr DWORD shutdown_timeout_ms = 10000;
 
 void report_settings_error(std::wstring_view message) noexcept {
     try {
@@ -55,20 +56,17 @@ void report_settings_error(std::wstring_view message) noexcept {
     }
 }
 
-struct UiThreadState {
-    HANDLE thread = nullptr;
-    HANDLE ready_event = nullptr;
+struct UiClientState {
+    bool connected = false;
     std::atomic<HWND> command_window{nullptr};
-    std::atomic<int32_t> start_result{ERROR_GEN_FAILURE};
 };
-
 class Runtime final {
 public:
     int32_t configure_gpu_boost(
         bool enabled, llavon_settings_save_gpu_boost_callback save_callback,
         void* save_context) {
         std::lock_guard lock(mutex_);
-        if (settings_thread_.thread) return ERROR_BUSY;
+        if (settings_client_.connected) return ERROR_BUSY;
         if (!save_callback) return ERROR_INVALID_PARAMETER;
         configuration_.gpu_boost_enabled = enabled;
         configuration_.save_gpu_boost_callback = save_callback;
@@ -80,7 +78,7 @@ public:
         llavon_settings_prepare_model_callback callback, void* context,
         const char16_t* base_model_path) {
         std::lock_guard lock(mutex_);
-        if (settings_thread_.thread) return ERROR_BUSY;
+        if (settings_client_.connected) return ERROR_BUSY;
         if (!callback || !base_model_path) return ERROR_INVALID_PARAMETER;
         configuration_.prepare_model_callback = callback;
         configuration_.prepare_model_context = context;
@@ -92,7 +90,7 @@ public:
         bool enabled, llavon_settings_save_update_notifications_callback save_callback,
         void* save_context) {
         std::lock_guard lock(mutex_);
-        if (settings_thread_.thread) return ERROR_BUSY;
+        if (settings_client_.connected) return ERROR_BUSY;
         if (!save_callback) return ERROR_INVALID_PARAMETER;
         configuration_.major_update_notifications_enabled = enabled;
         configuration_.save_update_notifications_callback = save_callback;
@@ -103,7 +101,7 @@ public:
     void set_pending_count(std::size_t count) noexcept {
         pending_count_.store(count, std::memory_order_release);
         has_pending_count_.store(true, std::memory_order_release);
-        post(settings_thread_, pending_count_message);
+        post(settings_client_, pending_count_message);
     }
 
     int32_t configure(const llavon_settings_inference_device* devices,
@@ -147,7 +145,7 @@ public:
                       void* cancel_lora_context,
     llavon_settings_protection_callback protection_callback, void* protection_context) {
         std::lock_guard lock(mutex_);
-        if (settings_thread_.thread) {
+        if (settings_client_.connected) {
             return ERROR_BUSY;
         }
         if ((device_count != 0 && !devices) || !active_device || !save_callback ||
@@ -250,24 +248,36 @@ public:
 
     int32_t start() {
         std::lock_guard lock(mutex_);
-        if (settings_thread_.thread) {
+        if (settings_client_.connected) {
             return 0;
         }
 
         thread_configuration_ = configuration_;
-        return start_thread(settings_thread_, settings_thread_entry);
+        const auto result = llavon_ui_thread_acquire();
+        if (result != 0) return result;
+        settings_client_.connected = true;
+        const auto initialized = llavon_ui_thread_invoke([](void* context) {
+            static_cast<Runtime*>(context)->initialize_on_thread();
+        }, this);
+        if (initialized != 0) {
+            llavon_ui_thread_invoke([](void* context) {
+                static_cast<Runtime*>(context)->destroy_on_thread();
+            }, this);
+            if (llavon_ui_thread_release() == 0) settings_client_.connected = false;
+        }
+        return initialized;
     }
 
     void show() const noexcept {
-        post(settings_thread_, show_message);
+        post(settings_client_, show_message);
     }
 
     void hide() const noexcept {
-        post(settings_thread_, hide_message);
+        post(settings_client_, hide_message);
     }
 
     void show_context_menu(std::int32_t screen_x, std::int32_t screen_y) const noexcept {
-        const HWND command_window = settings_thread_.command_window.load(std::memory_order_acquire);
+        const HWND command_window = settings_client_.command_window.load(std::memory_order_acquire);
         if (command_window) {
             PostMessageW(command_window, show_context_menu_message,
                          static_cast<WPARAM>(static_cast<std::uint32_t>(screen_x)),
@@ -277,148 +287,64 @@ public:
 
     int32_t stop() {
         std::lock_guard lock(mutex_);
-        if (!settings_thread_.thread) {
+        if (!settings_client_.connected) {
             return 0;
         }
 
-        post(settings_thread_, stop_message);
-        return join_thread(settings_thread_);
-    }
-
-private:
-    using ThreadEntry = DWORD(WINAPI*)(void*);
-
-    static DWORD WINAPI settings_thread_entry(void* context) noexcept {
-        return static_cast<Runtime*>(context)->settings_thread_main();
-    }
-
-    int32_t start_thread(UiThreadState& state, ThreadEntry entry) {
-        if (state.thread) {
-            return 0;
-        }
-
-        state.ready_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (!state.ready_event) {
-            return static_cast<int32_t>(GetLastError());
-        }
-
-        state.start_result.store(ERROR_GEN_FAILURE, std::memory_order_relaxed);
-        state.thread = CreateThread(nullptr, 0, entry, this, 0, nullptr);
-        if (!state.thread) {
-            const DWORD error = GetLastError();
-            CloseHandle(state.ready_event);
-            state.ready_event = nullptr;
-            return static_cast<int32_t>(error);
-        }
-
-        const DWORD wait_result = WaitForSingleObject(state.ready_event, INFINITE);
-        CloseHandle(state.ready_event);
-        state.ready_event = nullptr;
-        if (wait_result != WAIT_OBJECT_0) {
-            const DWORD error = GetLastError();
-            join_thread(state);
-            return static_cast<int32_t>(error);
-        }
-
-        const int32_t result = state.start_result.load(std::memory_order_relaxed);
-        if (result != 0) {
-            join_thread(state);
-        }
+        const auto destroyed = llavon_ui_thread_invoke([](void* context) {
+            static_cast<Runtime*>(context)->destroy_on_thread();
+        }, this);
+        if (destroyed != 0) return destroyed;
+        const auto result = llavon_ui_thread_release();
+        if (result == 0) settings_client_.connected = false;
         return result;
     }
 
-    static int32_t join_thread(UiThreadState& state) noexcept {
-        if (!state.thread) {
-            return 0;
+private:
+    void initialize_on_thread() {
+        using namespace winrt::Microsoft::UI::Xaml;
+        theme_ = ui::load_xaml_resource(IDR_SETTINGS_THEME_XAML).as<ResourceDictionary>();
+        Application::Current().Resources().MergedDictionaries().Append(theme_);
+        INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES};
+        InitCommonControlsEx(&controls);
+        const HINSTANCE instance = reinterpret_cast<HINSTANCE>(&__ImageBase);
+        WNDCLASSEXW window_class{sizeof(window_class)};
+        window_class.lpfnWndProc = settings_command_window_proc;
+        window_class.hInstance = instance;
+        window_class.lpszClassName = settings_command_window_class;
+        if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            winrt::throw_last_error();
         }
-        const DWORD wait_result = WaitForSingleObject(state.thread, shutdown_timeout_ms);
-        if (wait_result != WAIT_OBJECT_0) {
-            return wait_result == WAIT_TIMEOUT ? static_cast<int32_t>(ERROR_TIMEOUT)
-                                               : static_cast<int32_t>(GetLastError());
-        }
-        CloseHandle(state.thread);
-        state.thread = nullptr;
-        return 0;
+        settings_window_ = std::make_unique<SettingsWindow>(thread_configuration_);
+        settings_menu_ = std::make_unique<SettingsMenuWindow>([this] { show(); });
+        const HWND command_window = CreateWindowExW(
+            0, settings_command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
+        if (!command_window) winrt::throw_last_error();
+        settings_client_.command_window.store(command_window, std::memory_order_release);
     }
 
-    DWORD settings_thread_main() noexcept {
-        bool apartment_initialized = false;
-        bool ready_signaled = false;
-        const HANDLE ready_event = settings_thread_.ready_event;
-        DWORD exit_code = ERROR_GEN_FAILURE;
-        try {
-            winrt::init_apartment(winrt::apartment_type::single_threaded);
-            apartment_initialized = true;
-
-            INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES};
-            InitCommonControlsEx(&controls);
-
-            const HINSTANCE instance = reinterpret_cast<HINSTANCE>(&__ImageBase);
-            WNDCLASSEXW window_class{sizeof(window_class)};
-            window_class.lpfnWndProc = settings_command_window_proc;
-            window_class.hInstance = instance;
-            window_class.lpszClassName = settings_command_window_class;
-            if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-                throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
-            }
-
-            WinuiRuntime winui_runtime;
-            SettingsWindow settings_window(thread_configuration_);
-            SettingsMenuWindow settings_menu([this] { show(); });
-            settings_window_ = &settings_window;
-            settings_menu_ = &settings_menu;
-            const HWND command_window = CreateWindowExW(
-                0, settings_command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
-                instance, this);
-            if (!command_window) {
-                throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()));
-            }
-
-            settings_thread_.command_window.store(command_window, std::memory_order_release);
-            settings_thread_.start_result.store(0, std::memory_order_relaxed);
-            SetEvent(ready_event);
-            ready_signaled = true;
-
+    void destroy_on_thread() {
+        const HWND command = settings_client_.command_window.exchange(nullptr, std::memory_order_acq_rel);
+        if (command) {
+            DestroyWindow(command);
             MSG message{};
-            while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-                if (settings_menu.pretranslate(message) || ContentPreTranslateMessage(&message)) {
-                    continue;
-                }
-                TranslateMessage(&message);
-                DispatchMessageW(&message);
-            }
-
-            settings_menu.destroy();
-            settings_window.destroy();
-            drain_messages();
-            settings_window_ = nullptr;
-            settings_menu_ = nullptr;
-            settings_thread_.command_window.store(nullptr, std::memory_order_release);
-            exit_code = 0;
-        } catch (const winrt::hresult_error& error) {
-            report_settings_error(error.message());
-            settings_thread_.start_result.store(static_cast<int32_t>(error.code().value),
-                                                std::memory_order_relaxed);
-            if (!ready_signaled) {
-                SetEvent(ready_event);
-            }
-        } catch (...) {
-            OutputDebugStringW(L"[settings-ui] unhandled UI thread error\n");
-            settings_thread_.start_result.store(ERROR_GEN_FAILURE, std::memory_order_relaxed);
-            if (!ready_signaled) {
-                SetEvent(ready_event);
-            }
+            while (PeekMessageW(&message, command, 0, 0, PM_REMOVE)) {}
         }
-
-        settings_window_ = nullptr;
-        settings_menu_ = nullptr;
-        settings_thread_.command_window.store(nullptr, std::memory_order_release);
-        if (apartment_initialized) {
-            winrt::uninit_apartment();
+        if (settings_menu_) settings_menu_->destroy();
+        if (settings_window_) settings_window_->destroy();
+        settings_menu_.reset();
+        settings_window_.reset();
+        if (theme_) {
+            const auto dictionaries = winrt::Microsoft::UI::Xaml::Application::Current().Resources().MergedDictionaries();
+            uint32_t index = 0;
+            if (dictionaries.IndexOf(theme_, index)) dictionaries.RemoveAt(index);
+            theme_ = nullptr;
         }
-        return exit_code;
+        UnregisterClassW(settings_command_window_class, reinterpret_cast<HINSTANCE>(&__ImageBase));
+        UnregisterClassW(L"LlavonImeSettingsMenuWindow", reinterpret_cast<HINSTANCE>(&__ImageBase));
+        UnregisterClassW(L"LlavonImeSettingsWindow", reinterpret_cast<HINSTANCE>(&__ImageBase));
+        winrt::clear_factory_cache();
     }
-
     static Runtime* get_runtime(HWND window, UINT message, LPARAM lparam) noexcept {
         Runtime* self = nullptr;
         if (message == WM_NCCREATE) {
@@ -472,15 +398,6 @@ private:
                 }
                 return 0;
             }
-            if (message == stop_message) {
-                if (self->settings_menu_) self->settings_menu_->destroy();
-                if (self->settings_window_) {
-                    self->settings_window_->destroy();
-                }
-                DestroyWindow(window);
-                PostQuitMessage(0);
-                return 0;
-            }
         } catch (const winrt::hresult_error& error) {
             report_settings_error(error.message());
             return 0;
@@ -505,25 +422,18 @@ private:
         settings_window_->show();
     }
 
-    static void post(const UiThreadState& state, UINT message) noexcept {
+    static void post(const UiClientState& state, UINT message) noexcept {
         const HWND command_window = state.command_window.load(std::memory_order_acquire);
         if (command_window) {
             PostMessageW(command_window, message, 0, 0);
         }
     }
 
-    static void drain_messages() noexcept {
-        MSG message{};
-        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-    }
-
     mutable std::mutex mutex_;
-    UiThreadState settings_thread_;
-    SettingsWindow* settings_window_ = nullptr;
-    SettingsMenuWindow* settings_menu_ = nullptr;
+    UiClientState settings_client_;
+    std::unique_ptr<SettingsWindow> settings_window_;
+    std::unique_ptr<SettingsMenuWindow> settings_menu_;
+    winrt::Microsoft::UI::Xaml::ResourceDictionary theme_{nullptr};
     SettingsConfiguration configuration_;
     SettingsConfiguration thread_configuration_;
     std::atomic<std::size_t> pending_count_{0};
