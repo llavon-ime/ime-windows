@@ -135,8 +135,6 @@ private:
     std::atomic_bool busy_{false};
     std::atomic_bool cancelling_{false};
     WinrtHttpTransfer http_transfer_;
-    std::mutex process_mutex_;
-    HANDLE active_process_ = nullptr;
     std::vector<std::u16string> pending_event_ids_;
     std::vector<TrainingDataRecord> pending_records_;
     LoraTrainingOptions pending_options_;

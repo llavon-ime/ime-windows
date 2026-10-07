@@ -37,6 +37,8 @@ add_executable(llavon-ime-service
     src/service/lora_dataset_builder.hpp
     src/service/lora_training_manager.cpp
     src/service/lora_training_manager.hpp
+    src/service/lora_process.cpp
+    src/service/lora_process.hpp
     src/service/lora_training_presets.hpp
     src/service/major_update_notifier.cpp
     src/service/major_update_notifier.hpp
@@ -240,6 +242,19 @@ target_link_libraries(llavon-ime-candidate-ui PRIVATE
 )
 
 if(BUILD_TESTING)
+    add_executable(lora-process-tests
+        tests/lora_process_tests.cpp
+        src/service/lora_process.cpp
+    )
+    target_compile_features(lora-process-tests PRIVATE cxx_std_23)
+    target_compile_definitions(lora-process-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(lora-process-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(lora-process-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME lora-process COMMAND lora-process-tests)
+    set_tests_properties(lora-process PROPERTIES TIMEOUT 30)
+
     add_executable(lora-history-lca-tests
         tests/lora_history_lca_tests.cpp
         src/settings/lora_history_lca.cpp

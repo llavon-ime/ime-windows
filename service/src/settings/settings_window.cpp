@@ -1298,6 +1298,8 @@ void SettingsWindow::show_lora_training_dialog() {
         bool trainer_release_available = false;
         bool trainer_selection_initialized = false;
         bool busy = false;
+        bool training_busy = false;
+        bool cancel_requested = false;
         bool closed = false;
     };
 
@@ -1708,9 +1710,14 @@ void SettingsWindow::show_lora_training_dialog() {
         state->training_data_button.IsEnabled(state->active_count != 0);
         state->primary_button.IsEnabled(
             state->selecting_training_data ||
+            (state->training_busy && !state->cancel_requested && configuration_.cancel_lora_callback) ||
             (!state->busy && !restoring_lora_model_ &&
              state->model_available && state->trainer_available &&
              eligible != 0));
+        if (!state->selecting_training_data) {
+            state->primary_button.Content(winrt::box_value(state->training_busy
+                ? (state->cancel_requested ? L"正在取消…" : L"取消訓練") : L"開始訓練"));
+        }
         refresh_estimated_steps();
     };
     *refresh_training_count = refresh_training_selection;
@@ -1839,7 +1846,7 @@ void SettingsWindow::show_lora_training_dialog() {
         state->reload_model.Visibility(
             pending ? Visibility::Visible : Visibility::Collapsed);
         state->secondary_button.Content(winrt::box_value(
-            pending ? L"套用新模型並關閉" : L"關閉"));
+            pending ? L"套用新模型並關閉" : (state->training_busy ? L"背景執行" : L"關閉")));
     };
     const auto apply_new_model = [this, state, refresh_apply_state] {
         if (state->output_model_path.empty() || state->model_applied) return true;
@@ -1910,6 +1917,9 @@ void SettingsWindow::show_lora_training_dialog() {
             status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL;
         if (training_busy) state->training_observed = true;
         state->busy = busy;
+        state->training_busy = training_busy;
+        if (!training_busy) state->cancel_requested = false;
+        if (state->cancel_requested) state->status.Text(L"正在取消訓練並結束子程序…");
         state->model_available = status.model_available != 0;
         state->trainer_available = status.trainer_available != 0;
         if (!state->trainer_selection_initialized && status.trainer_backend &&
@@ -2131,6 +2141,15 @@ void SettingsWindow::show_lora_training_dialog() {
                 refresh_training_selection();
                 return;
             }
+            if (state->training_busy) {
+                if (!state->cancel_requested && configuration_.cancel_lora_callback) {
+                    state->cancel_requested = true;
+                    configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
+                    state->status.Text(L"正在取消訓練並結束子程序…");
+                    refresh_training_selection();
+                }
+                return;
+            }
             try {
                 const auto parse_integer = [](const TextBox& box) {
                     const std::wstring value = box.Text().c_str();
@@ -2215,7 +2234,7 @@ void SettingsWindow::show_lora_training_dialog() {
                     return;
                 }
                 show_password_dialog(false, [this, state, options, dtype, target_modules,
-                                             selected, refresh_apply_state](
+                                             selected, refresh_apply_state, refresh_training_selection](
                     const char16_t* password) mutable {
                     if (state->closed) return false;
                     options.dtype = dtype.c_str();
@@ -2232,10 +2251,13 @@ void SettingsWindow::show_lora_training_dialog() {
                         : ERROR_INVALID_FUNCTION;
                     if (result == ERROR_SUCCESS) {
                         state->training_observed = true;
+                        state->busy = true;
+                        state->training_busy = true;
+                        state->cancel_requested = false;
                         state->output_model_path.clear();
                         state->model_applied = false;
                         refresh_apply_state();
-                        state->primary_button.IsEnabled(false);
+                        refresh_training_selection();
                         state->status.Text(L"訓練已啟動，關閉視窗後仍會在背景繼續。");
                     } else {
                         state->progress.Visibility(Visibility::Collapsed);

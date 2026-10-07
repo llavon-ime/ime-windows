@@ -1,4 +1,5 @@
 #include "lora_training_manager.hpp"
+#include "lora_process.hpp"
 #include "training_data_cleanup.hpp"
 
 #include "lora_dataset_builder.hpp"
@@ -144,31 +145,6 @@ void throw_if_cancelled(const std::atomic_bool& cancelling) {
     if (cancelling.load(std::memory_order_acquire)) {
         throw std::runtime_error("operation cancelled");
     }
-}
-
-std::wstring quote_argument(std::wstring_view argument) {
-    if (argument.empty()) return L"\"\"";
-    if (argument.find_first_of(L" \t\n\v\"") == std::wstring_view::npos) {
-        return std::wstring(argument);
-    }
-    std::wstring result = L"\"";
-    std::size_t backslashes = 0;
-    for (const wchar_t character : argument) {
-        if (character == L'\\') {
-            ++backslashes;
-        } else if (character == L'\"') {
-            result.append(backslashes * 2 + 1, L'\\');
-            result.push_back(L'\"');
-            backslashes = 0;
-        } else {
-            result.append(backslashes, L'\\');
-            backslashes = 0;
-            result.push_back(character);
-        }
-    }
-    result.append(backslashes * 2, L'\\');
-    result.push_back(L'\"');
-    return result;
 }
 
 std::wstring real_argument(double value) {
@@ -775,8 +751,6 @@ bool LoraTrainingManager::launch(Operation operation, std::int32_t trainer_backe
 void LoraTrainingManager::cancel() noexcept {
     cancelling_.store(true, std::memory_order_release);
     http_transfer_.cancel();
-    std::lock_guard lock(process_mutex_);
-    if (active_process_) TerminateProcess(active_process_, ERROR_CANCELLED);
 }
 
 void LoraTrainingManager::set_status(LoraOperationStage stage, double progress,
@@ -1138,117 +1112,45 @@ int LoraTrainingManager::run_process(
     const std::vector<std::wstring>& arguments,
     bool parse_training_progress,
     std::string* captured_output) {
-    throw_if_cancelled(cancelling_);
-    SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
-    HANDLE read_pipe_raw = nullptr;
-    HANDLE write_pipe_raw = nullptr;
-    if (!CreatePipe(&read_pipe_raw, &write_pipe_raw, &security, 0)) {
-        throw std::runtime_error("unable to create trainer output pipe");
-    }
-    const auto close_handle = [](HANDLE handle) { if (handle) CloseHandle(handle); };
-    std::unique_ptr<void, decltype(close_handle)> read_pipe(read_pipe_raw, close_handle);
-    std::unique_ptr<void, decltype(close_handle)> write_pipe(write_pipe_raw, close_handle);
-    SetHandleInformation(read_pipe.get(), HANDLE_FLAG_INHERIT, 0);
-
-    std::wstring command = quote_argument(executable.wstring());
-    for (const auto& argument : arguments) {
-        command.push_back(L' ');
-        command += quote_argument(argument);
-    }
-    std::vector<wchar_t> mutable_command(command.begin(), command.end());
-    mutable_command.push_back(L'\0');
-
-    STARTUPINFOW startup{sizeof(startup)};
-    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    startup.wShowWindow = SW_HIDE;
-    startup.hStdOutput = write_pipe.get();
-    startup.hStdError = write_pipe.get();
-    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    PROCESS_INFORMATION process{};
-    const std::wstring working_directory = executable.parent_path().wstring();
-    if (!CreateProcessW(executable.c_str(), mutable_command.data(), nullptr, nullptr,
-                        TRUE, CREATE_NO_WINDOW, nullptr, working_directory.c_str(),
-                        &startup, &process)) {
-        throw std::runtime_error("unable to start llavon-lora.exe");
-    }
-    close_handle(process.hThread);
-    write_pipe.reset();
-    {
-        std::lock_guard lock(process_mutex_);
-        active_process_ = process.hProcess;
-        if (cancelling_.load(std::memory_order_acquire)) {
-            TerminateProcess(active_process_, ERROR_CANCELLED);
-        }
-    }
-
-    std::string pending;
     std::string last_line;
-    bool output_too_large = false;
-    std::array<char, 4096> buffer{};
-    for (;;) {
-        DWORD read = 0;
-        if (!ReadFile(read_pipe.get(), buffer.data(), static_cast<DWORD>(buffer.size()),
-                      &read, nullptr) || read == 0) {
-            break;
-        }
-        if (captured_output && !output_too_large) {
-            if (captured_output->size() + read > 4 * 1024 * 1024)
-                output_too_large = true;
-            else
-                captured_output->append(buffer.data(), read);
-        }
-        pending.append(buffer.data(), read);
-        for (;;) {
-            const auto newline = pending.find('\n');
-            if (newline == std::string::npos) break;
-            std::string line = pending.substr(0, newline);
-            pending.erase(0, newline + 1);
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (!line.empty()) last_line = line;
-            if (parse_training_progress && line.starts_with("step=")) {
+    double progress = 0.05;
+    const auto exit_code = run_lora_process(executable, arguments, cancelling_,
+        [&](std::string_view line) {
+            last_line = line;
+            if (captured_output) {
+                if (captured_output->size() + line.size() + 1 > 4 * 1024 * 1024)
+                    throw std::runtime_error("LoRA process output is too large");
+                captured_output->append(line);
+                captured_output->push_back('\n');
+            }
+            if (!parse_training_progress) return;
+            if (line.starts_with("step=")) {
                 const auto slash = line.find('/');
                 const auto space = line.find(' ', 5);
-                if (slash != std::string::npos && space != std::string::npos) {
-                    try {
-                        const double step = std::stod(line.substr(5, slash - 5));
-                        const double total = std::stod(line.substr(slash + 1,
-                            space - slash - 1));
-                        if (total > 0) {
-                            set_status(LoraOperationStage::training,
-                                0.05 + 0.80 * std::min(1.0, step / total),
-                                to_utf16(line));
-                        }
-                    } catch (...) {
-                        if (line.substr(slash + 1, space - slash - 1) ==
-                            "until-remembered") {
-                            set_status(LoraOperationStage::training, 0.05,
-                                       to_utf16(line));
-                        }
+                if (slash != std::string_view::npos && space != std::string_view::npos &&
+                    slash > 5 && space > slash + 1) {
+                    std::uint64_t step = 0;
+                    std::uint64_t total = 0;
+                    const auto step_result = std::from_chars(line.data() + 5, line.data() + slash, step);
+                    const auto total_result = std::from_chars(line.data() + slash + 1, line.data() + space, total);
+                    if (step_result.ec == std::errc{} && step_result.ptr == line.data() + slash &&
+                        total_result.ec == std::errc{} && total_result.ptr == line.data() + space && total > 0) {
+                        progress = std::max(progress, 0.05 + 0.80 * std::min(1.0,
+                            static_cast<double>(step) / static_cast<double>(total)));
                     }
                 }
-            } else if (parse_training_progress &&
-                       (line.starts_with("remembered=") ||
-                        line.starts_with("only-train-incorrect="))) {
-                set_status(LoraOperationStage::training, 0.05, to_utf16(line));
             }
-        }
-    }
-    WaitForSingleObject(process.hProcess, INFINITE);
-    DWORD exit_code = ERROR_GEN_FAILURE;
-    GetExitCodeProcess(process.hProcess, &exit_code);
-    {
-        std::lock_guard lock(process_mutex_);
-        active_process_ = nullptr;
-    }
-    close_handle(process.hProcess);
-    if (output_too_large)
-        throw std::runtime_error("LoRA archive listing is too large");
+            // Loading, device initialization and validation can take longer
+            // than an optimizer step. Publish them too, without resetting the
+            // progress bar at every validation pass.
+            set_status(LoraOperationStage::training, progress, to_utf16(line));
+        });
     if (exit_code != 0) {
         throw std::runtime_error(last_line.empty()
-            ? "LoRA process failed"
+            ? "LoRA process failed (exit code " + std::to_string(exit_code) + ")"
             : "LoRA process: " + last_line);
     }
-    return static_cast<int>(exit_code);
+    return 0;
 }
 
 void LoraTrainingManager::training_worker() {
