@@ -361,6 +361,11 @@ bool modified_passthrough_key(WPARAM wParam) {
     return key_down(VK_CONTROL) || key_down(VK_MENU) || key_down(VK_SHIFT);
 }
 
+bool composition_editing_key(WPARAM wParam) {
+    return (wParam == VK_BACK || wParam == VK_RETURN) &&
+           !key_down(VK_CONTROL) && !key_down(VK_MENU);
+}
+
 bool same_com_object(IUnknown* left, IUnknown* right) {
     if (!left || !right) {
         return false;
@@ -1006,7 +1011,12 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
         return S_OK;
     }
 
-    if (modified_passthrough_key(wParam)) {
+    // Shift+Backspace and Shift+Enter have the same editing meaning as their
+    // unmodified forms while composing. Do not pass them to the host, which
+    // cannot reliably edit or commit the active TSF composition range.
+    // Ctrl/Alt combinations remain host shortcuts.
+    if (modified_passthrough_key(wParam) &&
+        !(active_composition && composition_editing_key(wParam))) {
         *pfEaten = FALSE;
         return S_OK;
     }
@@ -1191,7 +1201,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         }
     }
 
-    if (modified_passthrough_key(wParam)) {
+    // Keep this exception in sync with OnTestKeyDown so TSF's test result and
+    // the actual key handler agree for Shift+Backspace and Shift+Enter during
+    // composition.
+    if (modified_passthrough_key(wParam) &&
+        !(composition_editing_key(wParam) && !compositionBuffer.empty())) {
         return S_OK;
     }
 
