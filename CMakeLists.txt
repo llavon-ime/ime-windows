@@ -315,8 +315,13 @@ install(FILES
     COMPONENT Runtime
 )
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/ime-core/LICENSE"
-    DESTINATION licenses
-    RENAME ime-core-LICENSE.txt
+    DESTINATION licenses/ime-core
+    RENAME LICENSE.txt
+    COMPONENT Runtime
+)
+install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/ime-core/THIRD_PARTY_NOTICES.txt"
+    DESTINATION licenses/ime-core
     COMPONENT Runtime
 )
 install(FILES "${LLAVON_IME_VCPKG_LICENSE_AGGREGATE}"
