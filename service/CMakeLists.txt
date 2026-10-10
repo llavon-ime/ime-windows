@@ -37,6 +37,7 @@ add_executable(llavon-ime-service
     src/service/lora_dataset_builder.hpp
     src/service/lora_training_manager.cpp
     src/service/lora_training_manager.hpp
+    src/service/lora_trainer_cleanup.hpp
     src/service/lora_process.cpp
     src/service/lora_process.hpp
     src/service/lora_training_presets.hpp

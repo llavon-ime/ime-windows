@@ -295,6 +295,11 @@ installed manifest. It installs under
 `%LocalAppData%\Llavon IME\tools\lora\<version>\<asset>` and records the active
 selection in `current.install`. The service uses that selection before the
 Program Files installation.
+After successfully selecting a release, the service removes CPU, CUDA, and ROCm
+installations of other versions from this per-user directory, including when
+reselecting an already downloaded release. All backends of the selected version
+are retained. Cleanup never follows reparse points or removes unrelated files;
+if old files cannot be removed, installation succeeds with a cleanup warning.
 
 Model checks and downloads use WinRT `Windows.Web.Http` with `co_await` for
 network operations. The service's dedicated worker waits only at the outer

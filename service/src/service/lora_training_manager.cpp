@@ -1,5 +1,6 @@
 #include "lora_training_manager.hpp"
 #include "lora_process.hpp"
+#include "lora_trainer_cleanup.hpp"
 #include "training_data_cleanup.hpp"
 
 #include "lora_dataset_builder.hpp"
@@ -239,13 +240,7 @@ TrainerReleaseManifest resolve_trainer_release(WinrtHttpTransfer& transfer) {
 }
 
 bool valid_calver(std::string_view value) {
-    if (value.size() < 12 || value[4] != '.' || value[7] != '.' ||
-        value[10] != '.') return false;
-    for (std::size_t index = 0; index < value.size(); ++index) {
-        if (index == 4 || index == 7 || index == 10) continue;
-        if (value[index] < '0' || value[index] > '9') return false;
-    }
-    return true;
+    return valid_trainer_version(value);
 }
 
 bool valid_https(std::string_view value) {
@@ -1005,18 +1000,25 @@ void LoraTrainingManager::install_trainer_worker() {
                std::filesystem::is_regular_file(
                    directory / L"llavon-lora.exe", ignored);
     };
-    if (matches_release(destination)) {
-        select_trainer(root, relative);
+    const auto finish_install = [&](bool cleanup_complete = true) {
+        if (!prune_obsolete_lora_trainers(root, manifest.version))
+            cleanup_complete = false;
         refresh_installed_trainer();
         std::lock_guard lock(status_mutex_);
         status_.trainer_release_version = to_utf16(manifest.version);
         status_.trainer_update_available = false;
-        status_.trainer_message = u"已安裝目前版本對應之訓練器";
+        status_.trainer_message = cleanup_complete
+            ? u"已安裝目前版本對應之訓練器"
+            : u"訓練器已安裝，但部分舊版檔案無法清除；請關閉使用中的訓練器後重試安裝";
         status_.stage = !status_.output_model_path.empty()
             ? LoraOperationStage::completed
             : (status_.model_available ? LoraOperationStage::model_ready
                                        : LoraOperationStage::idle);
         status_.message = status_.trainer_message;
+    };
+    if (matches_release(destination)) {
+        select_trainer(root, relative);
+        finish_install();
         return;
     }
 
@@ -1092,20 +1094,9 @@ void LoraTrainingManager::install_trainer_worker() {
         }
         throw;
     }
-    if (had_previous) {
-        std::error_code ignored;
-        std::filesystem::remove_all(backup, ignored);
-    }
-    refresh_installed_trainer();
-    std::lock_guard lock(status_mutex_);
-    status_.trainer_release_version = to_utf16(manifest.version);
-    status_.trainer_update_available = false;
-    status_.trainer_message = u"已安裝目前版本對應之訓練器";
-    status_.stage = !status_.output_model_path.empty()
-        ? LoraOperationStage::completed
-        : (status_.model_available ? LoraOperationStage::model_ready
-                                   : LoraOperationStage::idle);
-    status_.message = status_.trainer_message;
+    std::error_code cleanup_error;
+    if (had_previous) std::filesystem::remove_all(backup, cleanup_error);
+    finish_install(!cleanup_error);
 }
 int LoraTrainingManager::run_process(
     const std::filesystem::path& executable,
