@@ -15,13 +15,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "../ui/xaml_resource.hpp"
-#include "candidate_log.hpp"
 #include "candidate_resources.h"
 #include "window.hpp"
 
@@ -29,6 +29,8 @@ namespace llavon::candidate {
 
 class CandidateWindow final : public Window {
 public:
+    explicit CandidateWindow(llavon::ime::core::Logger& logger) noexcept : Window(logger) {}
+
     ~CandidateWindow() override {
         destroy();
         close_xaml();
@@ -47,16 +49,19 @@ public:
         }
 
         SetLastError(ERROR_SUCCESS);
-        const LONG_PTR previous = SetWindowLongPtrW(hwnd(), GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(owner_window_));
+        const LONG_PTR previous =
+            SetWindowLongPtrW(hwnd(), GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(owner_window_));
         const DWORD error = GetLastError();
         if (previous == 0 && error != ERROR_SUCCESS) {
-            DebugSink::instance().send(L"UI",
-                                       L"CandidateWindow::set_owner_window failed err=" + std::to_wstring(error));
+            logger_->log(LogInformation::debug, [error = error] {
+                return std::format("[UI] CandidateWindow::set_owner_window failed err={}", error);
+            });
             return;
         }
 
-        DebugSink::instance().send(L"UI", L"CandidateWindow::set_owner_window owner=" +
-                                              std::to_wstring(reinterpret_cast<ULONG_PTR>(owner_window_)));
+        logger_->log(LogInformation::debug, [owner = reinterpret_cast<ULONG_PTR>(owner_window_)] {
+            return std::format("[UI] CandidateWindow::set_owner_window owner={}", owner);
+        });
     }
 
     void set_layout_columns(std::size_t columns) {
@@ -64,48 +69,56 @@ public:
         if (number_column_ >= layout_columns_) {
             number_column_ = 0;
         }
-        DebugSink::instance().send(L"UI", L"CandidateWindow::set_layout_columns " + std::to_wstring(layout_columns_));
+        logger_->log(LogInformation::debug, [columns = layout_columns_] {
+            return std::format("[UI] CandidateWindow::set_layout_columns {}", columns);
+        });
     }
 
     void set_number_column(std::size_t column) {
         number_column_ = std::min(column, layout_columns_ - 1);
-        DebugSink::instance().send(L"UI", L"CandidateWindow::set_number_column " + std::to_wstring(number_column_));
+        logger_->log(LogInformation::debug, [column = number_column_] {
+            return std::format("[UI] CandidateWindow::set_number_column {}", column);
+        });
     }
 
     void set_page_navigation(bool can_prev_page, bool can_next_page) {
         can_prev_page_ = can_prev_page;
         can_next_page_ = can_next_page;
-        DebugSink::instance().send(L"UI", L"CandidateWindow::set_page_navigation prev=" +
-                                              std::wstring(can_prev_page_ ? L"TRUE" : L"FALSE") + L", next=" +
-                                              std::wstring(can_next_page_ ? L"TRUE" : L"FALSE"));
+        logger_->log(LogInformation::debug, [previous = (can_prev_page_ != 0), next = (can_next_page_ != 0)] {
+            return std::format("[UI] CandidateWindow::set_page_navigation prev={}, next={}", previous, next);
+        });
     }
 
     void update_candidates(const std::vector<std::wstring>& values) {
-        DebugSink::instance().send(L"UI",
-                                   L"CandidateWindow::update_candidates input_count=" + std::to_wstring(values.size()));
+        logger_->log(LogInformation::debug, [count = values.size()] {
+            return std::format("[UI] CandidateWindow::update_candidates input_count={}", count);
+        });
         candidates_ = values;
         if (candidates_.size() > max_visible_candidates) {
             candidates_.resize(max_visible_candidates);
-            DebugSink::instance().send(L"UI", L"CandidateWindow::update_candidates truncated_count=" +
-                                                  std::to_wstring(candidates_.size()));
+            logger_->log(LogInformation::debug, [count = candidates_.size()] {
+                return std::format("[UI] CandidateWindow::update_candidates truncated_count={}", count);
+            });
         }
 
         if (candidates_.empty()) {
             selection_index_ = 0;
             clear_surface();
-            DebugSink::instance().send(L"UI", L"CandidateWindow::update_candidates empty -> hide");
+            logger_->log(LogInformation::debug, "[UI] CandidateWindow::update_candidates empty -> hide");
             hide();
             return;
         }
 
         if (selection_index_ >= candidates_.size()) {
             selection_index_ = candidates_.size() - 1;
-            DebugSink::instance().send(L"UI", L"CandidateWindow::update_candidates clamp selection=" +
-                                                  std::to_wstring(selection_index_));
+            logger_->log(LogInformation::debug, [selection = selection_index_] {
+                return std::format("[UI] CandidateWindow::update_candidates clamp selection={}", selection);
+            });
         }
 
         if (!ensure_window()) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::update_candidates ensure_window failed");
+            logger_->log(LogInformation::debug,
+                         "[UI] CandidateWindow::update_candidates ensure_window failed");
             return;
         }
 
@@ -118,50 +131,58 @@ public:
     void set_selection(std::size_t index) {
         if (candidates_.empty()) {
             selection_index_ = 0;
-            DebugSink::instance().send(L"UI", L"CandidateWindow::set_selection ignored: empty candidates");
+            logger_->log(LogInformation::debug,
+                         "[UI] CandidateWindow::set_selection ignored: empty candidates");
             return;
         }
         selection_index_ = std::min(index, candidates_.size() - 1);
-        DebugSink::instance().send(L"UI", L"CandidateWindow::set_selection index=" + std::to_wstring(index) +
-                                              L", effective=" + std::to_wstring(selection_index_));
+        logger_->log(LogInformation::debug, [index = index, selection = selection_index_] {
+            return std::format("[UI] CandidateWindow::set_selection index={}, effective={}", index,
+                               selection);
+        });
         render_surface();
         invalidate(FALSE);
     }
 
     void show_near_cursor() {
         if (candidates_.empty()) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::show_near_cursor empty -> hide");
+            logger_->log(LogInformation::debug, "[UI] CandidateWindow::show_near_cursor empty -> hide");
             hide();
             return;
         }
         if (!ensure_window()) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::show_near_cursor ensure_window failed");
+            logger_->log(LogInformation::debug,
+                         "[UI] CandidateWindow::show_near_cursor ensure_window failed");
             return;
         }
 
         POINT cursor = {};
         if (GetCursorPos(&cursor) == 0) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::show_near_cursor GetCursorPos failed err=" +
-                                                  std::to_wstring(GetLastError()));
+            logger_->log(LogInformation::debug, [error = GetLastError()] {
+                return std::format("[UI] CandidateWindow::show_near_cursor GetCursorPos failed err={}",
+                                   error);
+            });
             return;
         }
 
         sync_window_dpi();
         const auto [width, height] = client_size();
-        DebugSink::instance().send(L"UI", L"CandidateWindow::show_near_cursor cursor=(" + std::to_wstring(cursor.x) +
-                                              L"," + std::to_wstring(cursor.y) + L"), size=(" + std::to_wstring(width) +
-                                              L"," + std::to_wstring(height) + L")");
+        logger_->log(LogInformation::debug, [cursor_x = cursor.x, cursor_y = cursor.y, width = width,
+                                             height = height] {
+            return std::format("[UI] CandidateWindow::show_near_cursor cursor=({},{}), size=({},{})",
+                               cursor_x, cursor_y, width, height);
+        });
         show_at(cursor.x, cursor.y, cursor.y);
     }
 
     void show_at(int anchorX, int anchorTop, int anchorBottom) {
         if (candidates_.empty()) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::show_at empty -> hide");
+            logger_->log(LogInformation::debug, "[UI] CandidateWindow::show_at empty -> hide");
             hide();
             return;
         }
         if (!ensure_window()) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::show_at ensure_window failed");
+            logger_->log(LogInformation::debug, "[UI] CandidateWindow::show_at ensure_window failed");
             return;
         }
 
@@ -192,11 +213,13 @@ public:
                 y = monitorInfo.rcWork.top;
             }
         }
-        DebugSink::instance().send(L"UI", L"CandidateWindow::show_at anchorRect=(" + std::to_wstring(anchorX) + L"," +
-                                              std::to_wstring(anchorTop) + L".." + std::to_wstring(anchorBottom) +
-                                              L"), final=(" + std::to_wstring(x) + L"," + std::to_wstring(y) +
-                                              L"), size=(" + std::to_wstring(width) + L"," + std::to_wstring(height) +
-                                              L")");
+        logger_->log(LogInformation::debug, [anchor_x = anchorX, anchor_top = anchorTop,
+                                             anchor_bottom = anchorBottom, x = x, y = y, width = width,
+                                             height = height] {
+            return std::format(
+                "[UI] CandidateWindow::show_at anchorRect=({},{}..{}), final=({},{}), size=({},{})", anchor_x,
+                anchor_top, anchor_bottom, x, y, width, height);
+        });
         set_window_pos(HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         Window::show(SW_SHOWNOACTIVATE);
     }
@@ -238,27 +261,27 @@ protected:
                 close_xaml();
                 return 0;
             case WM_DPICHANGED:
-                DebugSink::instance().send(L"UI", L"CandidateWindow::handle_message WM_DPICHANGED");
+                logger_->log(LogInformation::debug, "[UI] CandidateWindow::handle_message WM_DPICHANGED");
                 handle_dpi_changed(wParam, lParam);
                 return 0;
             case WM_SIZE:
-                DebugSink::instance().send(L"UI", L"CandidateWindow::handle_message WM_SIZE");
+                logger_->log(LogInformation::debug, "[UI] CandidateWindow::handle_message WM_SIZE");
                 if (!uses_system_rounded_corners_) {
                     apply_round_region();
                 }
                 resize_xaml_island();
                 return 0;
             case WM_ERASEBKGND:
-                DebugSink::instance().send(L"UI", L"CandidateWindow::handle_message WM_ERASEBKGND");
+                logger_->log(LogInformation::debug, "[UI] CandidateWindow::handle_message WM_ERASEBKGND");
                 return 1;
             case WM_PAINT:
-                DebugSink::instance().send(L"UI", L"CandidateWindow::handle_message WM_PAINT");
+                logger_->log(LogInformation::debug, "[UI] CandidateWindow::handle_message WM_PAINT");
                 paint();
                 return 0;
             case WM_SETTINGCHANGE:
             case WM_THEMECHANGED:
             case WM_SYSCOLORCHANGE:
-                DebugSink::instance().send(L"UI", L"CandidateWindow::handle_message theme changed");
+                logger_->log(LogInformation::debug, "[UI] CandidateWindow::handle_message theme changed");
                 render_surface();
                 invalidate(FALSE);
                 return 0;
@@ -266,10 +289,13 @@ protected:
                 break;
             }
         } catch (const winrt::hresult_error& error) {
-            DebugSink::instance().send(L"ERROR", L"Candidate window update failed: " + std::wstring(error.message()));
+            logger_->log(LogInformation::debug, [message = error.message()] {
+                return std::format("[ERROR] Candidate window update failed: {}", winrt::to_string(message));
+            });
             hide();
         } catch (...) {
-            DebugSink::instance().send(L"ERROR", L"Candidate window update failed with an unknown error");
+            logger_->log(LogInformation::debug,
+                         "[ERROR] Candidate window update failed with an unknown error");
             hide();
         }
         return Window::handle_message(message, wParam, lParam);
@@ -283,17 +309,19 @@ protected:
 private:
     bool ensure_window() {
         if (created()) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::ensure_window already created");
+            logger_->log(LogInformation::debug, "[UI] CandidateWindow::ensure_window already created");
             return true;
         }
 
         const auto [width, height] = client_size();
-        DebugSink::instance().send(L"UI", L"CandidateWindow::ensure_window creating size=(" + std::to_wstring(width) +
-                                              L"," + std::to_wstring(height) + L")");
-        if (!create_in_band_or_fallback(
-                empirically_verified_candidate_window_band, WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                WS_POPUP, L"拉風輸入法候選字", CW_USEDEFAULT, CW_USEDEFAULT, width, height, owner_window_)) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::ensure_window create failed");
+        logger_->log(LogInformation::debug, [width = width, height = height] {
+            return std::format("[UI] CandidateWindow::ensure_window creating size=({},{})", width, height);
+        });
+        if (!create_in_band_or_fallback(empirically_verified_candidate_window_band,
+                                        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, WS_POPUP,
+                                        L"拉風輸入法候選字", CW_USEDEFAULT, CW_USEDEFAULT, width, height,
+                                        owner_window_)) {
+            logger_->log(LogInformation::debug, "[UI] CandidateWindow::ensure_window create failed");
             return false;
         }
 
@@ -305,13 +333,15 @@ private:
         try {
             initialize_xaml_island();
         } catch (const winrt::hresult_error& error) {
-            DebugSink::instance().send(L"ERROR",
-                                       L"WinUI island initialization failed: " + std::wstring(error.message()));
+            logger_->log(LogInformation::debug, [message = error.message()] {
+                return std::format("[ERROR] WinUI island initialization failed: {}",
+                                   winrt::to_string(message));
+            });
             destroy();
             return false;
         }
         render_surface();
-        DebugSink::instance().send(L"UI", L"CandidateWindow::ensure_window created");
+        logger_->log(LogInformation::debug, "[UI] CandidateWindow::ensure_window created");
         return true;
     }
 
@@ -335,7 +365,8 @@ private:
 
     void apply_round_region() {
         if (!created()) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::apply_round_region ignored: not created");
+            logger_->log(LogInformation::debug,
+                         "[UI] CandidateWindow::apply_round_region ignored: not created");
             return;
         }
 
@@ -344,27 +375,35 @@ private:
         const int width = static_cast<int>(rc.right - rc.left);
         const int height = static_cast<int>(rc.bottom - rc.top);
         if (width <= 0 || height <= 0) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::apply_round_region invalid size width=" +
-                                                  std::to_wstring(width) + L", height=" + std::to_wstring(height));
+            logger_->log(LogInformation::debug, [width = width, height = height] {
+                return std::format(
+                    "[UI] CandidateWindow::apply_round_region invalid size width={}, height={}", width,
+                    height);
+            });
             return;
         }
 
         const int ellipse = scale(static_cast<int>(root_ ? root_.CornerRadius().TopLeft * 2 : 20));
         HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, ellipse, ellipse);
         if (!region) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::apply_round_region "
-                                              L"CreateRoundRectRgn failed err=" +
-                                                  std::to_wstring(GetLastError()));
+            logger_->log(LogInformation::debug, [error = GetLastError()] {
+                return std::format(
+                    "[UI] CandidateWindow::apply_round_region CreateRoundRectRgn failed err={}", error);
+            });
             return;
         }
         if (SetWindowRgn(hwnd(), region, TRUE) == 0) {
             DeleteObject(region);
-            DebugSink::instance().send(L"UI", L"CandidateWindow::apply_round_region SetWindowRgn failed err=" +
-                                                  std::to_wstring(GetLastError()));
+            logger_->log(LogInformation::debug, [error = GetLastError()] {
+                return std::format("[UI] CandidateWindow::apply_round_region SetWindowRgn failed err={}",
+                                   error);
+            });
             return;
         }
-        DebugSink::instance().send(L"UI", L"CandidateWindow::apply_round_region success width=" +
-                                              std::to_wstring(width) + L", height=" + std::to_wstring(height));
+        logger_->log(LogInformation::debug, [width = width, height = height] {
+            return std::format("[UI] CandidateWindow::apply_round_region success width={}, height={}", width,
+                               height);
+        });
     }
 
     bool enable_system_rounded_corners() {
@@ -381,15 +420,17 @@ private:
             DwmSetWindowAttribute(hwnd(), static_cast<DWMWINDOWATTRIBUTE>(window_corner_preference_attribute),
                                   &round_corner_preference, sizeof(round_corner_preference));
         if (FAILED(result)) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::enable_system_rounded_corners unavailable hr=" +
-                                                  std::to_wstring(result));
+            logger_->log(LogInformation::debug, [result = result] {
+                return std::format("[UI] CandidateWindow::enable_system_rounded_corners unavailable hr={}",
+                                   result);
+            });
             return false;
         }
 
         // WM_SIZE can install the pixel-snapped fallback region while the HWND is
         // being created. Remove it so DWM supplies an anti-aliased clip and shadow.
         SetWindowRgn(hwnd(), nullptr, TRUE);
-        DebugSink::instance().send(L"UI", L"CandidateWindow::enable_system_rounded_corners success");
+        logger_->log(LogInformation::debug, "[UI] CandidateWindow::enable_system_rounded_corners success");
         return true;
     }
 
@@ -411,8 +452,9 @@ private:
 
         const UINT dpi = GetDpiForWindow(dpi_window);
         if (dpi != 0 && dpi != current_dpi_) {
-            DebugSink::instance().send(L"UI", L"CandidateWindow::sync_window_dpi old=" + std::to_wstring(current_dpi_) +
-                                                  L", new=" + std::to_wstring(dpi));
+            logger_->log(LogInformation::debug, [previous_dpi = current_dpi_, dpi = dpi] {
+                return std::format("[UI] CandidateWindow::sync_window_dpi old={}, new={}", previous_dpi, dpi);
+            });
             current_dpi_ = dpi;
         }
     }
@@ -423,7 +465,8 @@ private:
         RECT* suggested = reinterpret_cast<RECT*>(lParam);
         const auto [width, height] = client_size();
         if (suggested) {
-            set_window_pos(nullptr, suggested->left, suggested->top, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
+            set_window_pos(nullptr, suggested->left, suggested->top, width, height,
+                           SWP_NOACTIVATE | SWP_NOZORDER);
         } else {
             set_window_pos(nullptr, 0, 0, width, height, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER);
         }
@@ -452,10 +495,11 @@ private:
         if (!GetClientRect(hwnd(), &client))
             return;
         try {
-            xaml_source_.SiteBridge().MoveAndResize({0, 0, client.right - client.left, client.bottom - client.top});
+            xaml_source_.SiteBridge().MoveAndResize(
+                {0, 0, client.right - client.left, client.bottom - client.top});
             xaml_source_.SiteBridge().Show();
         } catch (...) {
-            DebugSink::instance().send(L"ERROR", L"Unable to resize WinUI candidate island");
+            logger_->log(LogInformation::debug, "[ERROR] Unable to resize WinUI candidate island");
         }
     }
 
@@ -507,7 +551,8 @@ private:
 
         const auto resources = Application::Current().Resources();
         const auto normal_style = resources.Lookup(winrt::box_value(L"CandidateTextStyle")).as<Style>();
-        const auto selected_style = resources.Lookup(winrt::box_value(L"CandidateSelectedTextStyle")).as<Style>();
+        const auto selected_style =
+            resources.Lookup(winrt::box_value(L"CandidateSelectedTextStyle")).as<Style>();
         const auto number_style = resources.Lookup(winrt::box_value(L"CandidateNumberStyle")).as<Style>();
         const auto selected_number_style =
             resources.Lookup(winrt::box_value(L"CandidateSelectedNumberStyle")).as<Style>();
@@ -516,7 +561,8 @@ private:
             const bool selected = index == selection_index_;
             rows_[index].number.Text(numbered ? std::to_wstring(index % page_size + 1) : L"");
             rows_[index].highlight.Visibility(selected ? Visibility::Visible : Visibility::Collapsed);
-            rows_[index].accent.Visibility(selected && numbered ? Visibility::Visible : Visibility::Collapsed);
+            rows_[index].accent.Visibility(selected && numbered ? Visibility::Visible
+                                                                : Visibility::Collapsed);
             rows_[index].text.Style(selected ? selected_style : normal_style);
             rows_[index].number.Style(selected ? selected_number_style : number_style);
         }
@@ -541,7 +587,7 @@ private:
                 xaml_source_.Content(nullptr);
                 xaml_source_.Close();
             } catch (...) {
-                DebugSink::instance().send(L"ERROR", L"Unable to close WinUI candidate island");
+                logger_->log(LogInformation::debug, "[ERROR] Unable to close WinUI candidate island");
             }
         }
         rows_.clear();

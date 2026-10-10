@@ -1,6 +1,7 @@
 #include "debugger_window.hpp"
 #include "debugger_resources.h"
 #include "xaml_resource.hpp"
+#include "../pipe_protocol.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -128,10 +129,7 @@ LRESULT DebuggerWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
     }
     if (message == log_message) {
         std::unique_ptr<std::string> text(reinterpret_cast<std::string*>(lparam));
-        const auto information =
-            wparam == static_cast<WPARAM>(llavon::debug::LogInformation::context)
-                ? llavon::debug::LogInformation::context
-                : llavon::debug::LogInformation::general;
+        const auto information = llavon::debug::pipe_protocol::decode_information(wparam);
         if (text) append_message(information, std::move(*text));
         return 0;
     }
@@ -181,6 +179,7 @@ void DebuggerWindow::load_page(const HINSTANCE instance) {
     e2e_latency_status_ = named<TextBlock>(shell, L"E2eLatencyStatus");
     inference_latency_status_ = named<TextBlock>(shell, L"InferenceLatencyStatus");
     log_output_ = named<TextBox>(shell, L"LogOutput");
+    debug_output_ = named<TextBox>(shell, L"DebugOutput");
     context_status_ = named<TextBlock>(shell, L"ContextStatus");
     captured_context_ = named<TextBox>(shell, L"CapturedContext");
     token_round_trip_ = named<TextBox>(shell, L"TokenRoundTrip");
@@ -217,17 +216,20 @@ void DebuggerWindow::append_message(llavon::debug::LogInformation information,
         return;
     }
 
-    update_latency(message);
-    log_text_ += utf8_to_wide(message);
-    log_text_ += L"\r\n";
-    if (log_text_.size() > maximum_log_characters) {
-        const auto line = log_text_.find(L'\n', log_text_.size() - maximum_log_characters);
-        log_text_.erase(0, line == std::wstring::npos
-                               ? log_text_.size() - maximum_log_characters
-                               : line + 1);
+    const bool is_debug = information == llavon::debug::LogInformation::debug;
+    if (!is_debug) update_latency(message);
+    auto& text = is_debug ? debug_text_ : log_text_;
+    const auto& output = is_debug ? debug_output_ : log_output_;
+    text += utf8_to_wide(message);
+    text += L"\r\n";
+    if (text.size() > maximum_log_characters) {
+        const auto line = text.find(L'\n', text.size() - maximum_log_characters);
+        text.erase(0, line == std::wstring::npos
+                          ? text.size() - maximum_log_characters
+                          : line + 1);
     }
-    log_output_.Text(log_text_);
-    log_output_.Select(static_cast<std::int32_t>(log_text_.size()), 0);
+    output.Text(text);
+    output.Select(static_cast<std::int32_t>(text.size()), 0);
 }
 
 bool DebuggerWindow::update_context(const std::string& message) {
@@ -312,6 +314,7 @@ void DebuggerWindow::close_xaml() noexcept {
     e2e_latency_status_ = nullptr;
     inference_latency_status_ = nullptr;
     log_output_ = nullptr;
+    debug_output_ = nullptr;
     context_status_ = nullptr;
     captured_context_ = nullptr;
     token_round_trip_ = nullptr;

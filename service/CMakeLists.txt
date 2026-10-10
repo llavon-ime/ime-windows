@@ -91,7 +91,6 @@ target_compile_options(llavon-ime-ui-runtime PRIVATE /W4 /WX /utf-8 /permissive-
 target_link_libraries(llavon-ime-ui-runtime PRIVATE WindowsApp ole32 runtimeobject)
 
 add_library(llavon-ime-candidate-ui SHARED
-    src/candidate/candidate_log.hpp
     src/candidate/candidate_runtime.cpp
     src/candidate/candidate_ui_api.h
     src/candidate/candidate_ui.rc
@@ -227,6 +226,7 @@ target_include_directories(llavon-ime-settings-ui PUBLIC
 )
 target_include_directories(llavon-ime-candidate-ui PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/candidate"
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../ime-core/include"
 )
 target_link_libraries(llavon-ime-service PRIVATE
     ime-core::ime-core
@@ -261,6 +261,7 @@ target_link_libraries(llavon-ime-settings-ui PRIVATE
     unofficial-sodium::sodium
 )
 target_link_libraries(llavon-ime-candidate-ui PRIVATE
+    llavon::debug-client
     Microsoft::CppWinRT
     WindowsApp
     dwmapi

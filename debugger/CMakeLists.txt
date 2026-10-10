@@ -86,6 +86,25 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
     add_test(NAME logger-queue COMMAND logger-queue-tests)
+
+    add_executable(logger-transport-tests
+        tests/logger_transport_tests.cpp
+        src/logger.cpp
+        src/debugger/pipe_server.cpp
+    )
+    target_compile_features(logger-transport-tests PRIVATE cxx_std_23)
+    target_compile_definitions(logger-transport-tests PRIVATE
+        LLAVON_DEBUG_TEST_PIPE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(logger-transport-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(logger-transport-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../ime-core/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../service/src")
+    target_link_libraries(logger-transport-tests PRIVATE advapi32)
+    add_test(NAME logger-transport COMMAND logger-transport-tests)
+    set_tests_properties(logger-transport PROPERTIES RUN_SERIAL TRUE TIMEOUT 15)
 endif()
 
 install(TARGETS llavon-ime-debugger

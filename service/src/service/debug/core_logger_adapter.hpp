@@ -10,7 +10,7 @@ namespace llavon::service::debug {
 
 class CoreLoggerAdapter final : public llavon::ime::core::Logger {
 public:
-    CoreLoggerAdapter() : logger_("service") {}
+    explicit CoreLoggerAdapter(std::string source = "service") : logger_(std::move(source)) {}
 
     void log(std::string message) noexcept override {
         logger_.log(llavon::debug::LogInformation::general, std::move(message));
@@ -35,6 +35,8 @@ private:
     static constexpr llavon::debug::LogInformation to_debug_information(
         llavon::ime::core::LogInformation information) noexcept {
         switch (information) {
+            case llavon::ime::core::LogInformation::debug:
+                return llavon::debug::LogInformation::debug;
             case llavon::ime::core::LogInformation::context:
                 return llavon::debug::LogInformation::context;
             case llavon::ime::core::LogInformation::general:

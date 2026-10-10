@@ -100,5 +100,29 @@
                  FontSize="13"/>
       </Grid>
     </PivotItem>
+    <PivotItem Header="Debug messages">
+      <Grid Padding="24,12,24,24">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="Debug messages"
+                   FontFamily="Segoe UI Variable Text, Microsoft JhengHei UI"
+                   FontSize="22"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,16"/>
+        <TextBox x:Name="DebugOutput"
+                 Grid.Row="1"
+                 IsReadOnly="True"
+                 AcceptsReturn="True"
+                 TextWrapping="NoWrap"
+                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                 FontFamily="Cascadia Mono, Consolas"
+                 FontSize="12"/>
+      </Grid>
+    </PivotItem>
   </Pivot>
 </Grid>

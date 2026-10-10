@@ -53,6 +53,7 @@ private:
     winrt::Windows::UI::Xaml::Controls::TextBlock e2e_latency_status_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBlock inference_latency_status_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBox log_output_{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBox debug_output_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBlock context_status_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBox captured_context_{nullptr};
     winrt::Windows::UI::Xaml::Controls::TextBox token_round_trip_{nullptr};
@@ -60,6 +61,7 @@ private:
     std::deque<double> recent_e2e_latency_ms_;
     std::deque<double> recent_inference_latency_ms_;
     std::wstring log_text_;
+    std::wstring debug_text_;
     int connection_count_ = 0;
 };
 

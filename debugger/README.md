@@ -17,6 +17,16 @@ the context reconstructed from the tokens used for that request. Context data
 travels through the injected logger as a `LogInformation::context` record;
 ordinary diagnostics use `LogInformation::general`.
 
+The Debug messages page receives `LogInformation::debug` records, including
+candidate window lifecycle, layout, rendering, and error messages. Its bounded
+text history is independent of Diagnostics, so UI tracing does not displace
+latency records or change the latency samples.
+
+The candidate UI runtime owns its logger adapter and injects `ime-core::Logger`
+into its windows. It stops the logger worker after destroying those windows,
+before the candidate UI DLL can unload. Deferred messages capture values rather
+than window pointers and format UTF-8 text on the worker.
+
 The internal `llavon::debug-client` static library provides an asynchronous
 `llavon::debug::Logger`. Its two `log` overloads accept an existing UTF-8 string
 or a lazy message factory. Formatting and pipe writes run on the logger worker;

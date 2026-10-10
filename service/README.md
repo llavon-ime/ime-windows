@@ -64,6 +64,9 @@ The service also owns the interactive per-user process shell:
   after more than two seconds idle, not only continuous token throughput.
 - `llavon-ime-candidate-ui.dll` is loaded on the first candidate presentation.
   It owns one candidate HWND and its own WinUI 3 XAML island on the shared STA.
+  Its runtime owns an asynchronous logger adapter, injected into the candidate
+  windows through `ime-core::Logger`; UI traces appear in the debugger's
+  **Debug messages** page as `LogInformation::debug` records.
 - Candidate presentation snapshots arrive through the independent
   `\\.\pipe\llavon-ime-candidate-ui` pipe. This transport does not share the
   prediction pipe's connection or protocol.

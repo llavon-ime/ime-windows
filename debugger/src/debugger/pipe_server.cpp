@@ -141,10 +141,7 @@ void PipeServer::handle_client(HANDLE pipe) noexcept {
             std::string message(length - sizeof(raw_information), '\0');
             if (!message.empty() &&
                 !read_exact(pipe, event, message.data(), message.size())) break;
-            const auto information = raw_information == static_cast<std::uint8_t>(
-                                                          llavon::debug::LogInformation::context)
-                                         ? llavon::debug::LogInformation::context
-                                         : llavon::debug::LogInformation::general;
+            const auto information = llavon::debug::pipe_protocol::decode_information(raw_information);
             message_callback_(information, std::move(message));
         }
     } catch (...) {

@@ -1,6 +1,7 @@
 #include "candidate_ui_api.h"
 
 #include "candidate_window.hpp"
+#include "../service/debug/core_logger_adapter.hpp"
 #include "../ui/ui_thread.hpp"
 
 #include <windows.h>
@@ -55,7 +56,8 @@ public:
         const auto initialized = llavon_ui_thread_invoke(
             [](void* context) { static_cast<Runtime*>(context)->initialize_on_thread(); }, this);
         if (initialized != 0) {
-            llavon_ui_thread_invoke([](void* context) { static_cast<Runtime*>(context)->destroy_on_thread(); }, this);
+            llavon_ui_thread_invoke(
+                [](void* context) { static_cast<Runtime*>(context)->destroy_on_thread(); }, this);
             if (llavon_ui_thread_release() == 0)
                 connected_ = false;
         }
@@ -91,8 +93,8 @@ public:
             std::lock_guard presentation_lock(presentation_mutex_);
             pending_presentation_.reset();
         }
-        const auto destroyed =
-            llavon_ui_thread_invoke([](void* context) { static_cast<Runtime*>(context)->destroy_on_thread(); }, this);
+        const auto destroyed = llavon_ui_thread_invoke(
+            [](void* context) { static_cast<Runtime*>(context)->destroy_on_thread(); }, this);
         if (destroyed != 0)
             return destroyed;
         const auto result = llavon_ui_thread_release();
@@ -102,13 +104,17 @@ public:
     }
 
 private:
-    static int32_t copy_presentation(const llavon_candidate_ui_presentation* source, Presentation& destination) {
-        constexpr std::size_t legacy_presentation_size = offsetof(llavon_candidate_ui_presentation, anchor_top);
-        constexpr std::size_t anchor_top_end = offsetof(llavon_candidate_ui_presentation, anchor_top) + sizeof(int32_t);
+    static int32_t copy_presentation(const llavon_candidate_ui_presentation* source,
+                                     Presentation& destination) {
+        constexpr std::size_t legacy_presentation_size =
+            offsetof(llavon_candidate_ui_presentation, anchor_top);
+        constexpr std::size_t anchor_top_end =
+            offsetof(llavon_candidate_ui_presentation, anchor_top) + sizeof(int32_t);
         if (!source || source->struct_size < legacy_presentation_size || source->candidate_count == 0 ||
             source->candidate_count > maximum_candidate_count || !source->candidates ||
             source->selection_index >= source->candidate_count || source->layout_columns == 0 ||
-            source->layout_columns > maximum_layout_columns || source->number_column >= source->layout_columns) {
+            source->layout_columns > maximum_layout_columns ||
+            source->number_column >= source->layout_columns) {
             return static_cast<int32_t>(ERROR_INVALID_PARAMETER);
         }
 
@@ -139,6 +145,7 @@ private:
     }
 
     void initialize_on_thread() {
+        logger_ = std::make_unique<llavon::service::debug::CoreLoggerAdapter>("candidate-ui");
         using namespace winrt::Microsoft::UI::Xaml;
         theme_ = ui::load_xaml_resource(IDR_CANDIDATE_THEME_XAML).as<ResourceDictionary>();
         Application::Current().Resources().MergedDictionaries().Append(theme_);
@@ -150,9 +157,9 @@ private:
         if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
             winrt::throw_last_error();
         }
-        candidate_window_ = std::make_unique<CandidateWindow>();
-        const HWND command_window =
-            CreateWindowExW(0, command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
+        candidate_window_ = std::make_unique<CandidateWindow>(*logger_);
+        const HWND command_window = CreateWindowExW(0, command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
+                                                    nullptr, instance, this);
         if (!command_window)
             winrt::throw_last_error();
         command_window_.store(command_window, std::memory_order_release);
@@ -167,6 +174,7 @@ private:
             }
         }
         candidate_window_.reset();
+        logger_.reset();
         if (theme_) {
             const auto dictionaries =
                 winrt::Microsoft::UI::Xaml::Application::Current().Resources().MergedDictionaries();
@@ -196,11 +204,14 @@ private:
             try {
                 self->present_on_thread();
             } catch (const winrt::hresult_error& error) {
-                DebugSink::instance().send(L"ERROR", L"Presentation failed: " + std::wstring(error.message()));
+                self->logger_->log(LogInformation::debug, [message = error.message()] {
+                    return std::format("[ERROR] Presentation failed: {}", winrt::to_string(message));
+                });
                 if (self->candidate_window_)
                     self->candidate_window_->hide();
             } catch (...) {
-                DebugSink::instance().send(L"ERROR", L"Presentation failed with an unknown error");
+                self->logger_->log(LogInformation::debug,
+                                   "[ERROR] Presentation failed with an unknown error");
                 if (self->candidate_window_)
                     self->candidate_window_->hide();
             }
@@ -244,6 +255,7 @@ private:
     std::optional<Presentation> pending_presentation_;
     bool connected_ = false;
     std::atomic<HWND> command_window_{nullptr};
+    std::unique_ptr<llavon::ime::core::Logger> logger_;
     std::unique_ptr<CandidateWindow> candidate_window_;
     winrt::Microsoft::UI::Xaml::ResourceDictionary theme_{nullptr};
 };
@@ -256,12 +268,18 @@ Runtime& runtime() {
 } // namespace
 } // namespace llavon::candidate
 
-extern "C" int32_t llavon_candidate_ui_start(void) { return llavon::candidate::runtime().start(); }
+extern "C" int32_t llavon_candidate_ui_start(void) {
+    return llavon::candidate::runtime().start();
+}
 
 extern "C" int32_t llavon_candidate_ui_present(const llavon_candidate_ui_presentation* presentation) {
     return llavon::candidate::runtime().present(presentation);
 }
 
-extern "C" void llavon_candidate_ui_hide(void) { llavon::candidate::runtime().hide(); }
+extern "C" void llavon_candidate_ui_hide(void) {
+    llavon::candidate::runtime().hide();
+}
 
-extern "C" int32_t llavon_candidate_ui_stop(void) { return llavon::candidate::runtime().stop(); }
+extern "C" int32_t llavon_candidate_ui_stop(void) {
+    return llavon::candidate::runtime().stop();
+}
