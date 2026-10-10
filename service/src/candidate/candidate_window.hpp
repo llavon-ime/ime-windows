@@ -44,20 +44,8 @@ public:
         }
 
         owner_window_ = owner_window;
-        if (!created()) {
-            return;
-        }
-
-        SetLastError(ERROR_SUCCESS);
-        const LONG_PTR previous =
-            SetWindowLongPtrW(hwnd(), GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(owner_window_));
-        const DWORD error = GetLastError();
-        if (previous == 0 && error != ERROR_SUCCESS) {
-            logger_->log(LogInformation::debug, [error = error] {
-                return std::format("[UI] CandidateWindow::set_owner_window failed err={}", error);
-            });
-            return;
-        }
+        // Keep the input target for DPI lookup, without assigning native ownership.
+        // A desktop-band owner would prevent creation of the band-16 popup.
 
         logger_->log(LogInformation::debug, [owner = reinterpret_cast<ULONG_PTR>(owner_window_)] {
             return std::format("[UI] CandidateWindow::set_owner_window owner={}", owner);
@@ -320,7 +308,7 @@ private:
         if (!create_in_band_or_fallback(empirically_verified_candidate_window_band,
                                         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, WS_POPUP,
                                         L"拉風輸入法候選字", CW_USEDEFAULT, CW_USEDEFAULT, width, height,
-                                        owner_window_)) {
+                                        nullptr)) {
             logger_->log(LogInformation::debug, "[UI] CandidateWindow::ensure_window create failed");
             return false;
         }
