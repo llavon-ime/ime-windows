@@ -1199,7 +1199,11 @@ bool SettingsWindow::load_training_items(
 void SettingsWindow::show_lora_training_dialog() {
     if (lora_dialog_open_) return;
     const auto history = load_lora_history_snapshot(configuration_);
-    const std::int64_t initial_base_id = history.empty() ? 0 : history.back().id;
+    const auto applied_base_id = applied_history_id(history,
+        configuration_.model_path, configuration_.base_model_path);
+    const std::int64_t initial_base_id = applied_base_id >= 0
+        ? applied_base_id
+        : (history.empty() ? 0 : history.back().id);
     if (!load_training_items(nullptr, initial_base_id)) {
         throw std::runtime_error("unable to load training metadata");
     }
@@ -1372,10 +1376,14 @@ void SettingsWindow::show_lora_training_dialog() {
             L"#{}  {}", run.id, run.completed_local)));
         state->training_base.Items().Append(choice);
     }
-    state->training_base.SelectedIndex(
-        static_cast<std::int32_t>(state->base_run_ids.size() - 1));
+    const auto initial_base = std::ranges::find(
+        state->base_run_ids, initial_base_id);
+    state->training_base.SelectedIndex(static_cast<std::int32_t>(
+        initial_base - state->base_run_ids.begin()));
 
-    state->training_base_button.Click([this, state](const auto&, const auto&) {
+    state->training_base_button.Click([this, weak_dialog](const auto&, const auto&) {
+        const auto state = weak_dialog.lock();
+        if (!state || state->closed) return;
         const auto index = state->training_base.SelectedIndex();
         const auto selected = index >= 0
             ? state->base_run_ids[static_cast<std::size_t>(index)] : 0;
@@ -1644,7 +1652,11 @@ void SettingsWindow::show_lora_training_dialog() {
         });
     apply_training_strength();
 
-    const auto eligible_training_count = [state] {
+    const auto eligible_training_count = [weak_dialog] {
+        const auto state = weak_dialog.lock();
+        if (!state || state->closed) {
+            return std::pair<std::size_t, std::size_t>{};
+        }
         std::size_t records = 0;
         std::size_t samples = 0;
         for (std::size_t index = 0; index < state->items.size(); ++index) {
@@ -1658,7 +1670,9 @@ void SettingsWindow::show_lora_training_dialog() {
         return std::pair{records, samples};
     };
 
-    const auto refresh_estimated_steps = [state, eligible_training_count] {
+    const auto refresh_estimated_steps = [weak_dialog, eligible_training_count] {
+        const auto state = weak_dialog.lock();
+        if (!state || state->closed) return;
         const auto parse_integer = [](const TextBox& box) -> std::optional<std::int64_t> {
             try {
                 const std::wstring value = box.Text().c_str();
@@ -1700,8 +1714,11 @@ void SettingsWindow::show_lora_training_dialog() {
                       L" steps（有效資料可能較少）");
     };
 
-    const auto refresh_training_selection = [this, state, refresh_estimated_steps,
+    const auto refresh_training_selection = [this, weak_dialog,
+                                             refresh_estimated_steps,
                                              eligible_training_count] {
+        const auto state = weak_dialog.lock();
+        if (!state || state->closed) return;
         const auto eligible = eligible_training_count().first;
         state->training_summary.Text(state->only_selected_sentences.IsOn()
             ? L"符合條件 " + std::to_wstring(eligible) + L" / 共 " +
@@ -1721,46 +1738,57 @@ void SettingsWindow::show_lora_training_dialog() {
         refresh_estimated_steps();
     };
     *refresh_training_count = refresh_training_selection;
-    const auto load_base_parameters = [state](std::int32_t index) {
+    const auto load_base_parameters = [](DialogState& state, std::int32_t index) {
         if (index <= 0) {
-            state->rank.Text(L"8");
-            state->alpha.Text(L"16");
-            state->dropout.Text(L"0");
-            state->target_modules.Text(L"q_proj,v_proj");
+            state.rank.Text(L"8");
+            state.alpha.Text(L"16");
+            state.dropout.Text(L"0");
+            state.target_modules.Text(L"q_proj,v_proj");
             return;
         }
-        const auto& parameters = state->base_parameters[
+        const auto& parameters = state.base_parameters[
             static_cast<std::size_t>(index)];
-        state->rank.Text(std::to_wstring(parameters.rank));
-        state->alpha.Text(std::format(L"{}", parameters.alpha));
-        state->dropout.Text(std::format(L"{}", parameters.dropout));
-        state->target_modules.Text(to_hstring(parameters.target_modules));
+        state.rank.Text(std::to_wstring(parameters.rank));
+        state.alpha.Text(std::format(L"{}", parameters.alpha));
+        state.dropout.Text(std::format(L"{}", parameters.dropout));
+        state.target_modules.Text(to_hstring(parameters.target_modules));
     };
-    state->training_base.SelectionChanged(
-        [this, state, refresh_training_selection, load_base_parameters](
-            const auto&, const auto&) {
+    const auto reload_training_base =
+        [this, weak_dialog, refresh_training_selection,
+         load_base_parameters](bool reload_training_items) {
+            const auto state = weak_dialog.lock();
+            if (!state || state->closed) return;
             const auto index = state->training_base.SelectedIndex();
-            if (index < 0 || state->closed) return;
+            if (index < 0 || static_cast<std::size_t>(index) >=
+                    state->base_run_ids.size()) {
+                return;
+            }
             state->training_base_summary.Text(index == 0 ? L"Base model" :
                 std::format(L"訓練 #{} · {}",
                     state->base_run_ids[static_cast<std::size_t>(index)],
                     state->history[static_cast<std::size_t>(index - 1)].completed_local));
-            load_base_parameters(index);
-            if (!load_training_items(nullptr,
-                    state->base_run_ids[static_cast<std::size_t>(index)])) {
-                state->status.Text(L"無法讀取此基底可用的訓練資料。");
-                return;
+            load_base_parameters(*state, index);
+            if (reload_training_items) {
+                if (!load_training_items(nullptr,
+                        state->base_run_ids[static_cast<std::size_t>(index)])) {
+                    state->status.Text(L"無法讀取此基底可用的訓練資料。");
+                    return;
+                }
+                state->items = std::move(configuration_.training_items);
+                state->deleted_items.assign(state->items.size(), false);
+                state->active_count = state->items.size();
+                state->current_page = 0;
             }
-            state->items = std::move(configuration_.training_items);
-            state->deleted_items.assign(state->items.size(), false);
-            state->active_count = state->items.size();
-            state->current_page = 0;
             refresh_training_selection();
+        };
+    state->training_base.SelectionChanged(
+        [reload_training_base](const auto&, const auto&) {
+            reload_training_base(true);
         });
-    load_base_parameters(state->training_base.SelectedIndex());
-    state->training_base_summary.Text(history.empty() ? L"Base model" :
-        std::format(L"訓練 #{} · {}",
-            history.back().id, history.back().completed_local));
+    // SelectedIndex was assigned before the handler existed. Refresh the
+    // dependent WinRT controls explicitly while reusing the metadata loaded
+    // before the visual tree was created.
+    reload_training_base(false);
     state->only_selected_sentences.Toggled(
         [state, refresh_training_selection](const auto&, const auto&) {
             const auto strength = static_cast<llavon::service::LoraTrainingStrength>(
@@ -1781,9 +1809,6 @@ void SettingsWindow::show_lora_training_dialog() {
             refresh_estimated_steps();
         });
     }
-    refresh_training_selection();
-
-
     const auto request_model_action = [this, state](bool download) {
         const std::int32_t result = configuration_.lora_model_action_callback
             ? configuration_.lora_model_action_callback(
