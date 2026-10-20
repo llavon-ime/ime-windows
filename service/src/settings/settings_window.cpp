@@ -550,7 +550,13 @@ void SettingsWindow::show() noexcept {
     if (!window_) {
         return;
     }
-    ShowWindow(window_, IsIconic(window_) ? SW_RESTORE : SW_SHOWNORMAL);
+    if (IsIconic(window_)) {
+        ShowWindow(window_, SW_RESTORE);
+    }
+    // An explicit settings request must not inherit the service launcher's
+    // STARTUPINFO show state, which can override the first ShowWindow call.
+    SetWindowPos(window_, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW);
     SetForegroundWindow(window_);
     try {
         if (xaml_source_ && !xaml_source_.HasFocus()) {

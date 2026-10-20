@@ -83,7 +83,6 @@ bool SettingsMenuWindow::show(HINSTANCE instance, POINT anchor) {
 
     apply_round_region(width, height);
     SetWindowPos(window_, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
-    ShowWindow(window_, SW_SHOWNORMAL);
     SetForegroundWindow(window_);
     settings_button_.Focus(winrt::Microsoft::UI::Xaml::FocusState::Programmatic);
     return true;

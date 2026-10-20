@@ -282,7 +282,11 @@ if(BUILD_TESTING)
         target_link_libraries(candidate-ui-tests PRIVATE llavon-ime-candidate-ui llavon-ime-settings-ui llavon-ime-ui-runtime gdiplus)
         add_test(NAME candidate-ui-candidate-first COMMAND candidate-ui-tests candidate-first)
         add_test(NAME candidate-ui-settings-first COMMAND candidate-ui-tests settings-first)
-        set_tests_properties(candidate-ui-candidate-first candidate-ui-settings-first PROPERTIES
+        add_test(NAME settings-ui-first-show COMMAND candidate-ui-tests settings-window-first)
+        add_test(NAME settings-ui-hidden-startup COMMAND candidate-ui-tests settings-window-hidden)
+        add_test(NAME settings-ui-menu-hidden-startup COMMAND candidate-ui-tests settings-menu-hidden)
+        set_tests_properties(candidate-ui-candidate-first candidate-ui-settings-first
+            settings-ui-first-show settings-ui-hidden-startup settings-ui-menu-hidden-startup PROPERTIES
             LABELS "desktop-ui" RUN_SERIAL TRUE TIMEOUT 60
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:candidate-ui-tests>")
     endif()

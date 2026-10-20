@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -77,6 +78,33 @@ struct UiLifetime final {
     }
 };
 
+void test_hidden_startup(std::wstring_view scenario) {
+    std::wstring executable(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, executable.data(),
+                                           static_cast<DWORD>(executable.size()));
+    require(length != 0 && length < executable.size(), "Cannot locate UI test executable");
+    executable.resize(length);
+    std::wstring command = L"\"" + executable + L"\" " + std::wstring(scenario);
+    STARTUPINFOW startup{sizeof(startup)};
+    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION process{};
+    require(CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE,
+                           CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process) != FALSE,
+            "Cannot launch UI test with a hidden startup state");
+    const std::unique_ptr<void, decltype(&CloseHandle)> process_handle(process.hProcess, CloseHandle);
+    const std::unique_ptr<void, decltype(&CloseHandle)> thread_handle(process.hThread, CloseHandle);
+    const DWORD wait = WaitForSingleObject(process_handle.get(), 30000);
+    if (wait != WAIT_OBJECT_0) {
+        TerminateProcess(process_handle.get(), 1);
+        require(false, "Hidden-startup settings test timed out");
+    }
+    DWORD exit_code = 1;
+    require(GetExitCodeProcess(process_handle.get(), &exit_code) != FALSE,
+            "Cannot read hidden-startup settings test result");
+    require(exit_code == 0, "Settings first-show test failed with STARTUPINFO SW_HIDE");
+}
+
 void capture(HWND window, const wchar_t* filename) {
     Gdiplus::GdiplusStartupInput input;
     ULONG_PTR token = 0;
@@ -110,6 +138,16 @@ int main(int argc, char** argv) {
     SetEnvironmentVariableW(L"LLAVON_IME_TEST_ERROR_LOG", L"candidate-ui-test-errors.log");
     UiLifetime lifetime;
     try {
+        if (argc > 1 && std::string_view(argv[1]) == "settings-window-hidden") {
+            test_hidden_startup(L"settings-window-first");
+            std::cout << "PASS: settings first show with hidden process startup\n";
+            return 0;
+        }
+        if (argc > 1 && std::string_view(argv[1]) == "settings-menu-hidden") {
+            test_hidden_startup(L"settings-menu-first");
+            std::cout << "PASS: settings menu first show with hidden process startup\n";
+            return 0;
+        }
         const llavon_settings_inference_device cpu{
             LLAVON_SETTINGS_BACKEND_CPU, LLAVON_SETTINGS_DEVICE_CPU, u"cpu", u"CPU", u"CPU", 0};
         require(llavon_settings_ui_configure_v5(
@@ -120,6 +158,54 @@ int main(int argc, char** argv) {
                 "Settings configuration failed");
 
         const bool settings_first = argc > 1 && std::string_view(argv[1]) == "settings-first";
+        const bool menu_first = argc > 1 && std::string_view(argv[1]) == "settings-menu-first";
+        if (menu_first || (argc > 1 && std::string_view(argv[1]) == "settings-window-first")) {
+            require(llavon_settings_ui_start() == 0, "Settings startup failed");
+            HWND menu = nullptr;
+            if (menu_first) {
+                MONITORINFO monitor{sizeof(monitor)};
+                require(GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY),
+                                        &monitor) != FALSE, "Cannot locate settings menu monitor");
+                llavon_settings_ui_show_context_menu(monitor.rcWork.left + 200,
+                                                      monitor.rcWork.top + 200);
+                await_ui([&] {
+                    menu = find_window(L"LlavonImeSettingsMenuWindow");
+                    return menu && IsWindowVisible(menu) && GetWindow(menu, GW_CHILD);
+                }, "Settings menu did not become visible after the first show request");
+            }
+            llavon_settings_ui_show();
+            HWND settings = nullptr;
+            await_ui(
+                [&] {
+                    settings = find_window(L"LlavonImeSettingsWindow");
+                    return settings && IsWindowVisible(settings) && GetWindow(settings, GW_CHILD);
+                },
+                "Settings window did not become visible after the first show request");
+            if (menu_first) require(!IsWindowVisible(menu), "Opening settings did not hide its menu");
+            llavon_settings_ui_hide();
+            await_ui([&] { return !IsWindowVisible(settings); }, "Settings hide failed");
+            llavon_settings_ui_show();
+            await_ui([&] { return IsWindowVisible(settings); }, "Settings reopen failed");
+            require(llavon_ui_thread_invoke([](void* context) {
+                ShowWindow(static_cast<HWND>(context), SW_MINIMIZE);
+            }, settings) == 0, "Cannot minimize settings");
+            await_ui([&] { return IsIconic(settings); }, "Settings did not minimize");
+            llavon_settings_ui_show();
+            await_ui([&] { return IsWindowVisible(settings) && !IsIconic(settings); },
+                     "Settings did not restore after minimizing");
+            require(llavon_ui_thread_invoke([](void* context) {
+                ShowWindow(static_cast<HWND>(context), SW_MAXIMIZE);
+            }, settings) == 0, "Cannot maximize settings");
+            llavon_settings_ui_hide();
+            await_ui([&] { return !IsWindowVisible(settings); }, "Maximized settings hide failed");
+            llavon_settings_ui_show();
+            await_ui([&] { return IsWindowVisible(settings); }, "Maximized settings reopen failed");
+            require(IsZoomed(settings) != FALSE, "Reopening settings lost its maximized state");
+            require(llavon_settings_ui_stop() == 0, "Settings shutdown failed");
+            require(llavon_ui_thread_shutdown() == 0, "Terminal WinUI shutdown failed");
+            std::cout << "PASS: settings first show, hide, reopen, restore, maximize\n";
+            return 0;
+        }
         if (settings_first)
             require(llavon_settings_ui_start() == 0, "Settings startup failed");
         require(llavon_candidate_ui_start() == 0, "Candidate startup failed");
