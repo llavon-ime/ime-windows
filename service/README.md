@@ -1,329 +1,277 @@
-# IME Windows Service
+# 拉風輸入法 Windows 背景服務
 
-Windows named-pipe service for Llavon IME. Platform-neutral model loading,
-tokenization, and llama.cpp inference are supplied by the `ime-core` submodule.
+拉風輸入法的 Windows named pipe 背景服務。與平台無關的模型載入、
+tokenization 與 llama.cpp 推論由 `ime-core` 子模組提供。
 
-The service also owns the interactive per-user process shell:
+背景服務也負責每位使用者各自的互動式程序外殼：
 
-- `llavon-ime-service.exe` keeps the named-pipe server on an inference worker
-  while its main thread owns the notification-area icon.
-- `llavon-ime-settings-ui.dll` is loaded on demand from the executable
-  directory. It owns the settings HWND and WinUI 3 `Microsoft.UI.Xaml` island.
-- Settings UI calls are queued to the shared WinUI STA and never execute XAML
-  or model work on the inference worker.
-- The model path and inference-device setting are stored in
-  `%LOCALAPPDATA%\Llavon IME\settings.json`. The service reads it at process
-  startup and translates it into `ime-core::CoreConfig`; model and device
-  changes made in the settings window reload the inference core immediately.
-- After the model has loaded, the settings window receives the active backend,
-  hardware description, device ID, and GPU-offload state reported by
-  `ime-core`; this runtime status is kept separate from the next-start setting.
-- GPU Boost is enabled by default and can be turned off in the settings window.
-  With supported NVIDIA or AMD drivers, the service enables it before `Ready`
-  and `Predict`, then releases it after two seconds without either request.
-  Turning the setting off stops renewing an active boost, so it expires at the
-  usual two-second deadline; the choice persists across service restarts.
-  NVIDIA uses the NVAPI low-latency hint on an offscreen D3D11
-  device matched to the inference GPU's PCI address. AMD dynamically resolves
-  [`clSetDeviceClockModeAMD`](https://github.com/ROCm/clr/blob/develop/opencl/amdocl/cl_profile_amd.h)
-  from the system OpenCL driver and requests `Peak` while the lease is active,
-  then `Default` on idle, model/device replacement, or shutdown. The OpenCL
-  device must match both AMD's vendor ID and the inference GPU's PCI address.
-  If the inference backend supplies only `VulkanN` (as on the Radeon 860M),
-  the service resolves a uniquely named Vulkan physical device, obtains its
-  Windows LUID, and queries that DXGI adapter's PCI address. Duplicate names,
-  missing LUIDs, and ambiguous identities are rejected; Vulkan and DXGI
-  enumeration indices are never assumed to match.
-  This is a device-wide driver power-mode request, subject to power and thermal
-  limits; it can raise memory clocks, power consumption, temperature, and fan
-  speed. No OpenCL context, queue, kernel, keepalive workload, manual frequency
-  target, overclock, or registry write is used. Inference remains on Vulkan.
-  This AMD profiling extension is optional, not a universal consumer low-latency
-  API. Missing entry points, topology information, or driver support disable
-  boost without disabling inference. A successful read-only query establishes
-  availability; only a successful `Peak` request logs `AMD GPU boost applied`.
-  Driver output units and freshness vary, so those fields are not interpreted
-  as live clocks, MHz, or ratios. Verify actual clocks with independent telemetry.
-  Temporary enable failures can retry on later input, at most once per second.
-  Failed enable requests are followed by `Default` before allowing another try.
-  A hidden instance of the service executable owns the AMD driver calls and
-  watches an inherited handle to the parent service. It runs before singleton,
-  model, or UI initialization. Thus terminating the parent still causes the
-  surviving worker to release Peak. IPC uses unnamed events and shared memory
-  with an explicit inherited-handle list; no public command pipe is exposed.
-  The worker retries restoration up to 30 times independently of the parent.
-  A per-device mutex prevents a replacement worker from enabling Peak while
-  its predecessor still owns restoration. IPC timeouts suspend further boosts
-  and tell the worker to restore; driver waits on the inference thread are bounded.
-  This cannot guarantee restoration if the driver hangs, restoration repeatedly
-  fails, or the worker itself (including the whole process tree) is forcibly
-  terminated. The API restores Default, not a snapshot of another profiling
-  application's mode; avoid simultaneous external clock-mode controllers.
-  `AMD GPU boost restored` records a successful Default acknowledgement.
-  Performance verification must include 250 ms request spacing and resumption
-  after more than two seconds idle, not only continuous token throughput.
-- `llavon-ime-candidate-ui.dll` is loaded on the first candidate presentation.
-  It owns one candidate HWND and its own WinUI 3 XAML island on the shared STA.
-  Its runtime owns an asynchronous logger adapter, injected into the candidate
-  windows through `ime-core::Logger`; UI traces appear in the debugger's
-  **Debug messages** page as `LogInformation::debug` records.
-- Candidate presentation snapshots arrive through the independent
-  `\\.\pipe\llavon-ime-candidate-ui` pipe. This transport does not share the
-  prediction pipe's connection or protocol.
-- Every completed IME composition is sent to the service as raw context,
-  committed text, and raw Bopomofo readings. The service converts readings to
-  the validation-like `syllable`/`tone` schema and inserts them into SQLite on
-  a below-normal-priority writer thread. The prediction `io_context` never
-  opens, writes, or flushes the training database.
-- The separately built `llavon-ime-debugger.exe` owns the multi-client
-  `\\.\pipe\llavon-ime-debugger` server. The tray menu launches the packaged
-  executable on demand.
-- The service links the shared `llavon::debug-client` producer library and
-  adapts it to `ime-core::Logger`. The debugger transport and UI are not built
-  from this project.
-- Whenever the settings window opens, it automatically compares its embedded
-  build identity with the rolling release's `latest.json` manifest. CI builds
-  are ordered by build number. Local development builds still show whether
-  their commit differs from `latest`, without guessing which commit is newer.
-  The HTTP request runs on a settings worker and is canceled after two seconds,
-  so a slow GitHub response never blocks the UI thread.
-- Downloading and installing an update starts only after the user clicks
-  **Update now**. The release manifest supplies the setup URL, byte size, and
-  SHA-256; the settings worker verifies the download before starting the WiX
-  setup silently with a UAC prompt for per-machine installation. The MSI keeps
-  its fixed version so local and published builds can replace each other. The
-  MSI releases the backend and TSF processor before checking for files in use;
-  other apps are left running. Windows may need a restart if an app still holds
-  the old TSF DLL.
+- `llavon-ime-service.exe` 在推論工作執行緒上執行 named pipe 伺服器，
+  主執行緒則擁有通知區域圖示。
+- `llavon-ime-settings-ui.dll` 於需要時從執行檔所在目錄載入，擁有設定視窗的
+  HWND 與 WinUI 3 `Microsoft.UI.Xaml` island。
+- 設定 UI 的呼叫會排入共用的 WinUI STA，絕不會在推論工作執行緒上執行 XAML
+  或模型相關工作。
+- 模型路徑與推論裝置設定儲存於 `%LOCALAPPDATA%\Llavon IME\settings.json`。
+  背景服務在程序啟動時讀取此檔並轉換為 `ime-core::CoreConfig`；在設定視窗中
+  變更模型或裝置時，會立即重新載入推論核心。
+- 模型載入完成後，設定視窗會收到 `ime-core` 回報的目前後端、硬體描述、
+  裝置 ID 與 GPU offload 狀態；這份執行階段狀態與「下次啟動時套用」的設定
+  分開保存。
+- GPU Boost 預設啟用，可在設定視窗中關閉。在支援的 NVIDIA 或 AMD 驅動程式上，
+  背景服務會在 `Ready` 與 `Predict` 之前啟用 Boost，並在兩秒內都沒有這兩種
+  請求時釋放。關閉此設定後會停止續期正在生效的 Boost，因此它會在原本的兩秒
+  期限到時失效；此選擇在背景服務重新啟動後仍會保留。
+  NVIDIA 使用 NVAPI 低延遲提示，作用於一個與推論 GPU PCI 位址相符的離屏
+  D3D11 裝置。AMD 則從系統 OpenCL 驅動程式動態解析
+  [`clSetDeviceClockModeAMD`](https://github.com/ROCm/clr/blob/develop/opencl/amdocl/cl_profile_amd.h)，
+  在租約有效期間請求 `Peak`，並在閒置、更換模型／裝置或關閉時改回 `Default`。
+  OpenCL 裝置必須同時符合 AMD 的 vendor ID 與推論 GPU 的 PCI 位址。
+  若推論後端只提供 `VulkanN`（例如 Radeon 860M），背景服務會解析名稱唯一的
+  Vulkan 實體裝置、取得其 Windows LUID，再查詢對應 DXGI adapter 的 PCI 位址。
+  名稱重複、缺少 LUID 或身分不明確的情況一律拒絕；絕不假設 Vulkan 與 DXGI
+  的列舉索引彼此對應。
+  這是作用於整個裝置的驅動程式電源模式請求，受電源與溫度限制約束；可能提高
+  記憶體時脈、功耗、溫度與風扇轉速。不會建立 OpenCL context、queue、kernel
+  或保活工作負載，也不設定手動頻率目標、不超頻、不寫入註冊表。推論仍在
+  Vulkan 上執行。
+  此 AMD profiling 擴充功能是選用的，並非通用的消費級低延遲 API。缺少進入點、
+  拓撲資訊或驅動程式支援時，只會停用 Boost，不會停用推論。唯讀查詢成功即視為
+  可用；只有 `Peak` 請求成功時才會記錄 `AMD GPU boost applied`。
+  驅動程式輸出的單位與更新頻率各不相同，因此這些欄位不會被解讀為即時時脈、
+  MHz 或比例。實際時脈請以獨立的遙測工具驗證。
+  暫時性的啟用失敗可在之後的輸入時重試，每秒最多一次。
+  啟用請求失敗後，會先送出 `Default` 才允許再次嘗試。
+  AMD 驅動程式呼叫由一個隱藏的背景服務執行檔實例負責，它會監看從父背景服務
+  繼承的 handle，並在 singleton、模型或 UI 初始化之前執行。因此即使父程序被
+  終止，仍存活的工作程序也會釋放 Peak。IPC 使用未命名 event 與共用記憶體，
+  並搭配明確的繼承 handle 清單；不對外公開任何命令 pipe。
+  工作程序會獨立於父程序重試還原，最多 30 次。
+  每個裝置各有一個 mutex，避免前一個工作程序仍負責還原時，接替的工作程序
+  就啟用 Peak。IPC 逾時會暫停後續 Boost 並通知工作程序還原；推論執行緒上
+  等待驅動程式的時間有上限。
+  若驅動程式停止回應、還原持續失敗，或工作程序本身（包含整個程序樹）被強制
+  終止，則無法保證一定會還原。此 API 還原的是 `Default`，而非其他 profiling
+  應用程式設定的模式快照；請避免同時使用其他外部時脈模式控制工具。
+  `AMD GPU boost restored` 代表已成功收到 `Default` 的確認。
+  效能驗證必須包含間隔 250 ms 的請求，以及閒置超過兩秒後恢復輸入的情境，
+  不能只測連續 token 吞吐量。
+- `llavon-ime-candidate-ui.dll` 在第一次顯示候選字時載入。它在共用 STA 上
+  擁有一個候選字 HWND 與自己的 WinUI 3 XAML island。其 runtime 擁有一個
+  非同步 logger 轉接器，透過 `ime-core::Logger` 注入候選字視窗；UI 追蹤
+  訊息會以 `LogInformation::debug` 記錄出現在偵錯工具的 **Debug messages**
+  頁面。
+- 候選字顯示快照經由獨立的 `\\.\pipe\llavon-ime-candidate-ui` pipe 傳送。
+  此傳輸通道不與預測 pipe 共用連線或協定。
+- 每次完成的輸入法組字都會以原始前文、送出的文字與原始注音讀音傳送給背景
+  服務。背景服務將讀音轉換為類似驗證集的 `syllable`/`tone` 結構，並在優先權
+  低於一般的寫入執行緒上寫入 SQLite。預測用的 `io_context` 絕不開啟、寫入或
+  flush 訓練資料庫。
+- 另外建置的 `llavon-ime-debugger.exe` 擁有可接受多個用戶端的
+  `\\.\pipe\llavon-ime-debugger` 伺服器。系統匣選單會在需要時啟動隨安裝包
+  附帶的執行檔。
+- 背景服務連結共用的 `llavon::debug-client` 記錄產生端函式庫，並將其轉接為
+  `ime-core::Logger`。偵錯工具的傳輸元件與 UI 不由本專案建置。
+- 每次開啟設定視窗時，都會自動比對內嵌的建置識別資訊與滾動發布版本的
+  `latest.json` manifest。CI 建置依建置編號排序。本機開發建置仍會顯示其
+  commit 是否與 `latest` 不同，但不會猜測哪個 commit 較新。
+  HTTP 請求在設定工作執行緒上執行，兩秒後即取消，因此 GitHub 回應緩慢時
+  絕不會卡住 UI 執行緒。
+- 只有在使用者按下 **立即更新** 後，才會開始下載並安裝更新。發布 manifest
+  提供安裝程式的 URL、位元組大小與 SHA-256；設定工作執行緒會先驗證下載內容，
+  再以靜默模式啟動 WiX 安裝程式，並為全系統安裝顯示 UAC 提示。MSI 維持固定
+  版號，讓本機建置與正式發布的版本可以互相取代。MSI 在檢查使用中檔案之前，
+  會先釋放背景服務與 TSF processor；其他應用程式則保持執行。若仍有應用程式
+  持有舊的 TSF DLL，Windows 可能需要重新啟動。
 
-The settings and candidate modules are separate DLLs with separate HWNDs.
-`llavon-ime-ui-runtime.dll` owns their common STA, Win32 message loop, dispatcher,
-and process-wide WinUI Application. Each UI client acquires a runtime reference;
-closing one client leaves the other alive. The framework stays available for
-reopening clients until the service exits, when the host shuts down the runtime
-after both clients have closed.
+設定與候選字模組是各自獨立、擁有不同 HWND 的 DLL。
+`llavon-ime-ui-runtime.dll` 擁有兩者共用的 STA、Win32 訊息迴圈、dispatcher
+與整個程序唯一的 WinUI Application。每個 UI 用戶端都會取得一份 runtime
+參考；關閉其中一個用戶端不會影響另一個。在背景服務結束前，框架都會保持可用，
+以便重新開啟用戶端；背景服務結束時，宿主會在兩個用戶端都關閉後關閉 runtime。
 
-Source code is divided by runtime responsibility rather than operating-system
-name:
+原始碼依執行階段職責而非作業系統名稱劃分：
 
-- `src/service/`: resident EXE responsibilities, including prediction IPC,
-  tray ownership, and loading UI modules.
-- `src/ui/`: the shared WinUI STA runtime and XAML resource helpers.
-- `src/settings/`: the settings DLL, its UI client, HWND, and XAML island.
-- `src/candidate/`: the candidate UI DLL, its UI client, single HWND, and XAML
-  island.
-- `src/service/debug/`: the thin adapter between `ime-core::Logger` and the
-  separately installed `llavon::debug-client` producer.
+- `src/service/`：常駐 EXE 的職責，包含預測 IPC、系統匣圖示與載入 UI 模組。
+- `src/ui/`：共用的 WinUI STA runtime 與 XAML 資源輔助工具。
+- `src/settings/`：設定 DLL，包含其 UI 用戶端、HWND 與 XAML island。
+- `src/candidate/`：候選字 UI DLL，包含其 UI 用戶端、單一 HWND 與 XAML
+  island。
+- `src/service/debug/`：`ime-core::Logger` 與另外安裝的
+  `llavon::debug-client` 記錄產生端之間的輕量轉接層。
 
-The service keeps the existing executable and IPC compatibility names:
+背景服務沿用既有的執行檔與 IPC 相容名稱：
 
-- executable: `llavon-ime-service.exe`
-- settings UI module: `llavon-ime-settings-ui.dll`
-- candidate UI module: `llavon-ime-candidate-ui.dll`
-- debugger executable: `llavon-ime-debugger.exe`
-- named pipe: `\\.\pipe\llavon-ime`
-- candidate UI named pipe: `\\.\pipe\llavon-ime-candidate-ui`
-- debugger named pipe: `\\.\pipe\llavon-ime-debugger`
-- default model path override: `LLAVON_IME_MODEL_PATH` (the saved setting takes
-  precedence during normal startup)
-- tables path: `LLAVON_IME_TABLES_DIR`
-- collected training database: `%LOCALAPPDATA%\Llavon IME\training-data\commits.sqlite3`
-- collected training database path override: `LLAVON_IME_TRAINING_DATABASE_PATH`
+- 執行檔：`llavon-ime-service.exe`
+- 設定 UI 模組：`llavon-ime-settings-ui.dll`
+- 候選字 UI 模組：`llavon-ime-candidate-ui.dll`
+- 偵錯工具執行檔：`llavon-ime-debugger.exe`
+- named pipe：`\\.\pipe\llavon-ime`
+- 候選字 UI named pipe：`\\.\pipe\llavon-ime-candidate-ui`
+- 偵錯工具 named pipe：`\\.\pipe\llavon-ime-debugger`
+- 預設模型路徑覆寫：`LLAVON_IME_MODEL_PATH`（一般啟動時以已儲存的設定優先）
+- 字表路徑：`LLAVON_IME_TABLES_DIR`
+- 收集的訓練資料庫：`%LOCALAPPDATA%\Llavon IME\training-data\commits.sqlite3`
+- 收集的訓練資料庫路徑覆寫：`LLAVON_IME_TRAINING_DATABASE_PATH`
 
-Ordinary Bopomofo commits are stored in the SQLite `training_commits` table.
-`context`, `answer`, and `padding_json` preserve the same shape as the public
-validation set. The `revice` boolean is true when any position in the commit
-was manually selected; the original Bopomofo reading remains unchanged.
-Mixed commits retain literal characters and incomplete input as `literal` or
-`rawReading` entries. Commits with no Bopomofo reading anywhere are discarded,
-including pre-existing pending literal-only rows when the service starts. The
-`training_state` column is constrained to `pending`, `excluded`, or `trained`.
-`event_id`, `event_type`, and nullable `revision_of` are also stored; the last
-column reserves space for future typo/backspace/retype correction detection.
-During dataset conversion, ime-core supplies the same tokens and candidates as
-inference. Literal characters provide context for later positions without loss.
-Records still need at least one complete, trainable Bopomofo reading; incomplete
-`rawReading` entries remain untrainable.
+一般注音送出內容儲存在 SQLite 的 `training_commits` 資料表中。
+`context`、`answer` 與 `padding_json` 的結構與公開驗證集相同。只要該次送出中
+任一位置曾手動選字，布林欄位 `revice` 即為 true；原始注音讀音保持不變。
+混合內容的送出會將字面字元與未完成的輸入保留為 `literal` 或 `rawReading`
+項目。完全沒有任何注音讀音的送出會被捨棄，背景服務啟動時也會一併清除既有、
+仍為 pending 且只含字面字元的資料列。`training_state` 欄位只允許 `pending`、
+`excluded` 或 `trained`。另外也會儲存 `event_id`、`event_type` 與可為 null 的
+`revision_of`；最後一欄為未來偵測打錯字／退格／重打等修正行為預留。
+轉換資料集時，ime-core 提供與推論時相同的 token 與候選字。字面字元可完整
+作為後續位置的前文。每筆記錄仍需至少一個完整、可訓練的注音讀音；未完成的
+`rawReading` 項目無法用於訓練。
 
-Commits are first held as plaintext only in the service process for ten seconds.
-If the frontend reports an immediate Backspace for the same TSF context and the
-same latest commit, that staged commit is discarded and never reaches SQLite.
-Otherwise the below-normal-priority writer encrypts and inserts it after the
-window expires; a following commit in the same collection session confirms and
-flushes the preceding one early. Correction detection never decrypts or reads a
-stored commit. SQLite uses WAL mode, and selection/state changes run in
-transactions, so training-data I/O does not run on the inference path. This
-pre-release schema intentionally does not import the former JSONL prototype.
+送出內容會先以明文形式只保存在背景服務程序中十秒。若前端回報同一個 TSF
+context 針對同一筆最新送出立即按下 Backspace，該筆暫存內容就會被捨棄，
+永遠不會寫入 SQLite。否則，優先權低於一般的寫入執行緒會在時間到後將其加密
+並寫入；同一收集工作階段中的下一筆送出會提前確認並寫入前一筆。修正偵測絕不
+解密或讀取已儲存的送出內容。SQLite 使用 WAL 模式，選取與狀態變更都在交易中
+執行，因此訓練資料的 I/O 不會出現在推論路徑上。此預覽版結構刻意不匯入先前的
+JSONL 原型資料。
 
-## AMD laptop GPU Boost verification
+## AMD 筆電 GPU Boost 驗證
 
-1. In settings, select the AMD Vulkan inference device and confirm that the
-   active runtime reports GPU offload. Enabling GPU Boost while inference runs
-   on the CPU does not exercise the AMD backend.
-2. To capture driver diagnostics, exit the existing service from its tray menu,
-   then launch the new build from PowerShell in its `bin` directory:
-   `./llavon-ime-service.exe 2> amd-boost.log`.
-   If automatic startup wins the race, the log reports `already running`;
-   repeat after exiting that instance. The hidden instance with the internal
-   `--amd-gpu-boost-worker` argument is the clock owner, not a second IME service.
-3. Type several characters about 250 ms apart, pause for at least five seconds,
-   then resume. Look for `AMD GPU boost applied` followed by
-   `AMD GPU boost restored`. These messages are logged once per backend;
-   a successful driver call does not prove a latency improvement.
-4. Compare GPU Boost enabled and disabled, especially the first prediction
-   after idle. Also check switching models/devices and exiting normally.
-   Monitor observed GPU clocks and power separately if available.
-5. For crash recovery testing, terminate only the parent service while Peak is
-   active and independently verify that the surviving worker restores Default.
-   Killing the entire process tree also kills the restoration worker.
-6. If the log reports the clock-mode worker unavailable, record the GPU name and
-   driver version. Inference should continue. Vulkan support alone does not
-   imply support for AMD's optional OpenCL clock-mode extension.
+1. 在設定中選擇 AMD Vulkan 推論裝置，並確認目前 runtime 回報已啟用 GPU
+   offload。若推論在 CPU 上執行，啟用 GPU Boost 並不會測試到 AMD 後端。
+2. 若要擷取驅動程式診斷資訊，先從系統匣選單結束現有的背景服務，再於新版
+   建置的 `bin` 目錄中以 PowerShell 啟動：
+   `./llavon-ime-service.exe 2> amd-boost.log`。
+   若自動啟動搶先執行，記錄中會出現 `already running`；請結束該實例後再試。
+   帶有內部參數 `--amd-gpu-boost-worker` 的隱藏實例是時脈擁有者，並不是第二個
+   輸入法背景服務。
+3. 以約 250 ms 的間隔輸入數個字，暫停至少五秒後再繼續輸入。確認記錄中先出現
+   `AMD GPU boost applied`，之後出現 `AMD GPU boost restored`。這些訊息每個
+   後端只記錄一次；驅動程式呼叫成功並不代表延遲有所改善。
+4. 比較 GPU Boost 啟用與停用時的差異，特別是閒置後的第一次預測。也要檢查
+   切換模型／裝置與正常結束的情況。若有工具可用，請另外監看實際的 GPU 時脈
+   與功耗。
+5. 測試當機復原時，請在 Peak 生效期間只終止父背景服務，並獨立確認仍存活的
+   工作程序會還原為 `Default`。終止整個程序樹也會一併終止負責還原的工作程序。
+6. 若記錄顯示時脈模式工作程序無法使用，請記下 GPU 名稱與驅動程式版本。推論
+   應該仍能繼續。支援 Vulkan 並不代表支援 AMD 選用的 OpenCL 時脈模式擴充功能。
 
-`amd-gpu-boost-worker-tests` exercises the actual child-process/IPC lifecycle
-with a fake driver, including parent termination, delayed calls, and failed
-restoration. It never changes hardware clocks. Hardware validation must also
-check Peak/Default on the target driver and measure actual candidate latency.
-On a Radeon 860M with Windows driver 32.0.22032.6002, Peak/Default requests were
-accepted. In a local benchmark that excluded the warmup block, with a full
-250 ms idle gap after each completed prediction, 56 samples per
-setting measured 9.227 ms median with boost off and 9.119 ms on; P95 was
-15.668 ms off and 15.857 ms on. Actual idle gaps were 250.022–250.530 ms.
-This small mixed difference does not establish a consistent latency benefit.
-These are warm-request statistics, not a bound on interactive latency. An
-earlier raw benchmark recorded a 473.767 ms request in the excluded warmup
-block. The live service also recorded 603.283 ms and 764.094 ms predictions
-among otherwise 3–15 ms requests, with almost all of each spike inside the
-cache-alignment `llama_decode()` call. Backend instrumentation reproduced
-these stalls in lazy Vulkan matrix pipeline creation. The idle `ready()`
-warmup decodes one token in a separate context and does not prepare the
-small-batch variants needed by actual input.
+`amd-gpu-boost-worker-tests` 以模擬驅動程式測試實際的子程序／IPC 生命週期，
+包含父程序終止、延遲呼叫與還原失敗等情境，且絕不會變更硬體時脈。硬體驗證
+仍須在目標驅動程式上檢查 Peak/Default，並量測實際的候選字延遲。
+在搭載 Windows 驅動程式 32.0.22032.6002 的 Radeon 860M 上，Peak/Default 請求
+皆被接受。在一次排除暖機區段的本機基準測試中，每次預測完成後都完整閒置
+250 ms，每種設定各量測 56 個樣本：Boost 關閉時中位數為 9.227 ms，開啟時為
+9.119 ms；P95 則分別為 15.668 ms 與 15.857 ms。實際閒置間隔為
+250.022–250.530 ms。這種些微且方向不一的差異，不足以證明延遲有穩定的改善。
+以上是暖機後請求的統計，並非互動延遲的上限。先前一次原始基準測試在被排除的
+暖機區段中記錄到一筆 473.767 ms 的請求。實際運作中的背景服務也在其他介於
+3–15 ms 的請求之間，記錄到 603.283 ms 與 764.094 ms 的預測，且每次突增的時間
+幾乎全都落在快取對齊用的 `llama_decode()` 呼叫中。後端插樁重現了這些卡頓，
+原因是 Vulkan 矩陣 pipeline 的延遲建立。閒置時的 `ready()` 暖機只在另一個
+context 中解碼一個 token，並未準備實際輸入所需的小 batch 變體。
 
-The core now prepares Vulkan inference pipelines once during model loading,
-before serving requests. It covers small batches, larger matrix kernels,
-and populated attention caches, clears the synthetic KV state, and retains
-the prepared context for the first session. Without a compatible disk cache,
-this adds roughly 4–5 seconds on the tested 860M, without periodic GPU work or changing
-the actual inference batch size. CUDA and CPU initialization are unchanged.
-Validation must include every first-use request, new sessions, 250 ms idle
-gaps, and longer idle periods. Long-context compute time is still workload
-dependent; the driver clock hint alone did not remove the reproduced stalls.
+核心現在會在載入模型時、開始處理請求之前，一次準備好 Vulkan 推論 pipeline。
+涵蓋小 batch、較大的矩陣 kernel 與已填入資料的 attention 快取，接著清除合成的
+KV 狀態，並保留已準備好的 context 給第一個工作階段使用。在沒有相容磁碟快取的
+情況下，這會讓測試用的 860M 多花約 4–5 秒，但不會產生週期性的 GPU 工作，也不會
+改變實際推論的 batch 大小。CUDA 與 CPU 的初始化維持不變。
+驗證時必須涵蓋所有第一次使用的請求、新工作階段、250 ms 的閒置間隔，以及更長的
+閒置時間。長前文的運算時間仍取決於工作負載；單靠驅動程式時脈提示並無法消除
+重現出的卡頓。
 
-The service explicitly passes `%LOCALAPPDATA%\Llavon IME\vulkan-cache` to
-ime-core. The cross-platform ggml Vulkan backend does not assume a path and
-leaves persistent caching disabled when its host supplies none. Subsequent
-starts reuse compatible data while still preparing the model and its inference
-contexts.
-Cache identities include the GPU, driver version, Vulkan cache UUID and
-backend schema. Payloads have a checksum and are replaced atomically.
-Missing, corrupt or incompatible data is rebuilt; a cache I/O failure does
-not prevent inference. The core saves immediately after model preparation,
-so normal service shutdown is not required to preserve that work. There are
-no cache writes on the prediction path and no registry changes.
-`[VK_CACHE] loaded`, `miss`, and `saved` distinguish these startup outcomes.
-See `ime-core/vcpkg-ports/README.md` for the pinned ggml fork and diagnostics.
+背景服務會明確將 `%LOCALAPPDATA%\Llavon IME\vulkan-cache` 傳給 ime-core。
+跨平台的 ggml Vulkan 後端不會自行假設路徑；宿主未提供路徑時，持久快取保持停用。
+之後的啟動會重複使用相容的資料，但仍會準備模型及其推論 context。
+快取識別資訊包含 GPU、驅動程式版本、Vulkan 快取 UUID 與後端結構版本。
+資料內容附有 checksum，並以不可分割的方式替換。
+遺失、損毀或不相容的資料會重新建立；快取 I/O 失敗不會阻止推論。核心在模型準備
+完成後立即儲存，因此不需要正常關閉背景服務也能保留這些成果。預測路徑上沒有任何
+快取寫入，也不會變更註冊表。
+`[VK_CACHE] loaded`、`miss` 與 `saved` 分別代表這幾種啟動結果。
+固定使用的 ggml fork 與診斷方式請參考 `ime-core/vcpkg-ports/README.md`。
 
-The clock-mode query also retained Peak-looking values after Default succeeded;
-independent ADL telemetry returned to low idle clocks. Neither API success nor
-its clock-query output proves an actual frequency or latency improvement.
+在 `Default` 成功後，時脈模式查詢仍會回傳看似 Peak 的數值；獨立的 ADL 遙測則
+顯示已回到閒置時的低時脈。無論是 API 呼叫成功或其時脈查詢輸出，都不能證明實際
+頻率或延遲有所改善。
 
-## Local LoRA training
+## 本機 LoRA 訓練
 
-The settings window's LoRA action lists the current `pending` records whenever
-the dialog is opened. All records start checked. Starting a run changes every
-unchecked pending record to `excluded`; records successfully written into the
-trainer dataset change to `trained` only after both training and GGUF export
-complete. Records that cannot be converted stay `pending`.
-Trainable records with a manual candidate selection contribute three samples;
-other records contribute one. The trainer shuffles the combined samples each
-epoch when shuffling is enabled (the default). Training history counts the
-original records, without the extra samples.
+每次開啟設定視窗中的 LoRA 對話框時，都會列出目前狀態為 `pending` 的記錄，且預設
+全部勾選。開始訓練時，所有未勾選的 pending 記錄會改為 `excluded`；成功寫入訓練器
+資料集的記錄，要等訓練與 GGUF 匯出都完成後才會改為 `trained`。無法轉換的記錄
+維持 `pending`。
+含有手動選字的可訓練記錄會貢獻三個樣本，其他記錄則貢獻一個。啟用洗牌（預設）時，
+訓練器每個 epoch 都會將所有樣本重新洗牌。訓練歷史只計算原始記錄數，不含額外樣本。
 
-The optional train-until-remembered mode re-evaluates every manually selected
-training target after each epoch and repeats until every target wins within its
-candidate set. The mode rejects conflicting targets for an identical causal
-input prefix and is unavailable for the ultra-low preset.
+選用的「訓練到記住為止」模式會在每個 epoch 之後重新評估每個手動選字的訓練目標，
+並重複訓練，直到每個目標都在其候選集合中勝出為止。此模式會拒絕相同因果輸入前綴
+卻有互相衝突目標的情況，且無法搭配超低預設組合使用。
 
-The independent incorrect-only mode also re-evaluates all training targets but
-computes the next epoch's loss only for targets that failed validation. It keeps
-the configured epoch limit unless train-until-remembered is enabled separately.
+獨立的「只訓練錯誤項目」模式同樣會重新評估所有訓練目標，但下一個 epoch 只針對
+驗證失敗的目標計算 loss。除非另外啟用「訓練到記住為止」，否則仍遵守設定的
+epoch 上限。
 
-The dialog supplies non-empty defaults derived from
-`lora-trainer/docs/step-search-results.md`: rank/alpha 8/16, dropout 0, batch
-size and gradient accumulation 1, 5 epochs, max steps `-1`, learning rate `1e-4`,
-FP32, target modules `q_proj,v_proj`, no warmup or weight decay, max gradient
-norm 1, seed 42, shuffling enabled, and device `auto`. The UI polls service
-status for download/training progress, can cancel an active operation, and can
-reload the completed `personalized-Q4_K_M.gguf` through the existing model
-reload callback.
+對話框提供的非空預設值源自 `lora-trainer/docs/step-search-results.md`：
+rank/alpha 為 8/16、dropout 0、batch size 與梯度累積皆為 1、5 個 epoch、
+max steps `-1`、學習率 `1e-4`、FP32、目標模組 `q_proj,v_proj`、無 warmup 與
+weight decay、最大梯度範數 1、seed 42、啟用洗牌，裝置為 `auto`。UI 會輪詢背景
+服務狀態以顯示下載／訓練進度，可取消進行中的作業，也可透過既有的模型重新載入
+回呼載入完成的 `personalized-Q4_K_M.gguf`。
 
-The base model is fixed to `tony65535/llavon-ime-llama-250m` (CC-BY-NC-4.0).
-It is never downloaded implicitly: the user must press the download/update
-button. The service pins each download to the repository revision returned by
-Hugging Face and stores `config.json`, `ime_vocab.json`, and
-`model.safetensors` below:
+基礎模型固定為 `tony65535/llavon-ime-llama-250m`（CC-BY-NC-4.0）。
+它絕不會在未經同意的情況下下載：使用者必須按下下載／更新按鈕。背景服務會將每次
+下載固定在 Hugging Face 回傳的儲存庫 revision，並將 `config.json`、
+`ime_vocab.json` 與 `model.safetensors` 儲存於：
 
 ```text
 %LOCALAPPDATA%\Llavon IME\training-assets\tony65535--llavon-ime-llama-250m\<revision>
 ```
 
-Each run gets its own directory under `training-assets\runs`. Training history
-and each run's `adapter_model.safetensors`, `adapter_config.json`, and
-`training_state.json` are retained so an earlier adapter can be exported again
-with its matching base-model revision. Only the latest completed run's quantized
-GGUF is retained for inference after the new model is successfully applied.
-Older GGUF files are kept if loading or saving the new model fails. The
-intermediate f16 GGUF is removed after export. The service—not
-the settings DLL—converts the selected SQLite rows into the numeric JSONL
-accepted by the CLI, starts the hidden trainer process, exports the adapter,
-and performs every related file operation. The fallback CLI path for an older
-installation is:
+每次訓練都在 `training-assets\runs` 下有自己的目錄。訓練歷史以及每次訓練的
+`adapter_model.safetensors`、`adapter_config.json` 與 `training_state.json`
+都會保留，讓先前的 adapter 可以搭配對應的基礎模型 revision 再次匯出。新模型成功
+套用後，只保留最近一次完成訓練的量化 GGUF 供推論使用。若載入或儲存新模型失敗，
+則保留舊的 GGUF 檔案。中間產物 f16 GGUF 在匯出後即刪除。將選取的 SQLite 資料列
+轉換為 CLI 可接受的數值 JSONL、啟動隱藏的訓練器程序、匯出 adapter，以及所有
+相關的檔案操作，都由背景服務負責，而非設定 DLL。舊版安裝的備用 CLI 路徑為：
 
 ```text
 %ProgramFiles%\Llavon IME\tools\lora\llavon-lora.exe
 ```
 
-The pinned LoRA Trainer submodule commit is embedded during CMake configure.
-The training dialog requests its `commit-<SHA>` manifest directly and checks
-the manifest `commit` against the pinned submodule. It shows the installed
-version and CPU, CUDA, and ROCm choices. Download is enabled when that exact
-release contains the corresponding Windows asset. The automatic upstream
-release currently contains Windows CPU; CUDA and ROCm require matching Windows
-assets in that release. An in-app install downloads the selected ZIP, verifies
-its size and SHA-256, checks the archive paths, then extracts and validates its
-installed manifest. It installs under
-`%LocalAppData%\Llavon IME\tools\lora\<version>\<asset>` and records the active
-selection in `current.install`. The service uses that selection before the
-Program Files installation.
-After successfully selecting a release, the service removes CPU, CUDA, and ROCm
-installations of other versions from this per-user directory, including when
-reselecting an already downloaded release. All backends of the selected version
-are retained. Cleanup never follows reparse points or removes unrelated files;
-if old files cannot be removed, installation succeeds with a cleanup warning.
+固定使用的 LoRA Trainer 子模組 commit 會在 CMake configure 時內嵌。
+訓練對話框會直接請求其 `commit-<SHA>` manifest，並將 manifest 中的 `commit`
+與固定的子模組 commit 比對。對話框會顯示已安裝的版本，以及 CPU、CUDA 與 ROCm
+選項。只要該版本的發布內容包含對應的 Windows 檔案，就可以下載。目前上游自動發布
+的版本包含 Windows CPU 版；CUDA 與 ROCm 需要該發布版本中有對應的 Windows 檔案。
+在應用程式內安裝時，會下載所選的 ZIP、驗證其大小與 SHA-256、檢查壓縮檔內的路徑，
+再解壓縮並驗證安裝後的 manifest。安裝位置為
+`%LocalAppData%\Llavon IME\tools\lora\<version>\<asset>`，目前選用的版本記錄在
+`current.install`。背景服務會優先使用此選擇，其次才是 Program Files 中的安裝。
+成功選定某個發布版本後，背景服務會從此個人目錄移除其他版本的 CPU、CUDA 與 ROCm
+安裝，重新選擇已下載的版本時也一樣。所選版本的所有後端都會保留。清理時絕不追蹤
+reparse point，也不刪除無關檔案；若無法移除舊檔案，安裝仍會成功，但會顯示清理
+警告。
 
-Model checks and downloads use WinRT `Windows.Web.Http` with `co_await` for
-network operations. The service's dedicated worker waits only at the outer
-boundary. Downloads read the response in bounded chunks and publish progress
-to the settings UI; canceling also cancels an in-flight HTTP request.
+模型檢查與下載使用 WinRT `Windows.Web.Http`，並以 `co_await` 處理網路操作。
+背景服務的專用工作執行緒只在最外層邊界等待。下載時以固定大小的區塊讀取回應，
+並將進度回報給設定 UI；取消時也會一併取消進行中的 HTTP 請求。
 
-For development and tests, `LLAVON_IME_LORA_ASSETS_DIR` overrides the asset/run
-root and `LLAVON_IME_LORA_CLI_PATH` overrides the trainer executable.
+開發與測試時，可用 `LLAVON_IME_LORA_ASSETS_DIR` 覆寫資源／訓練根目錄，並用
+`LLAVON_IME_LORA_CLI_PATH` 覆寫訓練器執行檔。
 
-## Build
+## 建置
 
-The candidate and settings DLLs both host WinUI 3 `DesktopWindowXamlSource`
-islands on one shared STA thread. They share the activation, dispatcher, XAML
-metadata, and embedded-resource helpers in `src/ui`. Neither UI runs inside
-the application's TSF thread.
+候選字與設定 DLL 都在同一個共用 STA 執行緒上承載 WinUI 3
+`DesktopWindowXamlSource` island。兩者共用 `src/ui` 中的啟用、dispatcher、
+XAML metadata 與內嵌資源輔助工具。兩個 UI 都不在應用程式的 TSF 執行緒中執行。
 
-Candidate UI changes belong in `src/candidate/ui/candidate_page.xaml`
-(columns and footer), `candidate_item.xaml` (each candidate row), and
-`theme.xaml` (fonts, column widths, light/dark/high-contrast brushes). These
-files are embedded as RCDATA by `candidate_ui.rc`; rebuild the DLL after
-editing them. C++ updates candidate text, selection, numbering, and page state;
-the popup measures the XAML tree to obtain its native size in the current DPI.
+候選字 UI 的修改應放在 `src/candidate/ui/candidate_page.xaml`（欄位與頁尾）、
+`candidate_item.xaml`（每一列候選字）與 `theme.xaml`（字型、欄寬、淺色／深色／
+高對比筆刷）。這些檔案由 `candidate_ui.rc` 以 RCDATA 內嵌；編輯後需重新建置 DLL。
+C++ 負責更新候選字文字、選取狀態、編號與分頁狀態；彈出視窗會量測 XAML 樹，以取得
+目前 DPI 下的原生大小。
 
-Configure and build the complete Windows project from the repository root:
+從儲存庫根目錄設定並建置完整的 Windows 專案：
 
 ```powershell
 git submodule update --init --recursive
@@ -331,13 +279,12 @@ cmake --preset windows
 cmake --build --preset windows
 ```
 
-The top-level project adds `ime-core` and this component to one CMake build
-graph backed by one vcpkg manifest. Vulkan support is enabled by default. CUDA
-support is optional and requires configuring with `LLAVON_IME_ENABLE_CUDA=ON`.
+頂層專案將 `ime-core` 與本元件加入同一個 CMake 建置圖，並使用同一份 vcpkg
+manifest。Vulkan 支援預設啟用。CUDA 支援為選用，需在 configure 時設定
+`LLAVON_IME_ENABLE_CUDA=ON`。
 
-On an interactive Windows desktop, enable the optional candidate/settings
-integration tests to check both startup orders, non-activating presentation,
-column sizing, monitor-edge placement, hide/show, and UI client restart:
+在互動式 Windows 桌面上，可啟用選用的候選字／設定整合測試，檢查兩種啟動順序、
+不搶焦點的顯示、欄寬調整、螢幕邊緣定位、隱藏／顯示，以及 UI 用戶端重新啟動：
 
 ```powershell
 cmake --preset windows -DLLAVON_IME_ENABLE_UI_TESTS=ON
