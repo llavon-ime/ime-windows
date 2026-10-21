@@ -2,7 +2,7 @@
   <CPackWiXFragment Id="#PRODUCT">
     <!--
       This helper is embedded in the MSI so the first upgrade from an older
-      release can stop its service and unload its DLL before file costing runs.
+      release can stop its service before file costing runs.
       As an immediate, impersonated action it executes on the interactive
       user's desktop, which is the scope required by TF_IPPMF_FORSESSION.
     -->
@@ -53,7 +53,7 @@
       Return="check" />
     <InstallExecuteSequence>
       <!-- FileCost can record locked files before InstallValidate displays them.
-           Release the installed service and TSF DLL before costing starts. -->
+           Stop the installed service before costing starts. -->
       <Custom Action="ReleaseLlavonImeForUpgrade" After="FindRelatedProducts"
               Condition="WIX_UPGRADE_DETECTED" />
       <Custom Action="ClearLlavonImeUpdateGateOnRollback" After="InstallInitialize"

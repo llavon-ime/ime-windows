@@ -3,7 +3,9 @@
 #include <windows.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -27,46 +29,42 @@ class PipeEngine : public IEngine {
     static inline HANDLE hPipe = INVALID_HANDLE_VALUE;
     static inline std::atomic_uint64_t next_commit_token{1};
     static constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime";
+    static constexpr std::chrono::seconds launch_retry_interval{5};
+    static inline std::optional<std::chrono::steady_clock::time_point> last_launch_request;
 
     static bool connect_pipe() {
         hPipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
         return hPipe != INVALID_HANDLE_VALUE;
     }
 
-    static bool retry_connect_pipe() {
-        for (int i = 0; i < 20; ++i) {
-            if (connect_pipe()) {
-                return true;
+    // Starts the backend without waiting for its pipe. Until it is reachable the
+    // engine reports English mode, so key handling never blocks while the backend
+    // loads or while an update holds the launch mutex.
+    static void request_backend_launch() {
+        const auto now = std::chrono::steady_clock::now();
+        if (last_launch_request && now - *last_launch_request < launch_retry_interval) return;
+        last_launch_request = now;
+
+        HANDLE launch_mutex = CreateMutexW(nullptr, FALSE, service_launch_mutex_name);
+        if (!launch_mutex) return;
+
+        // The updater holds this mutex while it replaces the backend.
+        const DWORD wait_result = WaitForSingleObject(launch_mutex, 0);
+        if (wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED) {
+            if (!connect_pipe()) {
+                launch_service_backend();
             }
-            Sleep(100);
+            ReleaseMutex(launch_mutex);
         }
-        return false;
+        CloseHandle(launch_mutex);
     }
 
     static bool ensure_pipe() {
         if (hPipe != INVALID_HANDLE_VALUE) return true;
         if (connect_pipe()) return true;
 
-        HANDLE launch_mutex = CreateMutexW(nullptr, FALSE, service_launch_mutex_name);
-        if (!launch_mutex) {
-            launch_service_backend();
-            return retry_connect_pipe();
-        }
-
-        const DWORD wait_result = WaitForSingleObject(launch_mutex, 0);
-        const bool owns_launch = wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED;
-        if (owns_launch) {
-            if (!connect_pipe()) {
-                launch_service_backend();
-            }
-            const bool connected = retry_connect_pipe();
-            ReleaseMutex(launch_mutex);
-            CloseHandle(launch_mutex);
-            return connected;
-        }
-
-        CloseHandle(launch_mutex);
-        return retry_connect_pipe();
+        request_backend_launch();
+        return hPipe != INVALID_HANDLE_VALUE;
     }
 
     static void disconnect() {
@@ -238,23 +236,25 @@ public:
         }
     }
 
+    // Without a backend there is no Bopomofo engine, so both mode queries
+    // fall back to English and keys pass through to the application.
     InputMode toggle_input_mode() override {
-        if (!ensure_pipe()) return InputMode::Chinese;
+        if (!ensure_pipe()) return InputMode::English;
 
-        if (!write_command(PipeCommand::ToggleInputMode)) { disconnect(); return InputMode::Chinese; }
+        if (!write_command(PipeCommand::ToggleInputMode)) { disconnect(); return InputMode::English; }
 
-        InputMode mode = InputMode::Chinese;
-        if (!read_input_mode(mode)) { disconnect(); return InputMode::Chinese; }
+        InputMode mode = InputMode::English;
+        if (!read_input_mode(mode)) { disconnect(); return InputMode::English; }
         return mode;
     }
 
     InputMode current_input_mode() override {
-        if (!ensure_pipe()) return InputMode::Chinese;
+        if (!ensure_pipe()) return InputMode::English;
 
-        if (!write_command(PipeCommand::GetInputMode)) { disconnect(); return InputMode::Chinese; }
+        if (!write_command(PipeCommand::GetInputMode)) { disconnect(); return InputMode::English; }
 
-        InputMode mode = InputMode::Chinese;
-        if (!read_input_mode(mode)) { disconnect(); return InputMode::Chinese; }
+        InputMode mode = InputMode::English;
+        if (!read_input_mode(mode)) { disconnect(); return InputMode::English; }
         return mode;
     }
 };

@@ -458,13 +458,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return launched ? ERROR_SUCCESS : ERROR_PROCESS_ABORTED;
     }
 
+    // Deactivating the profile for an update only switches every application to
+    // another keyboard: COM cannot unload the DLL from other processes. Leave
+    // running hosts on the old DLL; Windows Installer replaces it in place or
+    // after restart.
+    if (updating) return ERROR_SUCCESS;
+
     ComApartment apartment;
     if (FAILED(apartment.result())) {
-        if (updating) end_update_guard();
         return exit_code_from_hresult(apartment.result());
     }
 
-    const HRESULT release_result = release_text_service();
-    if (FAILED(release_result) && updating) end_update_guard();
-    return exit_code_from_hresult(release_result);
+    return exit_code_from_hresult(release_text_service());
 }
