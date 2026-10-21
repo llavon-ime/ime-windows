@@ -418,9 +418,11 @@ int main(int argc, char* argv[]) {
                 case LLAVON_LORA_CHECK_MODEL: return lora_training.check_model_async();
                 case LLAVON_LORA_DOWNLOAD_MODEL: return lora_training.download_model_async();
                 case LLAVON_LORA_CHECK_TRAINER: return lora_training.check_trainer_async();
-                case LLAVON_LORA_INSTALL_CPU: return lora_training.install_trainer_async(0);
-                case LLAVON_LORA_INSTALL_CUDA: return lora_training.install_trainer_async(1);
-                case LLAVON_LORA_INSTALL_ROCM: return lora_training.install_trainer_async(2);
+                case LLAVON_LORA_INSTALL_TRAINER: return lora_training.install_trainer_async();
+                case LLAVON_LORA_INSTALL_CUDA_RUNTIME:
+                    return lora_training.install_cuda_runtime_async();
+                case LLAVON_LORA_REMOVE_CUDA_RUNTIME:
+                    return lora_training.remove_cuda_runtime_async();
                 default: return false;
                 }
             },

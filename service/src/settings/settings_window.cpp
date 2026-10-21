@@ -1285,11 +1285,13 @@ void SettingsWindow::show_lora_training_dialog() {
         TextBlock trainer_status_title{nullptr};
         TextBlock trainer_status_detail{nullptr};
         TextBlock trainer_release_detail{nullptr};
-        ComboBox trainer_backend{nullptr};
         Button check_trainer{nullptr};
         Button install_trainer{nullptr};
         Button cancel_trainer{nullptr};
         ProgressBar trainer_progress{nullptr};
+        TextBlock cuda_runtime_status{nullptr};
+        Button install_cuda_runtime{nullptr};
+        Button remove_cuda_runtime{nullptr};
         Button reload_model{nullptr};
         TextBlock estimated_steps{nullptr};
         DispatcherTimer timer{nullptr};
@@ -1304,9 +1306,8 @@ void SettingsWindow::show_lora_training_dialog() {
         bool setup_user_changed = false;
         bool changing_setup_expansion = false;
         bool setup_needs_attention = false;
-        std::int32_t trainer_assets = 0;
+        std::int32_t cuda_runtime = LLAVON_CUDA_RUNTIME_UNKNOWN;
         bool trainer_release_available = false;
-        bool trainer_selection_initialized = false;
         bool busy = false;
         bool training_busy = false;
         bool cancel_requested = false;
@@ -1351,12 +1352,13 @@ void SettingsWindow::show_lora_training_dialog() {
     state->trainer_status_title = named<TextBlock>(dialog_root, L"TrainerStatusTitle");
     state->trainer_status_detail = named<TextBlock>(dialog_root, L"TrainerStatusDetail");
     state->trainer_release_detail = named<TextBlock>(dialog_root, L"TrainerReleaseDetail");
-    state->trainer_backend = named<ComboBox>(dialog_root, L"TrainerBackend");
     state->check_trainer = named<Button>(dialog_root, L"CheckTrainerButton");
     state->install_trainer = named<Button>(dialog_root, L"InstallTrainerButton");
     state->cancel_trainer = named<Button>(dialog_root, L"CancelTrainerButton");
     state->trainer_progress = named<ProgressBar>(dialog_root, L"TrainerProgress");
-    state->trainer_backend.SelectedIndex(0);
+    state->cuda_runtime_status = named<TextBlock>(dialog_root, L"CudaRuntimeStatus");
+    state->install_cuda_runtime = named<Button>(dialog_root, L"InstallCudaRuntimeButton");
+    state->remove_cuda_runtime = named<Button>(dialog_root, L"RemoveCudaRuntimeButton");
     state->training_summary = named<TextBlock>(dialog_root, L"TrainingSummary");
     state->training_data_button = named<Button>(dialog_root, L"TrainingDataButton");
     state->training_base_button = named<Button>(dialog_root, L"TrainingBaseButton");
@@ -1835,19 +1837,32 @@ void SettingsWindow::show_lora_training_dialog() {
             configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
         }
     });
-    const auto update_trainer_choice = [state] {
-        const auto index = state->trainer_backend.SelectedIndex();
-        const bool asset_available = index >= 0 && index < 3 &&
-            (state->trainer_assets & (1 << index)) != 0;
-        state->install_trainer.IsEnabled(
-            !state->busy && state->trainer_release_available && asset_available);
-        if (state->trainer_release_available && !asset_available) {
-            state->trainer_release_detail.Text(
-                L"此 submodule 的發行版沒有選定的 Windows 訓練器下載檔。");
+    // The trainer always ships the CPU build; CUDA is an optional runtime
+    // that the installed trainer downloads on request.
+    const auto update_trainer_actions = [state] {
+        state->install_trainer.IsEnabled(!state->busy && state->trainer_release_available);
+        const auto runtime = state->cuda_runtime;
+        state->install_cuda_runtime.IsEnabled(
+            !state->busy && state->trainer_available &&
+            runtime == LLAVON_CUDA_RUNTIME_NOT_INSTALLED);
+        state->remove_cuda_runtime.IsEnabled(
+            !state->busy && runtime == LLAVON_CUDA_RUNTIME_INSTALLED);
+        state->remove_cuda_runtime.Visibility(runtime == LLAVON_CUDA_RUNTIME_INSTALLED
+            ? Visibility::Visible : Visibility::Collapsed);
+        state->install_cuda_runtime.Visibility(runtime == LLAVON_CUDA_RUNTIME_INSTALLED
+            ? Visibility::Collapsed : Visibility::Visible);
+        if (!state->trainer_available) {
+            state->cuda_runtime_status.Text(L"安裝訓練器後即可下載，用於以 NVIDIA 顯示卡訓練。");
+        } else if (runtime == LLAVON_CUDA_RUNTIME_INSTALLED) {
+            state->cuda_runtime_status.Text(L"已安裝；訓練裝置為 auto 或 cuda 時會使用 NVIDIA 顯示卡。");
+        } else if (runtime == LLAVON_CUDA_RUNTIME_NOT_INSTALLED) {
+            state->cuda_runtime_status.Text(L"尚未安裝；目前只能以 CPU 訓練。");
+        } else if (runtime == LLAVON_CUDA_RUNTIME_UNSUPPORTED) {
+            state->cuda_runtime_status.Text(L"目前安裝的訓練器不支援，請先更新訓練器。");
+        } else {
+            state->cuda_runtime_status.Text(L"按「檢查版本」以確認安裝狀態。");
         }
     };
-    state->trainer_backend.SelectionChanged(
-        [update_trainer_choice](const auto&, const auto&) { update_trainer_choice(); });
     state->check_trainer.Click([this, state](const auto&, const auto&) {
         const auto result = configuration_.lora_model_action_callback
             ? configuration_.lora_model_action_callback(
@@ -1856,16 +1871,24 @@ void SettingsWindow::show_lora_training_dialog() {
         if (result != ERROR_SUCCESS)
             state->trainer_status_detail.Text(L"無法開始檢查 LoRA 訓練器。");
     });
-    state->install_trainer.Click([this, state](const auto&, const auto&) {
-        const auto index = state->trainer_backend.SelectedIndex();
-        if (index < 0 || index > 2) return;
+    const auto request_trainer_action = [this, state](std::int32_t action,
+                                                      const wchar_t* failure) {
         const auto result = configuration_.lora_model_action_callback
             ? configuration_.lora_model_action_callback(
-                configuration_.lora_model_action_context,
-                LLAVON_LORA_INSTALL_CPU + index)
+                configuration_.lora_model_action_context, action)
             : ERROR_INVALID_FUNCTION;
-        if (result != ERROR_SUCCESS)
-            state->trainer_status_detail.Text(L"無法開始下載 LoRA 訓練器。");
+        if (result != ERROR_SUCCESS) state->trainer_status_detail.Text(failure);
+    };
+    state->install_trainer.Click([request_trainer_action](const auto&, const auto&) {
+        request_trainer_action(LLAVON_LORA_INSTALL_TRAINER, L"無法開始下載 LoRA 訓練器。");
+    });
+    state->install_cuda_runtime.Click([request_trainer_action](const auto&, const auto&) {
+        request_trainer_action(LLAVON_LORA_INSTALL_CUDA_RUNTIME,
+                               L"無法開始下載 CUDA 加速元件。");
+    });
+    state->remove_cuda_runtime.Click([request_trainer_action](const auto&, const auto&) {
+        request_trainer_action(LLAVON_LORA_REMOVE_CUDA_RUNTIME,
+                               L"無法移除 CUDA 加速元件。");
     });
     state->cancel_trainer.Click([this](const auto&, const auto&) {
         if (configuration_.cancel_lora_callback)
@@ -1903,7 +1926,7 @@ void SettingsWindow::show_lora_training_dialog() {
     });
 
     const auto refresh_status = [this, state, refresh_training_selection,
-                                 refresh_apply_state, update_trainer_choice] {
+                                 refresh_apply_state, update_trainer_actions] {
         llavon_settings_lora_status status{};
         const std::int32_t result = configuration_.get_lora_status_callback
             ? configuration_.get_lora_status_callback(
@@ -1953,16 +1976,7 @@ void SettingsWindow::show_lora_training_dialog() {
         if (state->cancel_requested) state->status.Text(L"正在取消訓練並結束子程序…");
         state->model_available = status.model_available != 0;
         state->trainer_available = status.trainer_available != 0;
-        if (!state->trainer_selection_initialized && status.trainer_backend &&
-            *status.trainer_backend) {
-            const std::u16string_view backend(status.trainer_backend);
-            state->trainer_backend.SelectedIndex(
-                backend == u"cpu" ? 0 :
-                (backend.find(u"rocm") != std::u16string_view::npos ? 2 :
-                 (backend.find(u"cuda") != std::u16string_view::npos ? 1 : 0)));
-            state->trainer_selection_initialized = true;
-        }
-        state->trainer_assets = status.trainer_assets;
+        state->cuda_runtime = status.cuda_runtime;
         state->trainer_release_available =
             status.trainer_release_version && *status.trainer_release_version;
         const bool setup_needs_attention =
@@ -2006,10 +2020,8 @@ void SettingsWindow::show_lora_training_dialog() {
         };
         const auto installed_version = status.trainer_version && *status.trainer_version
             ? wide_text(status.trainer_version) : std::wstring(L"未知版本");
-        const auto installed_backend = status.trainer_backend && *status.trainer_backend
-            ? wide_text(status.trainer_backend) : std::wstring(L"未知後端");
         state->trainer_status_title.Text(status.trainer_available
-            ? L"已安裝 " + installed_version + L"（" + installed_backend + L"）"
+            ? L"已安裝 " + installed_version
             : L"尚未安裝 LoRA 訓練器");
         const auto trainer_detail = trainer_busy ? status.message
                                                  : status.trainer_message;
@@ -2024,13 +2036,15 @@ void SettingsWindow::show_lora_training_dialog() {
         }
         state->trainer_progress.Visibility(trainer_busy
             ? Visibility::Visible : Visibility::Collapsed);
-        state->trainer_progress.IsIndeterminate(trainer_busy);
+        // The CUDA runtime download reports byte progress; the rest does not.
+        state->trainer_progress.IsIndeterminate(trainer_busy && status.progress <= 0);
+        if (trainer_busy && status.progress > 0)
+            state->trainer_progress.Value(status.progress * 100);
         state->check_trainer.IsEnabled(!busy);
-        state->trainer_backend.IsEnabled(!busy);
         state->cancel_trainer.Visibility(
             status.stage == LLAVON_SETTINGS_LORA_INSTALLING_TRAINER
                 ? Visibility::Visible : Visibility::Collapsed);
-        update_trainer_choice();
+        update_trainer_actions();
 
         state->progress.Visibility(
             training_busy ? Visibility::Visible : Visibility::Collapsed);

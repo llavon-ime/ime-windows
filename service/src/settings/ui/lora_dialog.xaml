@@ -142,27 +142,35 @@
                   </Border>
                   <StackPanel Orientation="Horizontal"
                       Spacing="8">
-                    <ComboBox x:Name="TrainerBackend"
-                        Width="150"
-                        MinHeight="32"
-                        Header="下載版本">
-                      <ComboBoxItem Content="CPU"/>
-                      <ComboBoxItem Content="CUDA"/>
-                      <ComboBoxItem Content="ROCm"/>
-                    </ComboBox>
                     <Button x:Name="CheckTrainerButton"
                         Content="檢查版本"
-                        MinHeight="32"
-                        VerticalAlignment="Bottom"/>
+                        MinHeight="32"/>
                     <Button x:Name="InstallTrainerButton"
                         Content="下載訓練器"
-                        MinHeight="32"
-                        VerticalAlignment="Bottom"/>
+                        MinHeight="32"/>
                     <Button x:Name="CancelTrainerButton"
                         Content="取消"
                         MinHeight="32"
-                        VerticalAlignment="Bottom"
                         Visibility="Collapsed"/>
+                  </StackPanel>
+                  <StackPanel Spacing="4"
+                      Margin="0,4,0,0">
+                    <TextBlock Text="CUDA 加速元件"
+                        FontSize="13"
+                        FontWeight="SemiBold"/>
+                    <TextBlock x:Name="CudaRuntimeStatus"
+                        Text=""
+                        FontSize="12"
+                        TextWrapping="Wrap"/>
+                    <StackPanel Orientation="Horizontal"
+                        Spacing="8">
+                      <Button x:Name="InstallCudaRuntimeButton"
+                          Content="下載 CUDA 加速元件（約 3 GB）"
+                          MinHeight="32"/>
+                      <Button x:Name="RemoveCudaRuntimeButton"
+                          Content="移除"
+                          MinHeight="32"/>
+                    </StackPanel>
                   </StackPanel>
                 </StackPanel>
               </StackPanel>

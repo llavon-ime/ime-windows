@@ -115,7 +115,7 @@ CI 會將這一行（最多 200 個字元）放入 `latest.json` 的 `major_upda
 
 `*-setup.exe` bundle 內含核心 MSI 與小型模型下載輔助程式。輔助程式會下載建置時指定的 GGUF，驗證大小與 SHA-256，然後儲存至 `%ProgramData%\Llavon IME\models\<revision>`。後續安裝或更新時，會驗證並重複使用現有檔案。模型位於 MSI 安裝目錄之外，因此 MSI 升級不會移除模型。
 
-CMake 只嵌入固定的 LoRA Trainer 子模組提交版本，不會呼叫 LoRA 發行版 API。需要使用時，訓練對話框會從 `commit-<SHA>` 發行版取得資訊清單、驗證其提交版本，並安裝對應的 LoRA Trainer ZIP。若發行版提供相應的 Windows 資產，使用者可以選擇 CPU、CUDA 或 ROCm。
+CMake 只嵌入固定的 LoRA Trainer 子模組提交版本，不會呼叫 LoRA 發行版 API。需要使用時，訓練對話框會從 `commit-<SHA>` 發行版取得資訊清單、驗證其提交版本，並安裝對應的 LoRA Trainer ZIP（CPU 版）。需要 NVIDIA GPU 訓練時，使用者可在對話框另外下載 CUDA 加速元件，由訓練器自行從 NuGet 取得。
 
 CI 會建置一份使用可載入 ggml CPU 後端的 CPU 安裝包。執行時 ggml 會選擇最快且相容的 CPU 版本，因此 AVX2 與 AVX-512 系統使用同一份 MSI。
 

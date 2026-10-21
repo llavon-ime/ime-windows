@@ -43,6 +43,9 @@ constexpr wchar_t model_repository_directory[] =
     L"tony65535--llavon-ime-llama-250m";
 constexpr std::array<std::string_view, 3> model_files{
     "config.json", "ime_vocab.json", "model.safetensors"};
+// The trainer release ships only the CPU build; the CUDA libtorch is a
+// separate runtime that the trainer itself downloads from NuGet.
+constexpr std::string_view trainer_asset = "win-x64-cpu";
 
 std::optional<std::filesystem::path> environment_path(const wchar_t* name) {
     const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
@@ -61,6 +64,12 @@ std::filesystem::path local_app_data_root() {
     if (FAILED(result)) throw std::runtime_error("unable to resolve LocalAppData");
     const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> owned(value, CoTaskMemFree);
     return std::filesystem::path(owned.get()) / L"Llavon IME";
+}
+
+// Shared by every installed trainer version, so a trainer update keeps the
+// multi-gigabyte CUDA runtime as long as its libtorch version is unchanged.
+std::filesystem::path cuda_runtime_root() {
+    return local_app_data_root() / L"tools" / L"torch-runtimes";
 }
 
 std::filesystem::path executable_directory() {
@@ -252,13 +261,6 @@ bool valid_sha256(std::string_view value) {
         return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' ||
                c >= 'A' && c <= 'F';
     });
-}
-
-bool backend_matches(std::string_view backend, std::string_view asset) {
-    if (asset == "win-x64-cpu") return backend == "cpu";
-    if (asset == "win-x64-cuda") return backend.starts_with("cuda");
-    if (asset == "win-x64-rocm") return backend.starts_with("rocm");
-    return false;
 }
 
 bool valid_trainer_asset(const TrainerReleaseAsset& asset) {
@@ -567,9 +569,16 @@ bool LoraTrainingManager::check_trainer_async() {
     return launch(&LoraTrainingManager::check_trainer_worker);
 }
 
-bool LoraTrainingManager::install_trainer_async(std::int32_t backend) {
-    if (backend < 0 || backend > 2) return false;
-    return launch(&LoraTrainingManager::install_trainer_worker, backend);
+bool LoraTrainingManager::install_trainer_async() {
+    return launch(&LoraTrainingManager::install_trainer_worker);
+}
+
+bool LoraTrainingManager::install_cuda_runtime_async() {
+    return launch(&LoraTrainingManager::install_cuda_runtime_worker);
+}
+
+bool LoraTrainingManager::remove_cuda_runtime_async() {
+    return launch(&LoraTrainingManager::remove_cuda_runtime_worker);
 }
 
 void LoraTrainingManager::refresh_installed_trainer() {
@@ -717,11 +726,10 @@ void LoraTrainingManager::reset_conversation_data() {
     pending_event_ids_.clear();
 }
 
-bool LoraTrainingManager::launch(Operation operation, std::int32_t trainer_backend) {
+bool LoraTrainingManager::launch(Operation operation) {
     std::lock_guard operation_lock(operation_mutex_);
     if (busy_.load(std::memory_order_acquire)) return false;
     if (worker_.joinable()) worker_.join();
-    if (trainer_backend >= 0) pending_trainer_backend_ = trainer_backend;
     cancelling_.store(false, std::memory_order_release);
     http_transfer_.reset();
     busy_.store(true, std::memory_order_release);
@@ -934,17 +942,12 @@ void LoraTrainingManager::check_trainer_worker() {
     set_status(LoraOperationStage::checking_trainer, 0,
                u"正在查詢 LoRA 訓練器發行版…");
     try {
+        refresh_cuda_runtime();
         const auto manifest = resolve_trainer_release(http_transfer_);
-        std::int32_t assets = 0;
-        constexpr std::array<std::string_view, 3> names{
-            "win-x64-cpu", "win-x64-cuda", "win-x64-rocm"};
-        for (std::size_t index = 0; index < names.size(); ++index) {
-            const auto asset = manifest.assets.find(std::string(names[index]));
-            if (asset != manifest.assets.end() && valid_trainer_asset(asset->second))
-                assets |= 1 << index;
-        }
+        const auto asset = manifest.assets.find(std::string(trainer_asset));
+        if (asset == manifest.assets.end() || !valid_trainer_asset(asset->second))
+            throw std::runtime_error("This release has no Windows LoRA trainer download");
         std::lock_guard lock(status_mutex_);
-        status_.trainer_assets = assets;
         status_.trainer_release_version = to_utf16(manifest.version);
         status_.trainer_update_available =
             status_.trainer_version != status_.trainer_release_version ||
@@ -959,7 +962,6 @@ void LoraTrainingManager::check_trainer_worker() {
         status_.message = status_.trainer_message;
     } catch (const std::exception& error) {
         std::lock_guard lock(status_mutex_);
-        status_.trainer_assets = 0;
         status_.trainer_release_version.clear();
         status_.trainer_update_available = false;
         status_.trainer_message = cancelling_.load(std::memory_order_acquire)
@@ -976,18 +978,15 @@ void LoraTrainingManager::install_trainer_worker() {
     set_status(LoraOperationStage::checking_trainer, 0,
                u"正在查詢 LoRA 訓練器版本…");
     const auto manifest = resolve_trainer_release(http_transfer_);
-    constexpr std::array<std::string_view, 3> asset_names{
-        "win-x64-cpu", "win-x64-cuda", "win-x64-rocm"};
-    const auto asset_name = asset_names.at(
-        static_cast<std::size_t>(pending_trainer_backend_));
-    const auto asset = manifest.assets.find(std::string(asset_name));
+    const std::string asset_name(trainer_asset);
+    const auto asset = manifest.assets.find(asset_name);
     if (asset == manifest.assets.end())
-        throw std::runtime_error("This release has no Windows asset for the selected backend");
+        throw std::runtime_error("This release has no Windows LoRA trainer download");
     if (!valid_trainer_asset(asset->second))
         throw std::runtime_error("LoRA trainer asset metadata is invalid");
 
     const auto root = local_app_data_root() / L"tools" / L"lora";
-    const auto relative = manifest.version + "/" + std::string(asset_name);
+    const auto relative = manifest.version + "/" + asset_name;
     const auto destination = root / widen(relative);
     const auto matches_release = [&](const std::filesystem::path& directory) {
         const auto body = read_text(directory / L"llavon-lora-manifest.json");
@@ -996,7 +995,7 @@ void LoraTrainingManager::install_trainer_worker() {
         return parsed && parsed.value().version == manifest.version &&
                parsed.value().trainerApi == manifest.trainerApi &&
                parsed.value().commit == manifest.commit &&
-               backend_matches(parsed.value().backend, asset_name) &&
+               parsed.value().backend == "cpu" &&
                std::filesystem::is_regular_file(
                    directory / L"llavon-lora.exe", ignored);
     };
@@ -1004,17 +1003,15 @@ void LoraTrainingManager::install_trainer_worker() {
         if (!prune_obsolete_lora_trainers(root, manifest.version))
             cleanup_complete = false;
         refresh_installed_trainer();
-        std::lock_guard lock(status_mutex_);
-        status_.trainer_release_version = to_utf16(manifest.version);
-        status_.trainer_update_available = false;
-        status_.trainer_message = cleanup_complete
+        refresh_cuda_runtime();
+        {
+            std::lock_guard lock(status_mutex_);
+            status_.trainer_release_version = to_utf16(manifest.version);
+            status_.trainer_update_available = false;
+        }
+        finish_trainer_operation(cleanup_complete
             ? u"已安裝目前版本對應之訓練器"
-            : u"訓練器已安裝，但部分舊版檔案無法清除；請關閉使用中的訓練器後重試安裝";
-        status_.stage = !status_.output_model_path.empty()
-            ? LoraOperationStage::completed
-            : (status_.model_available ? LoraOperationStage::model_ready
-                                       : LoraOperationStage::idle);
-        status_.message = status_.trainer_message;
+            : u"訓練器已安裝，但部分舊版檔案無法清除；請關閉使用中的訓練器後重試安裝");
     };
     if (matches_release(destination)) {
         select_trainer(root, relative);
@@ -1098,16 +1095,128 @@ void LoraTrainingManager::install_trainer_worker() {
     if (had_previous) std::filesystem::remove_all(backup, cleanup_error);
     finish_install(!cleanup_error);
 }
+void LoraTrainingManager::finish_trainer_operation(std::u16string message) {
+    std::lock_guard lock(status_mutex_);
+    status_.trainer_message = std::move(message);
+    status_.stage = !status_.output_model_path.empty()
+        ? LoraOperationStage::completed
+        : (status_.model_available ? LoraOperationStage::model_ready
+                                   : LoraOperationStage::idle);
+    status_.progress = 0;
+    status_.message = status_.trainer_message;
+}
+
+void LoraTrainingManager::refresh_cuda_runtime() {
+    struct RuntimeEntry {
+        std::string backend;
+        bool installed;
+    };
+    struct RuntimeList {
+        std::vector<RuntimeEntry> runtimes;
+    };
+    auto state = CudaRuntimeState::unknown;
+    const auto trainer = trainer_executable();
+    std::error_code error;
+    if (std::filesystem::is_regular_file(trainer, error)) {
+        try {
+            std::string output;
+            run_process(trainer, {
+                L"runtime", L"list", L"--json",
+                L"--runtime-root", cuda_runtime_root().wstring(),
+            }, false, &output);
+            const auto parsed = rfl::json::read<RuntimeList>(output);
+            if (!parsed) throw std::runtime_error("invalid runtime list");
+            state = CudaRuntimeState::unsupported;
+            for (const auto& runtime : parsed.value().runtimes) {
+                if (runtime.backend == "cuda")
+                    state = runtime.installed ? CudaRuntimeState::installed
+                                              : CudaRuntimeState::not_installed;
+            }
+        } catch (const std::exception&) {
+            if (cancelling_.load(std::memory_order_acquire)) throw;
+            // Trainers released before `llavon-lora runtime` reject the command.
+            state = CudaRuntimeState::unsupported;
+        }
+    }
+    std::lock_guard lock(status_mutex_);
+    status_.cuda_runtime = state;
+}
+
+void LoraTrainingManager::install_cuda_runtime_worker() {
+    struct RuntimeEvent {
+        std::string event;
+        std::optional<std::string> phase;
+        std::optional<std::uint64_t> received;
+        std::optional<std::uint64_t> total;
+    };
+    set_status(LoraOperationStage::installing_trainer, 0,
+               u"正在向 NuGet 查詢 CUDA 執行階段…");
+    const auto trainer = trainer_executable();
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(trainer, error))
+        throw std::runtime_error("請先下載 LoRA 訓練器");
+    refresh_cuda_runtime();
+    {
+        std::lock_guard lock(status_mutex_);
+        if (status_.cuda_runtime == CudaRuntimeState::unsupported)
+            throw std::runtime_error("目前安裝的訓練器不支援 CUDA 執行階段，請先更新訓練器");
+    }
+    const auto gigabytes = [](std::uint64_t bytes) {
+        return std::format("{:.2f}", static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0));
+    };
+    run_process(trainer, {
+        L"runtime", L"install", L"--backend", L"cuda", L"--json",
+        L"--runtime-root", cuda_runtime_root().wstring(),
+    }, false, nullptr, [&](std::string_view line) {
+        const auto parsed = rfl::json::read<RuntimeEvent>(line);
+        if (!parsed || parsed.value().event != "progress") return;
+        const auto& event = parsed.value();
+        const auto phase = event.phase.value_or("");
+        const auto received = event.received.value_or(0);
+        const auto total = event.total.value_or(0);
+        if (phase == "resolve") return;
+        if (phase == "restitch") {
+            set_status(LoraOperationStage::installing_trainer, 0.97,
+                       u"正在組合 CUDA 執行階段的大型檔案…");
+            return;
+        }
+        if (total == 0) return;
+        set_status(LoraOperationStage::installing_trainer,
+            0.95 * static_cast<double>(received) / static_cast<double>(total),
+            to_utf16("正在下載 CUDA 執行階段… " + gigabytes(received) + " / " +
+                     gigabytes(total) + " GB"));
+    });
+    refresh_cuda_runtime();
+    finish_trainer_operation(u"CUDA 執行階段已安裝");
+}
+
+void LoraTrainingManager::remove_cuda_runtime_worker() {
+    set_status(LoraOperationStage::installing_trainer, 0,
+               u"正在移除 CUDA 執行階段…");
+    const auto trainer = trainer_executable();
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(trainer, error))
+        throw std::runtime_error("LoRA trainer is not installed");
+    run_process(trainer, {
+        L"runtime", L"remove", L"--backend", L"cuda", L"--json",
+        L"--runtime-root", cuda_runtime_root().wstring(),
+    }, false);
+    refresh_cuda_runtime();
+    finish_trainer_operation(u"CUDA 執行階段已移除");
+}
+
 int LoraTrainingManager::run_process(
     const std::filesystem::path& executable,
     const std::vector<std::wstring>& arguments,
     bool parse_training_progress,
-    std::string* captured_output) {
+    std::string* captured_output,
+    const std::function<void(std::string_view)>& on_line) {
     std::string last_line;
     double progress = 0.05;
     const auto exit_code = run_lora_process(executable, arguments, cancelling_,
         [&](std::string_view line) {
             last_line = line;
+            if (on_line) on_line(line);
             if (captured_output) {
                 if (captured_output->size() + line.size() + 1 > 4 * 1024 * 1024)
                     throw std::runtime_error("LoRA process output is too large");
@@ -1184,6 +1293,14 @@ void LoraTrainingManager::training_worker() {
     if (!std::filesystem::is_regular_file(trainer, error)) {
         throw std::runtime_error(
             "LoRA trainer is not installed; install the optional LoRA component first");
+    }
+    CudaRuntimeState cuda_runtime;
+    {
+        std::lock_guard lock(status_mutex_);
+        cuda_runtime = status_.cuda_runtime;
+    }
+    if (pending_options_.device == 2 && cuda_runtime == CudaRuntimeState::not_installed) {
+        throw std::runtime_error("使用 CUDA 訓練前，請先在「安裝」區塊下載 CUDA 執行階段");
     }
 
     set_status(LoraOperationStage::preparing_data, 0.01,
@@ -1366,6 +1483,13 @@ void LoraTrainingManager::training_worker() {
         train_arguments.push_back(L"--only-train-incorrect");
     }
     if (!pending_options_.shuffle) train_arguments.push_back(L"--no-shuffle");
+    // auto uses the CUDA runtime when it is installed; trainers released
+    // before `llavon-lora runtime` reject the option.
+    if (cuda_runtime == CudaRuntimeState::installed ||
+        cuda_runtime == CudaRuntimeState::not_installed) {
+        train_arguments.push_back(L"--runtime-root");
+        train_arguments.push_back(cuda_runtime_root().wstring());
+    }
     run_process(trainer, train_arguments, true);
     std::filesystem::remove(dataset_path);
 

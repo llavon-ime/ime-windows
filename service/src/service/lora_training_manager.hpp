@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -30,6 +31,14 @@ enum class LoraOperationStage : std::int32_t {
     cancelled = 9,
     checking_trainer = 10,
     installing_trainer = 11,
+};
+
+// Mirrors llavon_settings_cuda_runtime_state.
+enum class CudaRuntimeState : std::int32_t {
+    unknown = 0,
+    not_installed = 1,
+    installed = 2,
+    unsupported = 3,
 };
 
 struct LoraTrainingOptions {
@@ -68,7 +77,7 @@ struct LoraOperationStatus {
     std::u16string model_revision;
     std::u16string output_model_path;
     bool trainer_available = false;
-    std::int32_t trainer_assets = 0;
+    CudaRuntimeState cuda_runtime = CudaRuntimeState::unknown;
     std::u16string trainer_version;
     std::u16string trainer_backend;
     std::u16string trainer_commit;
@@ -90,7 +99,9 @@ public:
     bool check_model_async();
     bool download_model_async();
     bool check_trainer_async();
-    bool install_trainer_async(std::int32_t backend);
+    bool install_trainer_async();
+    bool install_cuda_runtime_async();
+    bool remove_cuda_runtime_async();
     bool start_training_async(std::vector<std::u16string> event_ids,
                               LoraTrainingOptions options, std::string_view password);
     void on_model_applied(const std::filesystem::path& model_path) const noexcept;
@@ -103,12 +114,18 @@ public:
 private:
     using Operation = void (LoraTrainingManager::*)();
 
-    bool launch(Operation operation, std::int32_t trainer_backend = -1);
+    bool launch(Operation operation);
     void check_model_worker();
     void download_model_worker();
     void check_trainer_worker();
     void install_trainer_worker();
+    void install_cuda_runtime_worker();
+    void remove_cuda_runtime_worker();
     void refresh_installed_trainer();
+    // Asks the installed trainer; runs a child process, so only call it from
+    // a worker, never from status().
+    void refresh_cuda_runtime();
+    void finish_trainer_operation(std::u16string message);
     void training_worker();
     void prune_obsolete_gguf_models(
         const std::filesystem::path& applied_model_path) const noexcept;
@@ -123,7 +140,8 @@ private:
     int run_process(const std::filesystem::path& executable,
                     const std::vector<std::wstring>& arguments,
                     bool parse_training_progress,
-                    std::string* captured_output = nullptr);
+                    std::string* captured_output = nullptr,
+                    const std::function<void(std::string_view)>& on_line = {});
 
     std::shared_ptr<TrainingDataWriter> training_data_;
     std::filesystem::path tables_directory_;
@@ -139,7 +157,6 @@ private:
     std::vector<TrainingDataRecord> pending_records_;
     LoraTrainingOptions pending_options_;
     std::optional<LoraTrainingRun> pending_base_run_;
-    std::int32_t pending_trainer_backend_ = 0;
 };
 
 }  // namespace llavon::service

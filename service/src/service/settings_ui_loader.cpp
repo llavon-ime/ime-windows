@@ -547,7 +547,7 @@ std::int32_t SettingsUiLoader::get_lora_status_trampoline(
             .model_revision = self->lora_status_revision_.c_str(),
             .output_model_path = self->lora_status_output_path_.c_str(),
             .trainer_available = current.trainer_available ? 1 : 0,
-            .trainer_assets = current.trainer_assets,
+            .cuda_runtime = static_cast<std::int32_t>(current.cuda_runtime),
             .trainer_version = self->lora_trainer_version_.c_str(),
             .trainer_backend = self->lora_trainer_backend_.c_str(),
             .trainer_release_version = self->lora_trainer_release_version_.c_str(),

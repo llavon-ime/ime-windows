@@ -73,9 +73,19 @@ enum llavon_settings_lora_action {
     LLAVON_LORA_CHECK_MODEL = 0,
     LLAVON_LORA_DOWNLOAD_MODEL = 1,
     LLAVON_LORA_CHECK_TRAINER = 2,
-    LLAVON_LORA_INSTALL_CPU = 3,
-    LLAVON_LORA_INSTALL_CUDA = 4,
-    LLAVON_LORA_INSTALL_ROCM = 5,
+    LLAVON_LORA_INSTALL_TRAINER = 3,
+    LLAVON_LORA_INSTALL_CUDA_RUNTIME = 4,
+    LLAVON_LORA_REMOVE_CUDA_RUNTIME = 5,
+};
+
+// The trainer ships a CPU libtorch; CUDA training needs a runtime that the
+// trainer downloads separately (`llavon-lora runtime install`).
+enum llavon_settings_cuda_runtime_state {
+    LLAVON_CUDA_RUNTIME_UNKNOWN = 0,
+    LLAVON_CUDA_RUNTIME_NOT_INSTALLED = 1,
+    LLAVON_CUDA_RUNTIME_INSTALLED = 2,
+    // The installed trainer predates `llavon-lora runtime`.
+    LLAVON_CUDA_RUNTIME_UNSUPPORTED = 3,
 };
 
 struct llavon_settings_lora_status {
@@ -87,7 +97,7 @@ struct llavon_settings_lora_status {
     const llavon_char16_t* model_revision;
     const llavon_char16_t* output_model_path;
     int32_t trainer_available;
-    int32_t trainer_assets; // bit 0 CPU, bit 1 CUDA, bit 2 ROCm
+    int32_t cuda_runtime; // llavon_settings_cuda_runtime_state
     const llavon_char16_t* trainer_version;
     const llavon_char16_t* trainer_backend;
     const llavon_char16_t* trainer_release_version;

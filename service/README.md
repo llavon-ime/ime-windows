@@ -240,17 +240,25 @@ weight decay、最大梯度範數 1、seed 42、啟用洗牌，裝置為 `auto`�
 
 固定使用的 LoRA Trainer 子模組 commit 會在 CMake configure 時內嵌。
 訓練對話框會直接請求其 `commit-<SHA>` manifest，並將 manifest 中的 `commit`
-與固定的子模組 commit 比對。對話框會顯示已安裝的版本，以及 CPU、CUDA 與 ROCm
-選項。只要該版本的發布內容包含對應的 Windows 檔案，就可以下載。目前上游自動發布
-的版本包含 Windows CPU 版；CUDA 與 ROCm 需要該發布版本中有對應的 Windows 檔案。
-在應用程式內安裝時，會下載所選的 ZIP、驗證其大小與 SHA-256、檢查壓縮檔內的路徑，
-再解壓縮並驗證安裝後的 manifest。安裝位置為
-`%LocalAppData%\Llavon IME\tools\lora\<version>\<asset>`，目前選用的版本記錄在
+與固定的子模組 commit 比對。訓練器只下載發行版中的 `win-x64-cpu` 檔案，它內含
+CPU 版 LibTorch。在應用程式內安裝時，會下載該 ZIP、驗證其大小與 SHA-256、檢查
+壓縮檔內的路徑，再解壓縮並驗證安裝後的 manifest。安裝位置為
+`%LocalAppData%\Llavon IME\tools\lora\<version>\win-x64-cpu`，目前選用的版本記錄在
 `current.install`。背景服務會優先使用此選擇，其次才是 Program Files 中的安裝。
-成功選定某個發布版本後，背景服務會從此個人目錄移除其他版本的 CPU、CUDA 與 ROCm
-安裝，重新選擇已下載的版本時也一樣。所選版本的所有後端都會保留。清理時絕不追蹤
-reparse point，也不刪除無關檔案；若無法移除舊檔案，安裝仍會成功，但會顯示清理
-警告。
+成功選定某個發布版本後，背景服務會從此個人目錄移除其他版本的訓練器（包含舊版的
+`win-x64-cuda` 與 `win-x64-rocm` 安裝），重新選擇已下載的版本時也一樣。清理時絕不
+追蹤 reparse point，也不刪除無關檔案；若無法移除舊檔案，安裝仍會成功，但會顯示
+清理警告。
+
+以 NVIDIA 顯示卡訓練需要另外下載「CUDA 加速元件」（約 3 GB）。對話框的按鈕會讓
+背景服務執行 `llavon-lora runtime install --backend cuda --json`，由訓練器自己從
+NuGet 下載並驗證 TorchSharp 使用的 CUDA LibTorch，並把逐行的 JSON 進度轉成進度列；
+取消會結束子程序，已完成的套件會保留，下次可從中斷處繼續。執行階段放在
+`%LocalAppData%\Llavon IME\tools\torch-runtimes`，不屬於任何訓練器版本目錄，所以
+更新訓練器時不會被清理，只要 LibTorch 版本不變就能沿用。背景服務在檢查版本及
+安裝、移除後以 `llavon-lora runtime list --json` 取得狀態，訓練時傳入
+`--runtime-root`；選擇 `cuda` 裝置但尚未安裝時，會在啟動訓練前直接提示。ROCm 沒有
+NuGet 套件，Windows 版不再提供。
 
 模型檢查與下載使用 WinRT `Windows.Web.Http`，並以 `co_await` 處理網路操作。
 背景服務的專用工作執行緒只在最外層邊界等待。下載時以固定大小的區塊讀取回應，
