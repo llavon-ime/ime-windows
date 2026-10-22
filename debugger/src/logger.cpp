@@ -3,6 +3,7 @@
 #include "bounded_mpmc_queue.hpp"
 #include "pipe_protocol.hpp"
 
+#include <llavon-ipc/pipe_security.hpp>
 #include <windows.h>
 
 #include <atomic>
@@ -89,10 +90,15 @@ private:
     void run() noexcept {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
         SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+        const auto pipe_name = ipc::session_pipe_name(pipe_protocol::pipe_base_name);
         while (!stopping()) {
             HANDLE pipe = CreateFileW(
-                pipe_protocol::pipe_name, GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                pipe_name.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
                 FILE_FLAG_OVERLAPPED, nullptr);
+            if (pipe != INVALID_HANDLE_VALUE && !ipc::is_trusted_pipe_server(pipe)) {
+                CloseHandle(pipe);
+                pipe = INVALID_HANDLE_VALUE;
+            }
             if (pipe == INVALID_HANDLE_VALUE) {
                 WaitForSingleObject(stop_event_, reconnect_delay_ms);
                 continue;

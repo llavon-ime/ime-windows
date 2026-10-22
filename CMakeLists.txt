@@ -164,6 +164,7 @@ if(NOT VCPKG_TARGET_TRIPLET OR NOT VCPKG_INSTALLED_DIR)
 endif()
 
 add_subdirectory(ime-core EXCLUDE_FROM_ALL)
+add_subdirectory(ipc)
 add_subdirectory(debugger)
 add_subdirectory(service)
 add_subdirectory(frontend)

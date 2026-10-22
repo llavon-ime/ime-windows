@@ -3,11 +3,11 @@
 #if defined(_WIN32)
 
 #include <windows.h>
-#include <sddl.h>
 #include <winrt/Windows.Foundation.h>
 
 #include <asio.hpp>
 #include <ime-core/core.hpp>
+#include <llavon-ipc/pipe_security.hpp>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -31,7 +31,11 @@ namespace llavon::service {
 
 namespace prediction_pipe {
 
-inline constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime";
+inline constexpr const wchar_t* pipe_base_name = L"llavon-ime";
+
+inline constexpr std::uint32_t maximum_context_length = 4096;
+inline constexpr std::uint32_t maximum_entry_count = 1024;
+inline constexpr std::uint32_t maximum_entry_length = 1024;
 
 enum class PipeCommand : uint8_t {
     Predict = 1,
@@ -208,35 +212,32 @@ inline asio::awaitable<bool> write_val(asio::windows::stream_handle& pipe, const
     co_return co_await write_exact(pipe, &val, sizeof(T));
 }
 
-inline asio::awaitable<std::vector<llavon::ime::core::PaddingEntry>> read_padding(
-    asio::windows::stream_handle& pipe) {
+inline asio::awaitable<bool> read_padding(
+    asio::windows::stream_handle& pipe,
+    std::vector<llavon::ime::core::PaddingEntry>& entries) {
     uint32_t count = 0;
-    if (!co_await read_val(pipe, count)) co_return std::vector<llavon::ime::core::PaddingEntry>{};
+    if (!co_await read_val(pipe, count) || count > maximum_entry_count) co_return false;
 
-    std::vector<llavon::ime::core::PaddingEntry> entries;
     entries.reserve(count);
     for (uint32_t i = 0; i < count; i++) {
         uint8_t type = 0;
-        if (!co_await read_val(pipe, type)) co_return std::vector<llavon::ime::core::PaddingEntry>{};
+        if (!co_await read_val(pipe, type) || type > 1) co_return false;
 
         llavon::ime::core::PaddingEntry e;
         if (type == 0) {
-            uint32_t len = 0;
-            if (!co_await read_val(pipe, len)) co_return std::vector<llavon::ime::core::PaddingEntry>{};
-            e.bopomofo.resize(len);
-            if (len > 0 && !co_await read_exact(pipe, e.bopomofo.data(), len * sizeof(char16_t))) {
-                co_return std::vector<llavon::ime::core::PaddingEntry>{};
+            if (!co_await read_utf16_string(pipe, e.bopomofo, maximum_entry_length)) {
+                co_return false;
             }
             e.chosen = false;
         } else {
-            if (!co_await read_val(pipe, e.chosen_char)) {
-                co_return std::vector<llavon::ime::core::PaddingEntry>{};
+            if (!co_await read_val(pipe, e.chosen_char) || e.chosen_char > U'\U0010FFFF') {
+                co_return false;
             }
             e.chosen = true;
         }
         entries.push_back(std::move(e));
     }
-    co_return entries;
+    co_return true;
 }
 
 inline asio::awaitable<void> write_response(asio::windows::stream_handle& pipe,
@@ -429,10 +430,7 @@ inline asio::awaitable<void> handle_client(
         }
 
         if (command == PipeCommand::RecordCommit) {
-            constexpr std::uint32_t maximum_context_length = 4096;
             constexpr std::uint32_t maximum_answer_length = 1024;
-            constexpr std::uint32_t maximum_entry_count = 1024;
-            constexpr std::uint32_t maximum_entry_length = 64;
             RawCommitEvent event;
             std::uint64_t commit_token = 0;
             if (!co_await read_val(pipe, commit_token) || commit_token == 0 ||
@@ -492,17 +490,12 @@ inline asio::awaitable<void> handle_client(
             break;
         }
 
-        uint32_t ctx_len = 0;
-        if (!co_await read_val(pipe, ctx_len)) break;
-
         std::u16string context;
-        if (ctx_len > 0) {
-            context.resize(ctx_len);
-            if (!co_await read_exact(pipe, context.data(), ctx_len * sizeof(char16_t))) break;
-        }
+        if (!co_await read_utf16_string(pipe, context, maximum_context_length)) break;
 
-        auto padding = co_await read_padding(pipe);
-        if (padding.empty() && ctx_len == 0) break;
+        std::vector<llavon::ime::core::PaddingEntry> padding;
+        if (!co_await read_padding(pipe, padding)) break;
+        if (padding.empty() && context.empty()) break;
         const auto custom_name_replacements = custom_names->apply(padding);
 
         std::vector<llavon::ime::core::Prediction> results;
@@ -538,28 +531,18 @@ inline asio::awaitable<void> listener(
     auto executor = co_await asio::this_coro::executor;
     SessionLru::ClientId next_client_id = 1;
 
-    while (true) {
-        // SearchHost and other modern Windows text controls run in an
-        // AppContainer.  The default pipe DACL does not grant AppContainer
-        // tokens access, so those hosts otherwise receive ERROR_ACCESS_DENIED
-        // and block their TSF UI thread while the frontend retries.
-        PSECURITY_DESCRIPTOR security_descriptor = nullptr;
-        constexpr wchar_t pipe_sddl[] =
-            L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;IU)(A;;GRGW;;;AC)(A;;GRGW;;;S-1-15-2-2)";
-        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                pipe_sddl, SDDL_REVISION_1, &security_descriptor, nullptr)) {
-            std::cerr << "[ERR] pipe security descriptor failed: " << GetLastError() << std::endl;
-            co_return;
-        }
-        SECURITY_ATTRIBUTES security_attributes{};
-        security_attributes.nLength = sizeof(security_attributes);
-        security_attributes.lpSecurityDescriptor = security_descriptor;
+    const auto pipe_name = llavon::ipc::session_pipe_name(pipe_base_name);
+    llavon::ipc::PipeSecurity security;
+    if (pipe_name.empty() || !security) {
+        std::cerr << "[ERR] pipe security setup failed" << std::endl;
+        co_return;
+    }
 
+    while (true) {
         HANDLE hPipe = CreateNamedPipeW(
-            pipe_name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+            pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, &security_attributes);
-        LocalFree(security_descriptor);
+            PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, security.attributes());
 
         if (hPipe == INVALID_HANDLE_VALUE) {
             std::cerr << "[ERR] CreateNamedPipe failed: " << GetLastError() << std::endl;

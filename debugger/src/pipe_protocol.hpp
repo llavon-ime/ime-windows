@@ -7,9 +7,9 @@
 namespace llavon::debug::pipe_protocol {
 
 #ifdef LLAVON_DEBUG_TEST_PIPE
-inline constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime-debugger-transport-tests";
+inline constexpr const wchar_t* pipe_base_name = L"llavon-ime-debugger-transport-tests";
 #else
-inline constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime-debugger";
+inline constexpr const wchar_t* pipe_base_name = L"llavon-ime-debugger";
 #endif
 inline constexpr std::uint32_t maximum_message_size = 1024 * 1024;
 

@@ -73,6 +73,7 @@ target_link_libraries(llavon-ime PRIVATE
     uuid        # TSF GUID constants
     reflectcpp::reflectcpp
     llavon::debug-client
+    llavon::ipc
     utf8::cpp
     utf8cpp::utf8cpp
 )

@@ -31,6 +31,7 @@ target_include_directories(llavon-debug-client
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
+target_link_libraries(llavon-debug-client PRIVATE llavon::ipc)
 
 add_executable(llavon-ime-debugger WIN32
     src/debugger/debugger.manifest
@@ -66,6 +67,7 @@ target_include_directories(llavon-ime-debugger PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 target_link_libraries(llavon-ime-debugger PRIVATE
+    llavon::ipc
     Microsoft::CppWinRT
     WindowsApp
     advapi32
@@ -102,7 +104,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/../ime-core/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/../service/src")
-    target_link_libraries(logger-transport-tests PRIVATE advapi32)
+    target_link_libraries(logger-transport-tests PRIVATE llavon::ipc)
     add_test(NAME logger-transport COMMAND logger-transport-tests)
     set_tests_properties(logger-transport PROPERTIES RUN_SERIAL TRUE TIMEOUT 15)
 endif()

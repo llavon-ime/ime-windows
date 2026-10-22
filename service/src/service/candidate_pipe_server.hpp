@@ -6,7 +6,7 @@
 #include "candidate_pipe_protocol.hpp"
 
 #include <asio.hpp>
-#include <sddl.h>
+#include <llavon-ipc/pipe_security.hpp>
 #include <windows.h>
 
 #include <cstddef>
@@ -24,26 +24,20 @@ public:
     asio::awaitable<void> listen() {
         auto executor = co_await asio::this_coro::executor;
 
-        while (true) {
-            PSECURITY_DESCRIPTOR security_descriptor = nullptr;
-            constexpr wchar_t pipe_sddl[] =
-                L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;IU)(A;;GRGW;;;AC)(A;;GRGW;;;S-1-15-2-2)";
-            if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                    pipe_sddl, SDDL_REVISION_1, &security_descriptor, nullptr)) {
-                std::cerr << "[ERR] candidate pipe security descriptor failed: "
-                          << GetLastError() << std::endl;
-                co_return;
-            }
+        const auto pipe_name =
+            llavon::ipc::session_pipe_name(candidate_pipe_protocol::pipe_base_name);
+        llavon::ipc::PipeSecurity security;
+        if (pipe_name.empty() || !security) {
+            std::cerr << "[ERR] candidate pipe security setup failed" << std::endl;
+            co_return;
+        }
 
-            SECURITY_ATTRIBUTES security_attributes{};
-            security_attributes.nLength = sizeof(security_attributes);
-            security_attributes.lpSecurityDescriptor = security_descriptor;
+        while (true) {
             HANDLE pipe_handle = CreateNamedPipeW(
-                candidate_pipe_protocol::pipe_name, PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
+                pipe_name.c_str(), PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 PIPE_UNLIMITED_INSTANCES,
-                pipe_buffer_size, pipe_buffer_size, 0, &security_attributes);
-            LocalFree(security_descriptor);
+                pipe_buffer_size, pipe_buffer_size, 0, security.attributes());
             if (pipe_handle == INVALID_HANDLE_VALUE) {
                 std::cerr << "[ERR] CreateNamedPipe(candidate) failed: " << GetLastError()
                           << std::endl;

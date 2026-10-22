@@ -2,6 +2,8 @@
 
 #include "system/serviceLauncher.hpp"
 
+#include <llavon-ipc/pipe_security.hpp>
+
 #include <string>
 
 namespace tsf {
@@ -101,8 +103,13 @@ bool CandidateUiClient::ensure_pipe() {
 }
 
 bool CandidateUiClient::connect_pipe() {
-    pipe_ = CreateFileW(pipe_name, GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    const auto pipe_name = llavon::ipc::session_pipe_name(pipe_base_name);
+    pipe_ = CreateFileW(pipe_name.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
     if (pipe_ == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    if (!llavon::ipc::is_trusted_pipe_server(pipe_)) {
+        disconnect();
         return false;
     }
     return true;

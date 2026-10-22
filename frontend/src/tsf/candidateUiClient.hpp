@@ -49,7 +49,7 @@ private:
         return write_bytes(&value, static_cast<DWORD>(sizeof(value)));
     }
 
-    static constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime-candidate-ui";
+    static constexpr const wchar_t* pipe_base_name = L"llavon-ime-candidate-ui";
     static constexpr uint16_t protocol_version = 3;
     static constexpr uint32_t maximum_candidate_count = 36;
     static constexpr uint32_t maximum_candidate_length = 256;

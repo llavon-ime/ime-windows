@@ -2,7 +2,7 @@
 
 #include "../pipe_protocol.hpp"
 
-#include <sddl.h>
+#include <llavon-ipc/pipe_security.hpp>
 
 #include <cstdint>
 #include <algorithm>
@@ -105,22 +105,16 @@ void PipeServer::reap_clients() noexcept {
 }
 
 HANDLE PipeServer::create_pipe() const noexcept {
-    PSECURITY_DESCRIPTOR descriptor = nullptr;
-    constexpr wchar_t sddl[] =
-        L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;IU)(A;;GRGW;;;AC)(A;;GRGW;;;S-1-15-2-2)";
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl, SDDL_REVISION_1, &descriptor, nullptr)) return INVALID_HANDLE_VALUE;
+    llavon::ipc::PipeSecurity security;
+    if (!security) return INVALID_HANDLE_VALUE;
 
-    SECURITY_ATTRIBUTES attributes{};
-    attributes.nLength = sizeof(attributes);
-    attributes.lpSecurityDescriptor = descriptor;
-    HANDLE pipe = CreateNamedPipeW(
-        llavon::debug::pipe_protocol::pipe_name,
+    const auto pipe_name =
+        llavon::ipc::session_pipe_name(llavon::debug::pipe_protocol::pipe_base_name);
+    return CreateNamedPipeW(
+        pipe_name.c_str(),
         PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-        PIPE_UNLIMITED_INSTANCES, 64 * 1024, 64 * 1024, 0, &attributes);
-    LocalFree(descriptor);
-    return pipe;
+        PIPE_UNLIMITED_INSTANCES, 64 * 1024, 64 * 1024, 0, security.attributes());
 }
 
 void PipeServer::handle_client(HANDLE pipe) noexcept {

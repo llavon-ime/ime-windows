@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <llavon-ipc/pipe_security.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -28,13 +29,20 @@ enum class PipeCommand : uint8_t {
 class PipeEngine : public IEngine {
     static inline HANDLE hPipe = INVALID_HANDLE_VALUE;
     static inline std::atomic_uint64_t next_commit_token{1};
-    static constexpr const wchar_t* pipe_name = L"\\\\.\\pipe\\llavon-ime";
+    static constexpr const wchar_t* pipe_base_name = L"llavon-ime";
+    static constexpr uint32_t maximum_candidate_count = 4096;
     static constexpr std::chrono::seconds launch_retry_interval{5};
     static inline std::optional<std::chrono::steady_clock::time_point> last_launch_request;
 
     static bool connect_pipe() {
-        hPipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-        return hPipe != INVALID_HANDLE_VALUE;
+        const auto pipe_name = llavon::ipc::session_pipe_name(pipe_base_name);
+        hPipe = CreateFileW(pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (hPipe == INVALID_HANDLE_VALUE) return false;
+        if (!llavon::ipc::is_trusted_pipe_server(hPipe)) {
+            disconnect();
+            return false;
+        }
+        return true;
     }
 
     // Starts the backend without waiting for its pipe. Until it is reachable the
@@ -171,11 +179,11 @@ public:
 
         // --- response ---
         uint32_t resp_cnt;
-        if (!read_exact(resp_cnt)) { disconnect(); return; }
+        if (!read_exact(resp_cnt) || resp_cnt > padding.size()) { disconnect(); return; }
 
         for (uint32_t i = 0; i < resp_cnt && i < static_cast<uint32_t>(padding.size()); i++) {
             uint32_t cand_cnt;
-            if (!read_exact(cand_cnt)) { disconnect(); return; }
+            if (!read_exact(cand_cnt) || cand_cnt > maximum_candidate_count) { disconnect(); return; }
 
             std::vector<char32_t> cands(cand_cnt);
             if (cand_cnt > 0 && !read_exact(cands.data(), cand_cnt * sizeof(char32_t))) { disconnect(); return; }

@@ -232,6 +232,7 @@ target_include_directories(llavon-ime-candidate-ui PUBLIC
 target_link_libraries(llavon-ime-service PRIVATE
     ime-core::ime-core
     llavon::debug-client
+    llavon::ipc
     Microsoft::CppWinRT
     WindowsApp
     asio::asio
