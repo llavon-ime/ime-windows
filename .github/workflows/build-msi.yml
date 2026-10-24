@@ -76,8 +76,10 @@ jobs:
             vcpkg/downloads
           # A new runner image gets a new save key; exact cache hits are immutable.
           # vcpkg's ABI hash decides which packages from older images can be reused.
-          key: v3-${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json') }}-image-${{ steps.vcpkg-cache.outputs.image }}
+          # Include the preset so changes to ABI tool selection get a new save key.
+          key: v3-${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json', 'CMakePresets.json') }}-image-${{ steps.vcpkg-cache.outputs.image }}
           restore-keys: |
+            v3-${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json', 'CMakePresets.json') }}-image-
             v3-${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-${{ hashFiles('cmake/triplets/*.cmake', 'vcpkg.json', 'vcpkg-configuration.json') }}-image-
             v3-${{ runner.os }}-${{ runner.arch }}-vcpkg-${{ steps.vcpkg-cache.outputs.revision }}-x64-windows-cpu-dispatch-
             v2-${{ runner.os }}-${{ runner.arch }}-
@@ -112,6 +114,7 @@ jobs:
         run: ./vcpkg/bootstrap-vcpkg.bat -disableMetrics
 
       - name: Configure
+        id: configure
         shell: pwsh
         run: >-
           cmake --preset windows
@@ -120,6 +123,18 @@ jobs:
           "-DLLAVON_IME_MODEL_REVISION=${{ steps.model.outputs.revision }}"
           "-DLLAVON_IME_MODEL_SHA256=${{ steps.model.outputs.sha256 }}"
           "-DLLAVON_IME_MODEL_SIZE=${{ steps.model.outputs.size }}"
+
+      - name: Upload vcpkg ABI diagnostics
+        if: ${{ always() && steps.configure.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: llavon-ime-vcpkg-abi
+          path: |
+            build/windows/vcpkg_installed/**/share/*/vcpkg_abi_info.txt
+            vcpkg/buildtrees/**/*.vcpkg_abi_info.txt
+            vcpkg/buildtrees/detect_compiler/**
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Build web installer
         shell: pwsh

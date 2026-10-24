@@ -24,6 +24,10 @@ cmake --build build/windows --config Release --target llavon-ime-settings-ui lla
 
 ## 選擇正確的建置指令
 
+Windows preset 透過 `VCPKG_INSTALL_OPTIONS=--x-abi-tools-use-exact-versions`，讓 vcpkg 使用子模組 `scripts/vcpkg-tools.json` 指定的 CMake 與 PowerShell 版本。baseline 固定依賴版本，但預設工具選擇仍可能採用 runner 上較新的 PowerShell；該版本也參與每個套件的 ABI hash，會造成整批快取失效。固定工具版本可避免這類無關程式碼的重編，首次切換仍可能需要建立新的套件快取。
+
+這個選項不會固定 MSVC，也不會關閉編譯器 ABI 檢查；編譯器或依賴真正變更時仍會重編。CI 保留映像版本作為快取儲存 key，並允許從舊映像還原相容套件。每次 Configure 後會上傳 `llavon-ime-vcpkg-abi` artifact；若再次發生非預期重編，先比較前後的 `vcpkg_abi_info.txt` 與 `detect_compiler` 紀錄，確認變動的是 `powershell`、`cmake`、`triplet_abi` 或其他輸入，而非直接修改 cache key。
+
 不同目標會產生不同成品。特別注意，`package` 預設組態只會重新建置獨立 MSI，**不會**重新建置留在建置目錄中的 `*-setup.exe`。
 
 只建置程式、不打包：
