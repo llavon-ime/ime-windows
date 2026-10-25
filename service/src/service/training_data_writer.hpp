@@ -51,6 +51,7 @@ struct TrainingDataRecord {
 struct LoraTrainingRun {
     std::int64_t id = 0;
     std::int64_t parent_id = 0;
+    std::string base_model_fingerprint;
     std::string base_model_revision;
     std::filesystem::path adapter_path;
     std::filesystem::path output_model_path;
@@ -63,6 +64,12 @@ struct LoraTrainingRun {
     double dropout = 0;
     std::u16string target_modules;
     std::string training_request_json;
+};
+
+struct LoraBaseModel {
+    std::string fingerprint;
+    std::string revision;
+    std::filesystem::path output_model_path;
 };
 
 class TrainingDataWriter final {
@@ -99,8 +106,17 @@ public:
         const std::vector<std::u16string>& selected_event_ids,
         const std::vector<std::u16string>& reviewed_event_ids) noexcept;
     std::optional<LoraTrainingRun> latest_lora_training_run() const;
+    std::optional<LoraTrainingRun> latest_lora_training_run(
+        std::string_view base_model_fingerprint) const;
+    void set_active_base_model_fingerprint(std::string fingerprint);
     std::optional<LoraTrainingRun> lora_training_run(std::int64_t id) const;
     std::vector<LoraTrainingRun> lora_training_history() const noexcept;
+    void register_lora_base_model(const LoraBaseModel& model,
+                                  bool replace_existing = false);
+    std::vector<LoraBaseModel> lora_base_models() const noexcept;
+    // Assigns the first content identity to pre-fingerprint runs without
+    // changing their IDs, ancestry, or commit associations.
+    void migrate_legacy_base_model_fingerprint(std::string_view fingerprint);
     bool complete_lora_training(
         const LoraTrainingRun& run,
         const std::vector<std::u16string>& trained_event_ids) noexcept;
@@ -130,6 +146,8 @@ private:
     std::deque<QueuedOperation> queue_;
     std::chrono::steady_clock::duration staging_window_;
     std::atomic<std::size_t> pending_count_{0};
+    mutable std::mutex active_base_mutex_;
+    std::string active_base_model_fingerprint_;
     std::mutex callback_mutex_;
     std::function<void(std::size_t)> pending_count_callback_;
     bool stopping_ = false;

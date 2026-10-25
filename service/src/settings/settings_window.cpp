@@ -130,6 +130,10 @@ std::vector<LoraHistoryRunView> load_lora_history_snapshot(
         history.push_back(LoraHistoryRunView{
             .id = run.id,
             .parent_id = run.parent_id,
+            .base_model_fingerprint = run.base_model_fingerprint
+                ? run.base_model_fingerprint : "",
+            .base_model_revision = run.base_model_revision
+                ? run.base_model_revision : "",
             .completed_local = run.completed_at_utc
                 ? utc8_timestamp(run.completed_at_utc) : std::wstring{},
             .output_model_path = run.output_model_path
@@ -148,15 +152,74 @@ std::vector<LoraHistoryRunView> load_lora_history_snapshot(
     return history;
 }
 
+std::vector<LoraHistoryBaseView> load_lora_base_models_snapshot(
+    const SettingsConfiguration& configuration) {
+    const auto callback = configuration.get_lora_base_models_callback;
+    std::size_t count = 0;
+    if (!callback || callback(configuration.get_lora_base_models_context,
+            nullptr, 0, &count) != ERROR_SUCCESS)
+        throw std::runtime_error("unable to load LoRA base model catalog");
+    std::vector<llavon_settings_lora_base_model> raw(count);
+    if (count != 0 && callback(configuration.get_lora_base_models_context,
+            raw.data(), raw.size(), &count) != ERROR_SUCCESS)
+        throw std::runtime_error("unable to load LoRA base model catalog");
+    std::vector<LoraHistoryBaseView> result;
+    result.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        result.push_back(LoraHistoryBaseView{
+            .fingerprint = raw[i].fingerprint ? raw[i].fingerprint : "",
+            .revision = raw[i].revision ? raw[i].revision : "",
+            .output_model_path = raw[i].output_model_path ? raw[i].output_model_path : u"",
+        });
+    }
+    return result;
+}
+
+std::optional<LoraHistoryBaseView> current_lora_base(
+    const SettingsConfiguration& configuration) {
+    llavon_settings_lora_status status{};
+    if (!configuration.get_lora_status_callback ||
+        configuration.get_lora_status_callback(
+            configuration.get_lora_status_context, &status) != ERROR_SUCCESS ||
+        !status.base_model_fingerprint || !*status.base_model_fingerprint ||
+        !status.model_revision || !*status.model_revision) return std::nullopt;
+    return LoraHistoryBaseView{
+        .fingerprint = status.base_model_fingerprint,
+        .revision = utf8::utf16to8(std::u16string_view(status.model_revision)),
+        .output_model_path = status.base_model_output_path
+            ? status.base_model_output_path : u"",
+    };
+}
+
 std::int64_t applied_history_id(
     const std::vector<LoraHistoryRunView>& history,
     std::u16string_view model_path,
-    std::u16string_view base_model_path) {
+    std::u16string_view base_model_path,
+    std::optional<LoraHistoryBaseView> current_base = std::nullopt,
+    const std::vector<LoraHistoryBaseView>& catalog = {}) {
     const auto active = std::filesystem::path(model_path).lexically_normal();
     for (const auto& run : history) {
         if (!run.output_model_path.empty() &&
             std::filesystem::path(run.output_model_path).lexically_normal() == active)
             return run.id;
+    }
+    for (const auto& base : lora_history_bases(
+            history, std::move(current_base), catalog)) {
+        if (!base.output_model_path.empty() &&
+            std::filesystem::path(base.output_model_path).lexically_normal() == active)
+            return base.id;
+        const auto source = std::ranges::find_if(history, [&](const auto& run) {
+            return run.base_model_fingerprint == base.fingerprint;
+        });
+        const auto path_source = source != history.end() ? source : history.begin();
+        if (path_source != history.end()) {
+            const auto base_path = std::filesystem::path(path_source->output_model_path)
+                .parent_path().parent_path() /
+                (L"base-" + std::wstring(base.fingerprint.begin(),
+                                          base.fingerprint.end())) /
+                L"base-Q4_K_M.gguf";
+            if (base_path.lexically_normal() == active) return base.id;
+        }
     }
     if (!base_model_path.empty() &&
         std::filesystem::path(base_model_path).lexically_normal() == active) return 0;
@@ -1173,11 +1236,18 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
                 L"密碼錯誤或資料處理失敗，請重試。");
         }
     });
-    dialog.Closed([password, confirmation](const auto&, const auto&) {
+    dialog.Closed([this, password, confirmation](const auto&, const auto&) {
+        password_dialog_open_ = false;
         password.Password(L"");
         confirmation.Password(L"");
     });
-    (void)dialog.ShowAsync();
+    password_dialog_open_ = true;
+    try {
+        (void)dialog.ShowAsync();
+    } catch (...) {
+        password_dialog_open_ = false;
+        throw;
+    }
 }
 
 bool SettingsWindow::load_training_items(
@@ -1205,12 +1275,18 @@ bool SettingsWindow::load_training_items(
 void SettingsWindow::show_lora_training_dialog() {
     if (lora_dialog_open_) return;
     const auto history = load_lora_history_snapshot(configuration_);
+    const auto catalog = load_lora_base_models_snapshot(configuration_);
+    const auto dialog_current_base = current_lora_base(configuration_);
     const auto applied_base_id = applied_history_id(history,
-        configuration_.model_path, configuration_.base_model_path);
-    const std::int64_t initial_base_id = applied_base_id >= 0
-        ? applied_base_id
-        : (history.empty() ? 0 : history.back().id);
-    if (!load_training_items(nullptr, initial_base_id)) {
+        configuration_.model_path, configuration_.base_model_path,
+        dialog_current_base, catalog);
+    const auto dialog_bases = lora_history_bases(history, dialog_current_base, catalog);
+    const std::int64_t initial_base_id = applied_base_id == 0 &&
+            dialog_current_base && !dialog_bases.empty()
+        ? dialog_bases.front().id : applied_base_id != -1 ? applied_base_id
+        : (!dialog_bases.empty() ? dialog_bases.front().id :
+           (history.empty() ? 0 : history.back().id));
+    if (!load_training_items(nullptr, initial_base_id < 0 ? 0 : initial_base_id)) {
         throw std::runtime_error("unable to load training metadata");
     }
 
@@ -1236,7 +1312,13 @@ void SettingsWindow::show_lora_training_dialog() {
         TextBlock training_base_summary{nullptr};
         ComboBox training_base{nullptr};
         std::vector<LoraHistoryRunView> history;
+        std::optional<LoraHistoryBaseView> current_base;
+        std::vector<LoraHistoryBaseView> catalog;
+        std::string observed_base_fingerprint;
+        std::string observed_base_revision;
         std::vector<std::int64_t> base_run_ids;
+        std::vector<std::string> base_fingerprints;
+        std::vector<std::string> base_revisions;
         struct BaseParameters {
             std::int32_t rank = 0;
             double alpha = 0;
@@ -1311,11 +1393,18 @@ void SettingsWindow::show_lora_training_dialog() {
         bool busy = false;
         bool training_busy = false;
         bool cancel_requested = false;
+        bool rebuilding_base_choices = false;
         bool closed = false;
     };
 
     auto state = std::make_shared<DialogState>();
     state->history = history;
+    state->catalog = catalog;
+    state->current_base = dialog_current_base;
+    if (dialog_current_base) {
+        state->observed_base_fingerprint = dialog_current_base->fingerprint;
+        state->observed_base_revision = dialog_current_base->revision;
+    }
     state->items = std::move(configuration_.training_items);
     state->deleted_items.assign(state->items.size(), false);
     state->active_count = state->items.size();
@@ -1364,15 +1453,33 @@ void SettingsWindow::show_lora_training_dialog() {
     state->training_base_button = named<Button>(dialog_root, L"TrainingBaseButton");
     state->training_base_summary = named<TextBlock>(dialog_root, L"TrainingBaseSummary");
     state->training_base = named<ComboBox>(dialog_root, L"TrainingBase");
-    state->base_run_ids.push_back(0);
-    state->base_parameters.emplace_back();
-    {
+    if (!state->current_base) {
+        state->base_run_ids.push_back(0);
+        state->base_fingerprints.emplace_back();
+        state->base_revisions.emplace_back();
+        state->base_parameters.emplace_back();
         ComboBoxItem base;
         base.Content(winrt::box_value(L"Base model"));
         state->training_base.Items().Append(base);
     }
+    for (const auto& base_model : lora_history_bases(
+            history, state->current_base, state->catalog)) {
+        if (base_model.fingerprint.empty()) continue;
+        state->base_run_ids.push_back(base_model.id);
+        state->base_fingerprints.push_back(base_model.fingerprint);
+        state->base_revisions.push_back(base_model.revision);
+        state->base_parameters.emplace_back();
+        ComboBoxItem base;
+        base.Content(winrt::box_value(L"Base model " +
+            std::wstring(base_model.fingerprint.begin(),
+                         base_model.fingerprint.begin() +
+                         std::min<std::size_t>(8, base_model.fingerprint.size()))));
+        state->training_base.Items().Append(base);
+    }
     for (const auto& run : history) {
         state->base_run_ids.push_back(run.id);
+        state->base_fingerprints.emplace_back();
+        state->base_revisions.emplace_back();
         state->base_parameters.push_back(DialogState::BaseParameters{
             .rank = run.rank,
             .alpha = run.alpha,
@@ -1386,8 +1493,8 @@ void SettingsWindow::show_lora_training_dialog() {
     }
     const auto initial_base = std::ranges::find(
         state->base_run_ids, initial_base_id);
-    state->training_base.SelectedIndex(static_cast<std::int32_t>(
-        initial_base - state->base_run_ids.begin()));
+    state->training_base.SelectedIndex(initial_base == state->base_run_ids.end()
+        ? 0 : static_cast<std::int32_t>(initial_base - state->base_run_ids.begin()));
 
     state->training_base_button.Click([this, weak_dialog](const auto&, const auto&) {
         const auto state = weak_dialog.lock();
@@ -1397,8 +1504,10 @@ void SettingsWindow::show_lora_training_dialog() {
             ? state->base_run_ids[static_cast<std::size_t>(index)] : 0;
         show_history_picker(state->training_base_button, state->history,
             selected, applied_history_id(state->history, configuration_.model_path,
-                configuration_.base_model_path),
+                configuration_.base_model_path, state->current_base, state->catalog),
             LoraHistoryTreeAction::choose_training_base,
+            state->current_base,
+            state->catalog,
             [weak_state = std::weak_ptr<DialogState>(state)](std::int64_t id) {
                 const auto dialog = weak_state.lock();
                 if (!dialog || dialog->closed) return;
@@ -1413,7 +1522,8 @@ void SettingsWindow::show_lora_training_dialog() {
     if (state->items.empty()) {
         named<TextBlock>(dialog_root, L"EmptyTrainingItems").Visibility(Visibility::Visible);
         state->training_data_button.IsEnabled(false);
-    } else {
+    }
+    {
         state->training_data_page =
             ui::load_xaml_resource(IDR_LORA_SELECTION_XAML).as<StackPanel>();
         state->training_items =
@@ -1557,9 +1667,11 @@ void SettingsWindow::show_lora_training_dialog() {
         state->training_data_button.Click([this, state, render_page](const auto&, const auto&) {
             show_password_dialog(false, [this, state, render_page](const char16_t* password) {
                 const auto base_index = state->training_base.SelectedIndex();
+                const auto base_id = base_index < 0 ? 0 :
+                    state->base_run_ids[static_cast<std::size_t>(base_index)];
                 if (base_index < 0 || state->closed ||
                     !load_training_items(password,
-                        state->base_run_ids[static_cast<std::size_t>(base_index)])) return false;
+                        base_id < 0 ? 0 : base_id)) return false;
                 auto loaded = configuration_.training_items.begin();
                 for (std::size_t index = 0; index < state->items.size(); ++index) {
                     if (state->deleted_items[index]) continue;
@@ -1747,7 +1859,7 @@ void SettingsWindow::show_lora_training_dialog() {
     };
     *refresh_training_count = refresh_training_selection;
     const auto load_base_parameters = [](DialogState& state, std::int32_t index) {
-        if (index <= 0) {
+        if (index < 0 || state.base_run_ids[static_cast<std::size_t>(index)] <= 0) {
             state.rank.Text(L"8");
             state.alpha.Text(L"16");
             state.dropout.Text(L"0");
@@ -1771,13 +1883,16 @@ void SettingsWindow::show_lora_training_dialog() {
                     state->base_run_ids.size()) {
                 return;
             }
-            state->training_base_summary.Text(index == 0 ? L"Base model" :
+            state->training_base_summary.Text(
+                state->base_run_ids[static_cast<std::size_t>(index)] <= 0
+                    ? L"Base model" :
                 std::format(L"訓練 #{} · {}",
                     state->base_run_ids[static_cast<std::size_t>(index)],
-                    state->history[static_cast<std::size_t>(index - 1)].completed_local));
+                    std::wstring{}));
             load_base_parameters(*state, index);
             if (reload_training_items) {
                 if (!load_training_items(nullptr,
+                        state->base_run_ids[static_cast<std::size_t>(index)] < 0 ? 0 :
                         state->base_run_ids[static_cast<std::size_t>(index)])) {
                     state->status.Text(L"無法讀取此基底可用的訓練資料。");
                     return;
@@ -1790,7 +1905,9 @@ void SettingsWindow::show_lora_training_dialog() {
             refresh_training_selection();
         };
     state->training_base.SelectionChanged(
-        [reload_training_base](const auto&, const auto&) {
+        [weak_dialog, reload_training_base](const auto&, const auto&) {
+            const auto state = weak_dialog.lock();
+            if (!state || state->rebuilding_base_choices) return;
             reload_training_base(true);
         });
     // SelectedIndex was assigned before the handler existed. Refresh the
@@ -1926,7 +2043,8 @@ void SettingsWindow::show_lora_training_dialog() {
     });
 
     const auto refresh_status = [this, state, refresh_training_selection,
-                                 refresh_apply_state, update_trainer_actions] {
+                                 refresh_apply_state, update_trainer_actions,
+                                 reload_training_base] {
         llavon_settings_lora_status status{};
         const std::int32_t result = configuration_.get_lora_status_callback
             ? configuration_.get_lora_status_callback(
@@ -1972,6 +2090,94 @@ void SettingsWindow::show_lora_training_dialog() {
         if (training_busy) state->training_observed = true;
         state->busy = busy;
         state->training_busy = training_busy;
+        const std::string status_fingerprint = status.base_model_fingerprint
+            ? status.base_model_fingerprint : "";
+        const std::string status_revision = status.model_revision
+            ? utf8::utf16to8(std::u16string_view(status.model_revision)) : "";
+        const std::u16string status_base_output_path = status.base_model_output_path
+            ? status.base_model_output_path : u"";
+        const bool base_identity_changed =
+            status_fingerprint != state->observed_base_fingerprint ||
+            status_revision != state->observed_base_revision;
+        if (base_identity_changed && !busy && !state->selecting_training_data &&
+            !password_dialog_open_ && !restoring_lora_model_) {
+            std::vector<LoraHistoryRunView> refreshed_history;
+            std::vector<LoraHistoryBaseView> refreshed_catalog;
+            try {
+                refreshed_history = load_lora_history_snapshot(configuration_);
+                refreshed_catalog = load_lora_base_models_snapshot(configuration_);
+            } catch (...) {
+                return;
+            }
+            const auto selected_index = state->training_base.SelectedIndex();
+            const auto selected_id = selected_index >= 0
+                ? state->base_run_ids[static_cast<std::size_t>(selected_index)] : 0;
+            const std::string selected_fingerprint = selected_index >= 0
+                ? state->base_fingerprints[static_cast<std::size_t>(selected_index)] : "";
+            state->observed_base_fingerprint = status_fingerprint;
+            state->observed_base_revision = status_revision;
+            state->current_base = status_fingerprint.empty() ? std::nullopt :
+                std::optional<LoraHistoryBaseView>{LoraHistoryBaseView{
+                    .fingerprint = status_fingerprint,
+                    .revision = status_revision,
+                    .output_model_path = status_base_output_path,
+                }};
+            state->history = std::move(refreshed_history);
+            state->catalog = std::move(refreshed_catalog);
+            state->rebuilding_base_choices = true;
+            state->training_base.Items().Clear();
+            state->base_run_ids.clear();
+            state->base_fingerprints.clear();
+            state->base_revisions.clear();
+            state->base_parameters.clear();
+            for (const auto& base : lora_history_bases(
+                    state->history, state->current_base, state->catalog)) {
+                if (base.fingerprint.empty()) continue;
+                state->base_run_ids.push_back(base.id);
+                state->base_fingerprints.push_back(base.fingerprint);
+                state->base_revisions.push_back(base.revision);
+                state->base_parameters.emplace_back();
+                ComboBoxItem item;
+                item.Content(winrt::box_value(L"Base model " + std::wstring(
+                    base.fingerprint.begin(), base.fingerprint.begin() +
+                    std::min<std::size_t>(8, base.fingerprint.size()))));
+                state->training_base.Items().Append(item);
+            }
+            for (const auto& run : state->history) {
+                state->base_run_ids.push_back(run.id);
+                state->base_fingerprints.emplace_back();
+                state->base_revisions.emplace_back();
+                state->base_parameters.push_back(DialogState::BaseParameters{
+                    .rank = run.rank, .alpha = run.alpha, .dropout = run.dropout,
+                    .target_modules = run.target_modules});
+                ComboBoxItem item;
+                item.Content(winrt::box_value(std::format(
+                    L"#{}  {}", run.id, run.completed_local)));
+                state->training_base.Items().Append(item);
+            }
+            if (state->base_run_ids.empty()) {
+                state->base_run_ids.push_back(0);
+                state->base_fingerprints.emplace_back();
+                state->base_revisions.emplace_back();
+                state->base_parameters.emplace_back();
+                ComboBoxItem item;
+                item.Content(winrt::box_value(L"Base model"));
+                state->training_base.Items().Append(item);
+            }
+            const auto restored_index = find_lora_base_selection(
+                state->base_run_ids, state->base_fingerprints,
+                selected_id, selected_fingerprint);
+            const bool selection_preserved = selected_id > 0
+                ? state->base_run_ids[restored_index] == selected_id
+                : !selected_fingerprint.empty() &&
+                  state->base_fingerprints[restored_index] == selected_fingerprint;
+            state->training_base.SelectedIndex(
+                static_cast<std::int32_t>(restored_index));
+            state->rebuilding_base_choices = false;
+            close_history_picker();
+            if (selection_preserved) refresh_training_selection();
+            else reload_training_base(true);
+        }
         if (!training_busy) state->cancel_requested = false;
         if (state->cancel_requested) state->status.Text(L"正在取消訓練並結束子程序…");
         state->model_available = status.model_available != 0;
@@ -2217,6 +2423,10 @@ void SettingsWindow::show_lora_training_dialog() {
                     return parsed;
                 };
 
+                const auto selected_base_index = static_cast<std::size_t>(
+                    state->training_base.SelectedIndex());
+                const auto selected_base_id =
+                    state->base_run_ids[selected_base_index];
                 llavon_settings_lora_options options{
                     .rank = parse_integer(state->rank),
                     .alpha = parse_real(state->alpha),
@@ -2244,8 +2454,11 @@ void SettingsWindow::show_lora_training_dialog() {
                     .only_manually_selected = state->only_selected_sentences.IsOn() ? 1 : 0,
                     .train_until_remembered = state->train_until_remembered.IsOn() ? 1 : 0,
                     .only_train_incorrect = state->only_train_incorrect.IsOn() ? 1 : 0,
-                    .base_run_id = state->base_run_ids[
-                        static_cast<std::size_t>(state->training_base.SelectedIndex())],
+                    .base_run_id = selected_base_id < 0 ? 0 : selected_base_id,
+                    .base_model_fingerprint =
+                        state->base_fingerprints[selected_base_index].c_str(),
+                    .base_model_revision =
+                        state->base_revisions[selected_base_index].c_str(),
                     .stabilize_intruders = state->stabilize_intruders.IsOn() ? 1 : 0,
                 };
                 const std::u16string dtype = state->dtype.SelectedIndex() == 1
@@ -2626,6 +2839,8 @@ void SettingsWindow::show_history_picker(
     std::int64_t selected_id,
     std::int64_t applied_id,
     LoraHistoryTreeAction action,
+    std::optional<LoraHistoryBaseView> current_base,
+    std::vector<LoraHistoryBaseView> catalog,
     std::function<void(std::int64_t)> on_action) {
     close_history_picker();
 
@@ -2662,7 +2877,7 @@ void SettingsWindow::show_history_picker(
     layout.Children().Append(close_button);
 
     auto tree_view = make_lora_history_tree(std::move(history), selected_id,
-        applied_id, action,
+        applied_id, action, std::move(current_base), std::move(catalog),
         [this, action, callback = std::move(on_action)](std::int64_t id) {
             if (action == LoraHistoryTreeAction::choose_training_base)
                 close_history_picker();
@@ -2787,16 +3002,44 @@ void SettingsWindow::show_history_picker(
 void SettingsWindow::show_model_history_tree() {
     try {
         auto history = load_lora_history_snapshot(configuration_);
+        auto catalog = load_lora_base_models_snapshot(configuration_);
+        const auto current_base = current_lora_base(configuration_);
         const auto applied = applied_history_id(history, configuration_.model_path,
-            configuration_.base_model_path);
-        const auto chosen = applied >= 0 ? applied :
-            (history.empty() ? 0 : history.back().id);
+            configuration_.base_model_path, current_base, catalog);
+        const auto bases = lora_history_bases(history, current_base, catalog);
+        const bool applied_exists = std::ranges::any_of(bases,
+            [&](const auto& base) { return base.id == applied; }) ||
+            std::ranges::any_of(history,
+                [&](const auto& run) { return run.id == applied; });
+        const auto chosen = applied_exists ? applied :
+            (!bases.empty() ? bases.front().id :
+             (history.empty() ? 0 : history.back().id));
         auto paths = std::make_shared<std::unordered_map<
             std::int64_t, std::u16string>>();
-        paths->emplace(0, configuration_.base_model_path);
+        for (const auto& base : bases) {
+            if (!base.output_model_path.empty()) {
+                paths->emplace(base.id, base.output_model_path);
+                continue;
+            }
+            const auto source = std::ranges::find_if(history, [&](const auto& run) {
+                return run.base_model_fingerprint == base.fingerprint;
+            });
+            const auto path_source = source != history.end() ? source : history.begin();
+            if (path_source != history.end()) {
+                paths->emplace(base.id,
+                    (std::filesystem::path(path_source->output_model_path)
+                        .parent_path().parent_path() /
+                     (L"base-" + std::wstring(base.fingerprint.begin(),
+                                               base.fingerprint.end())) /
+                     L"base-Q4_K_M.gguf").u16string());
+            }
+        }
+        paths->try_emplace(0, configuration_.base_model_path);
         for (const auto& run : history) paths->emplace(run.id, run.output_model_path);
         show_history_picker(model_history_button_, std::move(history), chosen,
             applied, LoraHistoryTreeAction::apply_model,
+            current_base,
+            std::move(catalog),
             [this, paths](std::int64_t id) {
                 if (restoring_lora_model_ ||
                     !configuration_.prepare_model_callback) return;

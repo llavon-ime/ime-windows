@@ -114,6 +114,7 @@ void SettingsUiLoader::configure(
     LoadTrainingData load_training_data,
     DeleteTrainingData delete_training_data,
     LoadLoraHistory load_lora_history,
+    LoadLoraBaseModels load_lora_base_models,
     StartLoraTraining start_lora_training,
     GetLoraStatus get_lora_status,
     LoraModelAction lora_model_action,
@@ -168,6 +169,7 @@ void SettingsUiLoader::configure(
     load_training_data_ = std::move(load_training_data);
     delete_training_data_ = std::move(delete_training_data);
     load_lora_history_ = std::move(load_lora_history);
+    load_lora_base_models_ = std::move(load_lora_base_models);
     start_lora_training_ = std::move(start_lora_training);
     get_lora_status_ = std::move(get_lora_status);
     lora_model_action_ = std::move(lora_model_action);
@@ -251,13 +253,15 @@ bool SettingsUiLoader::load() {
     }
 
     start_ = resolve<StartFunction>(module_, "llavon_settings_ui_start");
-    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v5");
+    configure_ = resolve<ConfigureFunction>(module_, "llavon_settings_ui_configure_v6");
     configure_update_notifications_ = resolve<ConfigureUpdateNotificationsFunction>(
         module_, "llavon_settings_ui_configure_update_notifications");
     configure_gpu_boost_ = resolve<ConfigureGpuBoostFunction>(
         module_, "llavon_settings_ui_configure_gpu_boost");
     configure_model_preparation_ = resolve<ConfigureModelPreparationFunction>(
         module_, "llavon_settings_ui_configure_model_preparation_v2");
+    configure_lora_base_models_ = resolve<ConfigureLoraBaseModelsFunction>(
+        module_, "llavon_settings_ui_configure_lora_base_models_v1");
     show_ = resolve<ShowFunction>(module_, "llavon_settings_ui_show");
     show_context_menu_ =
         resolve<ShowContextMenuFunction>(module_, "llavon_settings_ui_show_context_menu");
@@ -265,7 +269,7 @@ bool SettingsUiLoader::load() {
     const auto set_pending_count = resolve<SetPendingCountFunction>(
         module_, "llavon_settings_ui_set_pending_count");
     if (!configure_ || !configure_update_notifications_ || !configure_gpu_boost_ ||
-        !configure_model_preparation_ || !start_ || !show_ ||
+        !configure_model_preparation_ || !configure_lora_base_models_ || !start_ || !show_ ||
         !show_context_menu_ || !stop_ ||
         !set_pending_count ||
         !configure_module()) {
@@ -275,6 +279,7 @@ bool SettingsUiLoader::load() {
         configure_update_notifications_ = nullptr;
         configure_gpu_boost_ = nullptr;
         configure_model_preparation_ = nullptr;
+        configure_lora_base_models_ = nullptr;
         start_ = nullptr;
         show_ = nullptr;
         show_context_menu_ = nullptr;
@@ -359,7 +364,8 @@ bool SettingsUiLoader::configure_module() {
                cancel_lora_trampoline, this, protection_trampoline, this) != 0) {
         return false;
     }
-    return configure_model_preparation_(
+    return configure_lora_base_models_(get_lora_base_models_trampoline, this) == 0 &&
+           configure_model_preparation_(
                prepare_model_trampoline, this, base_model_path_.c_str()) == 0 &&
            configure_gpu_boost_(
                gpu_boost_enabled_ ? 1 : 0,
@@ -402,6 +408,8 @@ std::int32_t SettingsUiLoader::get_lora_history_trampoline(
                 self->lora_history_.push_back(LoraHistoryStorage{
                     .id = run.id,
                     .parent_id = run.parent_id,
+                    .base_model_fingerprint = run.base_model_fingerprint,
+                    .base_model_revision = run.base_model_revision,
                     .completed_at_utc = utf8::utf8to16(run.completed_at_utc),
                     .output_model_path = run.output_model_path.u16string(),
                     .record_count = run.record_count,
@@ -423,6 +431,8 @@ std::int32_t SettingsUiLoader::get_lora_history_trampoline(
             items[index] = llavon_settings_lora_history_item{
                 .id = source.id,
                 .parent_id = source.parent_id,
+                .base_model_fingerprint = source.base_model_fingerprint.c_str(),
+                .base_model_revision = source.base_model_revision.c_str(),
                 .completed_at_utc = source.completed_at_utc.c_str(),
                 .output_model_path = source.output_model_path.c_str(),
                 .record_count = source.record_count,
@@ -433,6 +443,41 @@ std::int32_t SettingsUiLoader::get_lora_history_trampoline(
                 .dropout = source.dropout,
                 .target_modules = source.target_modules.c_str(),
                 .training_request_json = source.training_request_json.c_str(),
+            };
+        }
+        return ERROR_SUCCESS;
+    } catch (...) {
+        return ERROR_GEN_FAILURE;
+    }
+}
+
+std::int32_t SettingsUiLoader::get_lora_base_models_trampoline(
+    void* context, llavon_settings_lora_base_model* items,
+    std::size_t item_capacity, std::size_t* item_count) noexcept {
+    auto* self = static_cast<SettingsUiLoader*>(context);
+    if (!self || !item_count || (item_capacity != 0 && !items))
+        return ERROR_INVALID_PARAMETER;
+    try {
+        self->lora_base_models_.clear();
+        if (self->load_lora_base_models_) {
+            for (const auto& base : self->load_lora_base_models_()) {
+                self->lora_base_models_.push_back(LoraBaseModelStorage{
+                    .fingerprint = base.fingerprint,
+                    .revision = base.revision,
+                    .output_model_path = base.output_model_path.u16string(),
+                });
+            }
+        }
+        *item_count = self->lora_base_models_.size();
+        if (!items) return ERROR_SUCCESS;
+        if (item_capacity < self->lora_base_models_.size())
+            return ERROR_INSUFFICIENT_BUFFER;
+        for (std::size_t i = 0; i < self->lora_base_models_.size(); ++i) {
+            const auto& base = self->lora_base_models_[i];
+            items[i] = llavon_settings_lora_base_model{
+                .fingerprint = base.fingerprint.c_str(),
+                .revision = base.revision.c_str(),
+                .output_model_path = base.output_model_path.c_str(),
             };
         }
         return ERROR_SUCCESS;
@@ -533,6 +578,8 @@ std::int32_t SettingsUiLoader::get_lora_status_trampoline(
         const auto current = self->get_lora_status_();
         self->lora_status_message_ = current.message;
         self->lora_status_revision_ = current.model_revision;
+        self->lora_status_fingerprint_ = current.base_model_fingerprint;
+        self->lora_status_base_output_path_ = current.base_model_output_path;
         self->lora_status_output_path_ = current.output_model_path;
         self->lora_trainer_version_ = current.trainer_version;
         self->lora_trainer_backend_ = current.trainer_backend;
@@ -545,6 +592,8 @@ std::int32_t SettingsUiLoader::get_lora_status_trampoline(
             .model_update_available = current.model_update_available ? 1 : 0,
             .message = self->lora_status_message_.c_str(),
             .model_revision = self->lora_status_revision_.c_str(),
+            .base_model_fingerprint = self->lora_status_fingerprint_.c_str(),
+            .base_model_output_path = self->lora_status_base_output_path_.c_str(),
             .output_model_path = self->lora_status_output_path_.c_str(),
             .trainer_available = current.trainer_available ? 1 : 0,
             .cuda_runtime = static_cast<std::int32_t>(current.cuda_runtime),

@@ -37,6 +37,7 @@ public:
         std::string_view, std::int64_t)>;
     using DeleteTrainingData = std::function<bool(std::u16string_view)>;
     using LoadLoraHistory = std::function<std::vector<LoraTrainingRun>()>;
+    using LoadLoraBaseModels = std::function<std::vector<LoraBaseModel>()>;
     using StartLoraTraining = std::function<bool(
         const std::vector<std::u16string>&,
         const llavon_settings_lora_options&, std::string_view)>;
@@ -65,6 +66,7 @@ public:
         LoadTrainingData load_training_data,
         DeleteTrainingData delete_training_data,
         LoadLoraHistory load_lora_history,
+        LoadLoraBaseModels load_lora_base_models,
         StartLoraTraining start_lora_training,
         GetLoraStatus get_lora_status,
         LoraModelAction lora_model_action,
@@ -99,6 +101,8 @@ private:
     struct LoraHistoryStorage {
         std::int64_t id = 0;
         std::int64_t parent_id = 0;
+        std::string base_model_fingerprint;
+        std::string base_model_revision;
         std::u16string completed_at_utc;
         std::u16string output_model_path;
         std::size_t record_count = 0;
@@ -109,6 +113,11 @@ private:
         double dropout = 0;
         std::u16string target_modules;
         std::string training_request_json;
+    };
+    struct LoraBaseModelStorage {
+        std::string fingerprint;
+        std::string revision;
+        std::u16string output_model_path;
     };
 
     using ConfigureFunction = std::int32_t (*)(
@@ -134,6 +143,8 @@ private:
         std::int32_t, llavon_settings_save_gpu_boost_callback, void*);
     using ConfigureModelPreparationFunction = std::int32_t (*)(
         llavon_settings_prepare_model_callback, void*, const char16_t*);
+    using ConfigureLoraBaseModelsFunction = std::int32_t (*)(
+        llavon_settings_get_lora_base_models_callback, void*);
     using ShowFunction = void (*)();
     using ShowContextMenuFunction = void (*)(std::int32_t, std::int32_t);
     using StopFunction = std::int32_t (*)();
@@ -173,6 +184,9 @@ private:
     static std::int32_t get_lora_history_trampoline(
         void* context, llavon_settings_lora_history_item* items,
         std::size_t item_capacity, std::size_t* item_count) noexcept;
+    static std::int32_t get_lora_base_models_trampoline(
+        void* context, llavon_settings_lora_base_model* items,
+        std::size_t item_capacity, std::size_t* item_count) noexcept;
     static std::int32_t get_lora_status_trampoline(
         void* context, llavon_settings_lora_status* status) noexcept;
     static std::int32_t lora_model_action_trampoline(
@@ -185,6 +199,7 @@ private:
     ConfigureUpdateNotificationsFunction configure_update_notifications_ = nullptr;
     ConfigureGpuBoostFunction configure_gpu_boost_ = nullptr;
     ConfigureModelPreparationFunction configure_model_preparation_ = nullptr;
+    ConfigureLoraBaseModelsFunction configure_lora_base_models_ = nullptr;
     StartFunction start_ = nullptr;
     ShowFunction show_ = nullptr;
     ShowContextMenuFunction show_context_menu_ = nullptr;
@@ -213,6 +228,7 @@ private:
     LoadTrainingData load_training_data_;
     DeleteTrainingData delete_training_data_;
     LoadLoraHistory load_lora_history_;
+    LoadLoraBaseModels load_lora_base_models_;
     StartLoraTraining start_lora_training_;
     GetLoraStatus get_lora_status_;
     LoraModelAction lora_model_action_;
@@ -220,6 +236,8 @@ private:
     ProtectionAction protection_action_;
     std::u16string lora_status_message_;
     std::u16string lora_status_revision_;
+    std::string lora_status_fingerprint_;
+    std::u16string lora_status_base_output_path_;
     std::u16string lora_status_output_path_;
     std::u16string lora_trainer_version_;
     std::u16string lora_trainer_backend_;
@@ -227,6 +245,7 @@ private:
     std::u16string lora_trainer_message_;
     std::vector<TrainingDataStorage> training_items_;
     std::vector<LoraHistoryStorage> lora_history_;
+    std::vector<LoraBaseModelStorage> lora_base_models_;
     bool started_ = false;
 };
 

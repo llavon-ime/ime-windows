@@ -379,10 +379,17 @@ int main(int argc, char* argv[]) {
             [&server] {
                 return server.training_data_writer()->lora_training_history();
             },
+            [&server] {
+                return server.training_data_writer()->lora_base_models();
+            },
             [&lora_training](const std::vector<std::u16string>& selected_event_ids,
                              const llavon_settings_lora_options& source, std::string_view password) {
                 llavon::service::LoraTrainingOptions options{
                     .base_run_id = source.base_run_id,
+                    .base_model_fingerprint = source.base_model_fingerprint
+                        ? source.base_model_fingerprint : "",
+                    .base_model_revision = source.base_model_revision
+                        ? source.base_model_revision : "",
                     .rank = source.rank,
                     .alpha = source.alpha,
                     .dropout = source.dropout,

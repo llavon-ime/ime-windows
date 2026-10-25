@@ -95,6 +95,8 @@ struct llavon_settings_lora_status {
     int32_t model_update_available;
     const llavon_char16_t* message;
     const llavon_char16_t* model_revision;
+    const char* base_model_fingerprint; // UTF-8 lowercase SHA-256.
+    const llavon_char16_t* base_model_output_path;
     const llavon_char16_t* output_model_path;
     int32_t trainer_available;
     int32_t cuda_runtime; // llavon_settings_cuda_runtime_state
@@ -116,6 +118,8 @@ struct llavon_settings_training_item {
 struct llavon_settings_lora_history_item {
     int64_t id;
     int64_t parent_id;
+    const char* base_model_fingerprint; // UTF-8 SHA-256.
+    const char* base_model_revision; // UTF-8 source revision.
     const llavon_char16_t* completed_at_utc;
     const llavon_char16_t* output_model_path;
     size_t record_count;
@@ -126,6 +130,12 @@ struct llavon_settings_lora_history_item {
     double dropout;
     const llavon_char16_t* target_modules;
     const char* training_request_json; // UTF-8; null for legacy runs.
+};
+
+struct llavon_settings_lora_base_model {
+    const char* fingerprint;
+    const char* revision;
+    const llavon_char16_t* output_model_path;
 };
 
 struct llavon_settings_lora_options {
@@ -152,6 +162,8 @@ struct llavon_settings_lora_options {
     int32_t train_until_remembered;
     int32_t only_train_incorrect;
     int64_t base_run_id;
+    const char* base_model_fingerprint; // UTF-8 SHA-256 for a base root.
+    const char* base_model_revision; // UTF-8 source revision for a base root.
     int32_t stabilize_intruders;
 };
 
@@ -187,6 +199,9 @@ typedef int32_t (*llavon_settings_delete_training_item_callback)(
 typedef int32_t (*llavon_settings_get_lora_history_callback)(
     void* context, struct llavon_settings_lora_history_item* items,
     size_t item_capacity, size_t* item_count);
+typedef int32_t (*llavon_settings_get_lora_base_models_callback)(
+    void* context, struct llavon_settings_lora_base_model* items,
+    size_t item_capacity, size_t* item_count);
 typedef int32_t (*llavon_settings_get_lora_status_callback)(
     void* context, struct llavon_settings_lora_status* status);
 typedef int32_t (*llavon_settings_lora_model_action_callback)(
@@ -209,7 +224,7 @@ typedef int32_t (*llavon_settings_protection_callback)(
 // Supplies a snapshot of devices and the setting used for the current service
 // process. Strings and the device array are copied before this call returns.
 // This must be called before llavon_settings_ui_start.
-LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v5(
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v6(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
@@ -254,6 +269,8 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_v5(
 LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_model_preparation_v2(
     llavon_settings_prepare_model_callback callback, void* context,
     const llavon_char16_t* base_model_path);
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_lora_base_models_v1(
+    llavon_settings_get_lora_base_models_callback callback, void* context);
 
 // Configures the major update notification setting before the settings UI starts.
 LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_update_notifications(

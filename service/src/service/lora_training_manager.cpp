@@ -1,4 +1,5 @@
 #include "lora_training_manager.hpp"
+#include "base_model_fingerprint.hpp"
 #include "lora_process.hpp"
 #include "lora_trainer_cleanup.hpp"
 #include "training_data_cleanup.hpp"
@@ -395,9 +396,50 @@ LoraTrainingManager::LoraTrainingManager(
     std::string revision;
     status_.model_available = installed_model_is_complete(&revision);
     if (status_.model_available) {
+        const auto directory = assets_root_ / model_repository_directory / widen(revision);
+        const auto fingerprint = compute_base_model_fingerprint(directory);
+        training_data_->migrate_legacy_base_model_fingerprint(fingerprint);
+        training_data_->register_lora_base_model(LoraBaseModel{
+            .fingerprint = fingerprint, .revision = revision,
+            .output_model_path = assets_root_ / L"runs" /
+                widen("base-" + fingerprint) / L"base-Q4_K_M.gguf"}, true);
+        training_data_->set_active_base_model_fingerprint(fingerprint);
         status_.model_revision = utf8::utf8to16(revision);
+        status_.base_model_fingerprint = fingerprint;
+        status_.base_model_output_path = (assets_root_ / L"runs" /
+            widen("base-" + fingerprint) / L"base-Q4_K_M.gguf").u16string();
         status_.stage = LoraOperationStage::model_ready;
         status_.message = u"基礎模型已下載";
+    }
+    for (const auto& run : training_data_->lora_training_history()) {
+        if (!run.base_model_fingerprint.empty() && !run.base_model_revision.empty()) {
+            training_data_->register_lora_base_model(LoraBaseModel{
+                .fingerprint = run.base_model_fingerprint,
+                .revision = run.base_model_revision,
+                .output_model_path = assets_root_ / L"runs" /
+                    widen("base-" + run.base_model_fingerprint) / L"base-Q4_K_M.gguf",
+            });
+        }
+    }
+    const auto known_bases = training_data_->lora_base_models();
+    const auto model_root = assets_root_ / model_repository_directory;
+    std::error_code scan_error;
+    for (const auto& entry : std::filesystem::directory_iterator(model_root, scan_error)) {
+        if (!entry.is_directory(scan_error)) continue;
+        const auto candidate_revision = utf8::utf16to8(entry.path().filename().u16string());
+        if (!valid_revision(candidate_revision) ||
+            std::ranges::any_of(known_bases, [&](const LoraBaseModel& base) {
+                return base.revision == candidate_revision;
+            })) continue;
+        try {
+            const auto fingerprint = compute_base_model_fingerprint(entry.path());
+            training_data_->register_lora_base_model(LoraBaseModel{
+                .fingerprint = fingerprint, .revision = candidate_revision,
+                .output_model_path = assets_root_ / L"runs" /
+                    widen("base-" + fingerprint) / L"base-Q4_K_M.gguf"});
+        } catch (...) {
+            // Incomplete downloads are registered after a successful publish.
+        }
     }
     refresh_installed_trainer();
 }
@@ -413,54 +455,96 @@ bool LoraTrainingManager::ensure_model_exported(
     std::lock_guard operation_lock(operation_mutex_);
     if (busy_.load(std::memory_order_acquire)) return false;
     const auto history = training_data_->lora_training_history();
+    const auto catalog = training_data_->lora_base_models();
     const auto selected = std::find_if(history.begin(), history.end(),
         [&](const LoraTrainingRun& run) {
             return run.output_model_path.lexically_normal() == model_path.lexically_normal();
         });
-    if (selected == history.end()) return false;
+    const auto selected_base = std::find_if(history.begin(), history.end(),
+        [&](const LoraTrainingRun& run) {
+            return model_path.filename() == L"base-Q4_K_M.gguf" &&
+                model_path.parent_path().filename() ==
+                    widen("base-" + run.base_model_fingerprint);
+        });
+    std::optional<LoraTrainingRun> current_base;
+    const auto catalog_base = std::find_if(catalog.begin(), catalog.end(),
+        [&](const LoraBaseModel& base) {
+            return base.output_model_path.lexically_normal() == model_path.lexically_normal();
+        });
+    if (selected == history.end() && selected_base == history.end() &&
+        catalog_base == catalog.end() && model_path.filename() == L"base-Q4_K_M.gguf") {
+        std::lock_guard lock(status_mutex_);
+        const auto expected_directory = widen("base-" +
+            status_.base_model_fingerprint);
+        if (!status_.base_model_fingerprint.empty() &&
+            model_path.parent_path().filename() == expected_directory) {
+            current_base = LoraTrainingRun{
+                .base_model_fingerprint = status_.base_model_fingerprint,
+                .base_model_revision = utf8::utf16to8(status_.model_revision),
+            };
+        }
+    }
+    if (selected == history.end() && selected_base == history.end() &&
+        catalog_base == catalog.end() && !current_base)
+        return false;
+    const LoraTrainingRun catalog_source = catalog_base == catalog.end()
+        ? LoraTrainingRun{} : LoraTrainingRun{
+            .base_model_fingerprint = catalog_base->fingerprint,
+            .base_model_revision = catalog_base->revision};
+    const auto& source = selected != history.end() ? *selected :
+        (catalog_base != catalog.end() ? catalog_source :
+         (selected_base != history.end() ? *selected_base : *current_base));
     std::error_code error;
     const auto runs_root = std::filesystem::absolute(
         assets_root_ / L"runs", error).lexically_normal();
     if (error) return false;
     const auto output = std::filesystem::absolute(
-        selected->output_model_path, error).lexically_normal();
-    if (error || output.filename() != L"personalized-Q4_K_M.gguf" ||
+        model_path, error).lexically_normal();
+    const bool base_export = selected == history.end();
+    if (error || (output.filename() != L"personalized-Q4_K_M.gguf" &&
+                  output.filename() != L"base-Q4_K_M.gguf") ||
         output.parent_path().parent_path() != runs_root ||
-        selected->adapter_path.lexically_normal() !=
-            selected->output_model_path.parent_path() / L"adapter") {
+        (!base_export && source.adapter_path.lexically_normal() !=
+            source.output_model_path.parent_path() / L"adapter")) {
         return false;
     }
     const auto model_directory = assets_root_ / model_repository_directory /
-        widen(selected->base_model_revision);
+        widen(source.base_model_revision);
+    if (compute_base_model_fingerprint(model_directory) != source.base_model_fingerprint)
+        return false;
     const auto config_path = model_directory / L"config.json";
     const auto vocabulary_path = model_directory / L"ime_vocab.json";
     if (!std::filesystem::is_regular_file(config_path) ||
         !std::filesystem::is_regular_file(vocabulary_path) ||
         !std::filesystem::is_regular_file(
-            selected->adapter_path / L"adapter_model.safetensors")) {
+            (base_export ? model_directory / L"model.safetensors" :
+             source.adapter_path / L"adapter_model.safetensors"))) {
         return false;
     }
     const auto trainer = trainer_executable();
     if (!std::filesystem::is_regular_file(trainer)) return false;
-    const auto f16_path = selected->output_model_path.parent_path() /
+    std::filesystem::create_directories(output.parent_path());
+    const auto f16_path = output.parent_path() /
         L"restored-personalized-f16.gguf";
-    auto temporary = selected->output_model_path;
+    auto temporary = output;
     temporary += L".restoring";
     std::filesystem::remove(temporary, error);
     cancelling_.store(false, std::memory_order_release);
     try {
-        run_process(trainer, {
+        std::vector<std::wstring> arguments{
             L"export-gguf", L"--model-config", config_path.wstring(),
             L"--model", model_directory.wstring(), L"--vocab-file",
-            vocabulary_path.wstring(), L"--adapter",
-            selected->adapter_path.wstring(), L"--outfile", f16_path.wstring(),
+            vocabulary_path.wstring(), L"--outfile", f16_path.wstring(),
             L"--outtype", L"f16", L"--quantize", L"Q4_K_M",
             L"--quantized-outfile", temporary.wstring(), L"--force",
-        }, false);
+        };
+        if (!base_export) arguments.insert(arguments.begin() + 7,
+            {L"--adapter", source.adapter_path.wstring()});
+        run_process(trainer, arguments, false);
         if (!std::filesystem::is_regular_file(temporary)) {
             throw std::runtime_error("trainer completed without restoring a GGUF model");
         }
-        std::filesystem::rename(temporary, selected->output_model_path);
+        std::filesystem::rename(temporary, output);
         std::filesystem::remove(f16_path, error);
         return true;
     } catch (...) {
@@ -475,16 +559,32 @@ bool LoraTrainingManager::discard_model_export(
     std::lock_guard operation_lock(operation_mutex_);
     if (busy_.load(std::memory_order_acquire)) return false;
     const auto history = training_data_->lora_training_history();
+    const auto catalog = training_data_->lora_base_models();
     std::error_code error;
     const auto runs_root = std::filesystem::absolute(
         assets_root_ / L"runs", error).lexically_normal();
     if (error) return false;
     const auto output = std::filesystem::absolute(model_path, error).lexically_normal();
-    if (error || output.filename() != L"personalized-Q4_K_M.gguf" ||
+    if (error || (output.filename() != L"personalized-Q4_K_M.gguf" &&
+                  output.filename() != L"base-Q4_K_M.gguf") ||
         output.parent_path().parent_path() != runs_root) return false;
-    if (std::ranges::none_of(history, [&](const LoraTrainingRun& run) {
-            return run.output_model_path.lexically_normal() == output;
-        })) return false;
+    const bool known_history = std::ranges::any_of(history, [&](const LoraTrainingRun& run) {
+            return run.output_model_path.lexically_normal() == output ||
+                (output.filename() == L"base-Q4_K_M.gguf" &&
+                 output.parent_path().filename() == widen("base-" +
+                    run.base_model_fingerprint));
+        });
+    const bool known_catalog = std::ranges::any_of(catalog, [&](const LoraBaseModel& base) {
+        return base.output_model_path.lexically_normal() == output;
+    });
+    bool known_current = false;
+    if (!known_history && !known_catalog && output.filename() == L"base-Q4_K_M.gguf") {
+        std::lock_guard lock(status_mutex_);
+        known_current = !status_.base_model_fingerprint.empty() &&
+            output.parent_path().filename() ==
+                widen("base-" + status_.base_model_fingerprint);
+    }
+    if (!known_history && !known_catalog && !known_current) return false;
     std::filesystem::remove(output, error);
     return !error;
 }
@@ -540,6 +640,30 @@ LoraOperationStatus LoraTrainingManager::status() {
         refresh_installed_trainer();
         std::string revision;
         if (installed_model_is_complete(&revision)) {
+            bool identity_changed = false;
+            {
+                std::lock_guard lock(status_mutex_);
+                identity_changed = !status_.model_available ||
+                    status_.model_revision != utf8::utf8to16(revision);
+            }
+            if (identity_changed) {
+                const auto fingerprint = compute_base_model_fingerprint(
+                    assets_root_ / model_repository_directory / widen(revision));
+                training_data_->migrate_legacy_base_model_fingerprint(fingerprint);
+                training_data_->register_lora_base_model(LoraBaseModel{
+                    .fingerprint = fingerprint, .revision = revision,
+                    .output_model_path = assets_root_ / L"runs" /
+                        widen("base-" + fingerprint) / L"base-Q4_K_M.gguf"}, true);
+                training_data_->set_active_base_model_fingerprint(fingerprint);
+                std::lock_guard lock(status_mutex_);
+                status_.model_available = true;
+                status_.model_update_available = false;
+                status_.model_revision = utf8::utf8to16(revision);
+                status_.base_model_fingerprint = fingerprint;
+                status_.base_model_output_path = (assets_root_ / L"runs" /
+                    widen("base-" + fingerprint) /
+                    L"base-Q4_K_M.gguf").u16string();
+            }
             std::lock_guard lock(status_mutex_);
             if (!status_.model_available) {
                 status_.model_available = true;
@@ -650,6 +774,16 @@ bool LoraTrainingManager::start_training_async(
         (options.dtype != u"float32" && options.dtype != u"bfloat16")) {
         return false;
     }
+    if (options.base_run_id != 0 &&
+        (!options.base_model_fingerprint.empty() ||
+         !options.base_model_revision.empty())) return false;
+    if (options.base_model_fingerprint.empty() !=
+            options.base_model_revision.empty() ||
+        (!options.base_model_fingerprint.empty() &&
+         (!valid_sha256(options.base_model_fingerprint) ||
+          std::ranges::any_of(options.base_model_fingerprint, [](char c) {
+              return c >= 'A' && c <= 'F';
+          }) || !valid_revision(options.base_model_revision)))) return false;
     {
         std::lock_guard operation_lock(operation_mutex_);
         if (busy_.load(std::memory_order_acquire)) return false;
@@ -657,6 +791,11 @@ bool LoraTrainingManager::start_training_async(
         const auto previous = training_data_->lora_training_run(options.base_run_id);
         if (options.base_run_id != 0 && !previous) return false;
         if (previous) {
+            const auto model_directory = assets_root_ / model_repository_directory /
+                widen(previous->base_model_revision);
+            if (previous->base_model_fingerprint.empty() ||
+                compute_base_model_fingerprint(model_directory) !=
+                    previous->base_model_fingerprint) return false;
             if (options.strength != LoraTrainingStrength::advanced) {
                 options.rank = previous->rank;
                 options.alpha = previous->alpha;
@@ -668,6 +807,14 @@ bool LoraTrainingManager::start_training_async(
                        previous->target_modules != options.target_modules) {
                 return false;
             }
+        }
+        if (!previous && !options.base_model_fingerprint.empty()) {
+            if (!valid_sha256(options.base_model_fingerprint) ||
+                !valid_revision(options.base_model_revision)) return false;
+            const auto model_directory = assets_root_ / model_repository_directory /
+                widen(options.base_model_revision);
+            if (compute_base_model_fingerprint(model_directory) !=
+                options.base_model_fingerprint) return false;
         }
         auto records = training_data_->pending_records(
             event_ids, password, options.base_run_id);
@@ -831,11 +978,26 @@ void LoraTrainingManager::check_model_worker() {
     set_status(LoraOperationStage::checking_model, 0, u"正在檢查基礎模型更新…");
     std::string local;
     const bool available = installed_model_is_complete(&local);
+    std::string fingerprint;
+    if (available) {
+        fingerprint = compute_base_model_fingerprint(
+            assets_root_ / model_repository_directory / widen(local));
+        training_data_->migrate_legacy_base_model_fingerprint(fingerprint);
+        training_data_->register_lora_base_model(LoraBaseModel{
+            .fingerprint = fingerprint, .revision = local,
+            .output_model_path = assets_root_ / L"runs" /
+                widen("base-" + fingerprint) / L"base-Q4_K_M.gguf"}, true);
+        training_data_->set_active_base_model_fingerprint(fingerprint);
+    }
     {
         std::lock_guard lock(status_mutex_);
         status_.model_available = available;
         status_.model_update_available = false;
         status_.model_revision = available ? utf8::utf8to16(local) : std::u16string{};
+        status_.base_model_fingerprint = fingerprint;
+        status_.base_model_output_path = available ? (assets_root_ / L"runs" /
+            widen("base-" + fingerprint) / L"base-Q4_K_M.gguf").u16string() :
+            std::u16string{};
     }
     const std::string remote = resolve_remote_revision();
     std::lock_guard lock(status_mutex_);
@@ -897,7 +1059,25 @@ void LoraTrainingManager::download_model_worker() {
     set_status(LoraOperationStage::checking_model, 0, u"正在取得基礎模型版本…");
     const std::string revision = resolve_remote_revision();
     std::string local;
+    std::string local_fingerprint;
+    if (installed_model_is_complete(&local)) {
+        local_fingerprint = compute_base_model_fingerprint(
+            assets_root_ / model_repository_directory / widen(local));
+        training_data_->migrate_legacy_base_model_fingerprint(
+            local_fingerprint);
+        training_data_->register_lora_base_model(LoraBaseModel{
+            .fingerprint = local_fingerprint, .revision = local,
+            .output_model_path = assets_root_ / L"runs" /
+                widen("base-" + local_fingerprint) / L"base-Q4_K_M.gguf"}, true);
+    } else if (std::ranges::any_of(training_data_->lora_training_history(),
+            [](const LoraTrainingRun& run) {
+                return run.base_model_fingerprint.empty();
+            })) {
+        throw std::runtime_error(
+            "舊版基礎模型檔案遺失，無法安全識別既有訓練紀錄；已取消模型更新。");
+    }
     if (installed_model_is_complete(&local) && local == revision) {
+        training_data_->set_active_base_model_fingerprint(local_fingerprint);
         std::lock_guard lock(status_mutex_);
         status_.stage = LoraOperationStage::model_ready;
         status_.progress = 1;
@@ -905,6 +1085,9 @@ void LoraTrainingManager::download_model_worker() {
         status_.model_available = true;
         status_.model_update_available = false;
         status_.model_revision = utf8::utf8to16(revision);
+        status_.base_model_fingerprint = local_fingerprint;
+        status_.base_model_output_path = (assets_root_ / L"runs" /
+            widen("base-" + local_fingerprint) / L"base-Q4_K_M.gguf").u16string();
         return;
     }
 
@@ -914,6 +1097,7 @@ void LoraTrainingManager::download_model_worker() {
     throw_if_cancelled(cancelling_);
 
     const auto root = assets_root_ / model_repository_directory;
+    const auto fingerprint = compute_base_model_fingerprint(root / widen(revision));
     const auto partial = root / L"current.revision.partial";
     const auto current = root / L"current.revision";
     {
@@ -929,6 +1113,13 @@ void LoraTrainingManager::download_model_worker() {
     if (error) throw std::filesystem::filesystem_error(
         "unable to publish model revision", partial, current, error);
 
+    training_data_->migrate_legacy_base_model_fingerprint(fingerprint);
+    training_data_->register_lora_base_model(LoraBaseModel{
+        .fingerprint = fingerprint, .revision = revision,
+        .output_model_path = assets_root_ / L"runs" /
+            widen("base-" + fingerprint) / L"base-Q4_K_M.gguf"}, true);
+    training_data_->set_active_base_model_fingerprint(fingerprint);
+
     std::lock_guard lock(status_mutex_);
     status_.stage = LoraOperationStage::model_ready;
     status_.progress = 1;
@@ -936,6 +1127,9 @@ void LoraTrainingManager::download_model_worker() {
     status_.model_available = true;
     status_.model_update_available = false;
     status_.model_revision = utf8::utf8to16(revision);
+    status_.base_model_fingerprint = fingerprint;
+    status_.base_model_output_path = (assets_root_ / L"runs" /
+        widen("base-" + fingerprint) / L"base-Q4_K_M.gguf").u16string();
 }
 
 void LoraTrainingManager::check_trainer_worker() {
@@ -1270,9 +1464,17 @@ void LoraTrainingManager::training_worker() {
         }
     }
     std::string revision;
-    if (!installed_model_is_complete(&revision)) {
+    if (!pending_options_.base_model_revision.empty()) {
+        revision = pending_options_.base_model_revision;
+    } else if (!installed_model_is_complete(&revision)) {
         throw std::runtime_error("base training model has not been downloaded");
     }
+    auto fingerprint = compute_base_model_fingerprint(
+        assets_root_ / model_repository_directory / widen(revision));
+    if (!pending_options_.base_model_fingerprint.empty() &&
+        fingerprint != pending_options_.base_model_fingerprint)
+        throw std::runtime_error("selected base model fingerprint does not match its files");
+    training_data_->migrate_legacy_base_model_fingerprint(fingerprint);
     const auto& previous_run = pending_base_run_;
     if (previous_run) {
         if (previous_run->rank != pending_options_.rank ||
@@ -1283,6 +1485,7 @@ void LoraTrainingManager::training_worker() {
                 "目前參數與上一版模型不相容，無法接續訓練。");
         }
         revision = previous_run->base_model_revision;
+        fingerprint = previous_run->base_model_fingerprint;
         if (!std::filesystem::is_regular_file(
                 previous_run->adapter_path / L"adapter_model.safetensors")) {
             throw std::runtime_error("previous LoRA adapter is missing");
@@ -1360,6 +1563,7 @@ void LoraTrainingManager::training_worker() {
             bool only_train_incorrect;
             bool stabilize_intruders;
             std::int64_t parent_id;
+            std::string base_model_fingerprint;
             std::string base_model_revision;
             std::string trainer_commit;
             std::string trainer_version;
@@ -1402,6 +1606,7 @@ void LoraTrainingManager::training_worker() {
             .only_train_incorrect = pending_options_.only_train_incorrect,
             .stabilize_intruders = pending_options_.stabilize_intruders,
             .parent_id = previous_run ? previous_run->id : 0,
+            .base_model_fingerprint = fingerprint,
             .base_model_revision = revision,
             .trainer_commit = trainer_commit,
             .trainer_version = std::move(installed_trainer_version),
@@ -1531,6 +1736,7 @@ void LoraTrainingManager::training_worker() {
         read_text(adapter_directory / L"adapter_config.json")).value();
     const LoraTrainingRun completed_run{
         .parent_id = previous_run ? previous_run->id : 0,
+        .base_model_fingerprint = fingerprint,
         .base_model_revision = revision,
         .adapter_path = adapter_directory,
         .output_model_path = gguf_path,

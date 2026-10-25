@@ -11,7 +11,9 @@ struct LoraHistoryParent {
     std::int64_t parent_id;
 };
 
-// Base model has ID 0. Returns nullopt for unknown IDs or invalid ancestry.
+// Content-identified base roots use negative IDs; 0 is the virtual forest
+// root. Returns nullopt for nodes in different model trees, unknown IDs, or
+// invalid ancestry. Legacy single-tree callers may still use base ID 0.
 std::optional<std::int64_t> tarjan_lca(
     std::span<const LoraHistoryParent> runs,
     std::int64_t first_id,

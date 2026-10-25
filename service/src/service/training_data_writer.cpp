@@ -21,6 +21,7 @@
 namespace llavon::service {
 namespace {
 
+
 constexpr wchar_t database_path_environment[] =
     L"LLAVON_IME_TRAINING_DATABASE_PATH";
 constexpr wchar_t default_directory_name[] = L"Llavon IME";
@@ -364,6 +365,7 @@ void initialize_database(const std::filesystem::path& path) {
         "CREATE TABLE IF NOT EXISTS lora_training_runs ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "parent_id INTEGER NULL REFERENCES lora_training_runs(id),"
+        "base_model_fingerprint TEXT NULL,"
         "base_model_revision TEXT NOT NULL,"
         "adapter_path TEXT NOT NULL,"
         "output_model_path TEXT NOT NULL,"
@@ -383,11 +385,19 @@ void initialize_database(const std::filesystem::path& path) {
     database.execute("BEGIN IMMEDIATE");
     try {
         bool has_request = false;
+        bool has_fingerprint = false;
         Statement columns(database.get(), "PRAGMA table_info(lora_training_runs)");
         while (columns.next()) {
             if (column_text(columns.get(), 1) == "training_request_json") {
                 has_request = true;
             }
+            if (column_text(columns.get(), 1) == "base_model_fingerprint") {
+                has_fingerprint = true;
+            }
+        }
+        if (!has_fingerprint) {
+            database.execute(
+                "ALTER TABLE lora_training_runs ADD COLUMN base_model_fingerprint TEXT NULL");
         }
         if (!has_request) {
             database.execute(
@@ -397,6 +407,15 @@ void initialize_database(const std::filesystem::path& path) {
         database.execute(
             "CREATE INDEX IF NOT EXISTS lora_training_runs_parent_id "
             "ON lora_training_runs(parent_id)");
+        database.execute(
+            "CREATE TABLE IF NOT EXISTS lora_base_model_metadata ("
+            "id INTEGER PRIMARY KEY CHECK(id=1),"
+            "legacy_fingerprint TEXT NOT NULL CHECK(length(legacy_fingerprint)=64))");
+        database.execute(
+            "CREATE TABLE IF NOT EXISTS lora_base_models ("
+            "fingerprint TEXT PRIMARY KEY CHECK(length(fingerprint)=64),"
+            "revision TEXT NOT NULL,"
+            "output_model_path TEXT NOT NULL)");
         database.execute(
             "CREATE TABLE IF NOT EXISTS lora_run_commits ("
             "run_id INTEGER NOT NULL REFERENCES lora_training_runs(id),"
@@ -608,7 +627,14 @@ void TrainingDataWriter::publish_pending_delta(std::ptrdiff_t delta) noexcept {
 
 void TrainingDataWriter::publish_latest_available_count() noexcept {
     try {
-        const auto latest = latest_lora_training_run();
+        std::string fingerprint;
+        {
+            std::lock_guard lock(active_base_mutex_);
+            fingerprint = active_base_model_fingerprint_;
+        }
+        const auto latest = fingerprint.empty()
+            ? latest_lora_training_run()
+            : latest_lora_training_run(fingerprint);
         const auto count = available_count(latest ? latest->id : 0);
         std::lock_guard lock(callback_mutex_);
         pending_count_.store(count, std::memory_order_release);
@@ -907,26 +933,27 @@ LoraTrainingRun read_lora_training_run(sqlite3_stmt* statement) {
         .id = sqlite3_column_int64(statement, 0),
         .parent_id = sqlite3_column_type(statement, 1) == SQLITE_NULL
             ? 0 : sqlite3_column_int64(statement, 1),
-        .base_model_revision = column_text(statement, 2),
+        .base_model_fingerprint = column_text(statement, 2),
+        .base_model_revision = column_text(statement, 3),
         .adapter_path = std::filesystem::path(
-            utf8::utf8to16(column_text(statement, 3))),
-        .output_model_path = std::filesystem::path(
             utf8::utf8to16(column_text(statement, 4))),
-        .completed_at_utc = column_text(statement, 5),
-        .record_count = static_cast<std::size_t>(sqlite3_column_int64(statement, 6)),
+        .output_model_path = std::filesystem::path(
+            utf8::utf8to16(column_text(statement, 5))),
+        .completed_at_utc = column_text(statement, 6),
+        .record_count = static_cast<std::size_t>(sqlite3_column_int64(statement, 7)),
         .cumulative_record_count = static_cast<std::size_t>(
-            sqlite3_column_int64(statement, 7)),
-        .optimizer_steps = sqlite3_column_int64(statement, 8),
-        .rank = sqlite3_column_int(statement, 9),
-        .alpha = sqlite3_column_double(statement, 10),
-        .dropout = sqlite3_column_double(statement, 11),
-        .target_modules = utf8::utf8to16(column_text(statement, 12)),
-        .training_request_json = column_text(statement, 13),
+            sqlite3_column_int64(statement, 8)),
+        .optimizer_steps = sqlite3_column_int64(statement, 9),
+        .rank = sqlite3_column_int(statement, 10),
+        .alpha = sqlite3_column_double(statement, 11),
+        .dropout = sqlite3_column_double(statement, 12),
+        .target_modules = utf8::utf8to16(column_text(statement, 13)),
+        .training_request_json = column_text(statement, 14),
     };
 }
 
 constexpr const char* select_lora_training_run =
-    "SELECT id,parent_id,base_model_revision,adapter_path,output_model_path,"
+    "SELECT id,parent_id,base_model_fingerprint,base_model_revision,adapter_path,output_model_path,"
     "completed_at_utc,record_count,cumulative_record_count,optimizer_steps,"
     "rank,alpha,dropout,target_modules,training_request_json "
     "FROM lora_training_runs ";
@@ -941,6 +968,26 @@ TrainingDataWriter::latest_lora_training_run() const {
     Statement select(database.get(), sql.c_str());
     if (!select.next()) return std::nullopt;
     return read_lora_training_run(select.get());
+}
+
+std::optional<LoraTrainingRun> TrainingDataWriter::latest_lora_training_run(
+    std::string_view fingerprint) const {
+    if (fingerprint.empty()) return std::nullopt;
+    Database database(database_path_);
+    const std::string sql = std::string(select_lora_training_run) +
+        "WHERE base_model_fingerprint=? ORDER BY id DESC LIMIT 1";
+    Statement select(database.get(), sql.c_str());
+    select.bind_text(1, fingerprint);
+    if (!select.next()) return std::nullopt;
+    return read_lora_training_run(select.get());
+}
+
+void TrainingDataWriter::set_active_base_model_fingerprint(std::string fingerprint) {
+    {
+        std::lock_guard lock(active_base_mutex_);
+        active_base_model_fingerprint_ = std::move(fingerprint);
+    }
+    publish_latest_available_count();
 }
 
 std::optional<LoraTrainingRun>
@@ -971,6 +1018,80 @@ TrainingDataWriter::lora_training_history() const noexcept {
     }
 }
 
+void TrainingDataWriter::register_lora_base_model(
+    const LoraBaseModel& model, bool replace_existing) {
+    if (model.fingerprint.size() != 64 ||
+        !std::ranges::all_of(model.fingerprint, [](char c) {
+            return c >= '0' && c <= '9' || c >= 'a' && c <= 'f';
+        }) || model.revision.empty() || model.output_model_path.empty()) {
+        throw std::invalid_argument("invalid LoRA base model catalog entry");
+    }
+    Database database(database_path_);
+    Statement save(database.get(), replace_existing
+        ? "INSERT INTO lora_base_models(fingerprint,revision,output_model_path) "
+          "VALUES(?,?,?) ON CONFLICT(fingerprint) DO UPDATE SET "
+          "revision=excluded.revision,output_model_path=excluded.output_model_path"
+        : "INSERT OR IGNORE INTO lora_base_models(fingerprint,revision,output_model_path) "
+          "VALUES(?,?,?)");
+    save.bind_text(1, model.fingerprint);
+    save.bind_text(2, model.revision);
+    save.bind_text(3, utf8::utf16to8(model.output_model_path.u16string()));
+    save.execute();
+}
+
+std::vector<LoraBaseModel> TrainingDataWriter::lora_base_models() const noexcept {
+    try {
+        Database database(database_path_);
+        Statement select(database.get(),
+            "SELECT fingerprint,revision,output_model_path FROM lora_base_models "
+            "ORDER BY rowid");
+        std::vector<LoraBaseModel> result;
+        while (select.next()) {
+            result.push_back(LoraBaseModel{
+                .fingerprint = column_text(select.get(), 0),
+                .revision = column_text(select.get(), 1),
+                .output_model_path = std::filesystem::path(
+                    utf8::utf8to16(column_text(select.get(), 2))),
+            });
+        }
+        return result;
+    } catch (const std::exception& error) {
+        std::cerr << "[ERR] unable to read LoRA base model catalog: "
+                  << error.what() << '\n';
+        return {};
+    }
+}
+
+void TrainingDataWriter::migrate_legacy_base_model_fingerprint(
+    std::string_view fingerprint) {
+    if (fingerprint.size() != 64 || !std::ranges::all_of(fingerprint, [](char c) {
+            return c >= '0' && c <= '9' || c >= 'a' && c <= 'f';
+        })) {
+        throw std::invalid_argument("invalid base model fingerprint");
+    }
+    Database database(database_path_);
+    database.execute("BEGIN IMMEDIATE");
+    try {
+        Statement remember(database.get(),
+            "INSERT OR IGNORE INTO lora_base_model_metadata(id,legacy_fingerprint) "
+            "VALUES(1,?)");
+        remember.bind_text(1, fingerprint);
+        remember.execute();
+        Statement update(database.get(),
+            "UPDATE lora_training_runs SET base_model_fingerprint=? "
+            "WHERE base_model_fingerprint IS NULL");
+        Statement saved(database.get(),
+            "SELECT legacy_fingerprint FROM lora_base_model_metadata WHERE id=1");
+        if (!saved.next()) throw std::runtime_error("legacy base model identity is missing");
+        update.bind_text(1, column_text(saved.get(), 0));
+        update.execute();
+        database.execute("COMMIT");
+    } catch (...) {
+        try { database.execute("ROLLBACK"); } catch (...) {}
+        throw;
+    }
+}
+
 bool TrainingDataWriter::complete_lora_training(
     const LoraTrainingRun& run,
     const std::vector<std::u16string>& trained_event_ids) noexcept {
@@ -981,15 +1102,16 @@ bool TrainingDataWriter::complete_lora_training(
             std::size_t parent_count = 0;
             if (run.parent_id != 0) {
                 Statement parent(database.get(),
-                    "SELECT base_model_revision,cumulative_record_count "
+                    "SELECT base_model_fingerprint,base_model_revision,cumulative_record_count "
                     "FROM lora_training_runs WHERE id=?");
                 parent.bind_integer(1, run.parent_id);
                 if (!parent.next() ||
-                    column_text(parent.get(), 0) != run.base_model_revision) {
+                    column_text(parent.get(), 0) != run.base_model_fingerprint ||
+                    column_text(parent.get(), 1) != run.base_model_revision) {
                     throw std::invalid_argument("invalid LoRA parent run");
                 }
                 parent_count = static_cast<std::size_t>(
-                    sqlite3_column_int64(parent.get(), 1));
+                    sqlite3_column_int64(parent.get(), 2));
             }
             if (run.record_count == 0 ||
                 run.cumulative_record_count != parent_count + run.record_count) {
@@ -998,27 +1120,33 @@ bool TrainingDataWriter::complete_lora_training(
             Statement insert(
                 database.get(),
                 "INSERT INTO lora_training_runs("
-                "parent_id,base_model_revision,adapter_path,output_model_path,"
+                "parent_id,base_model_fingerprint,base_model_revision,adapter_path,output_model_path,"
                 "completed_at_utc,record_count,cumulative_record_count,optimizer_steps,"
                 "rank,alpha,dropout,target_modules,training_request_json) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,json_remove(?,'$.strength'))");
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,json_remove(?,'$.strength'))");
             if (run.parent_id == 0) insert.bind_null(1);
             else insert.bind_integer(1, run.parent_id);
-            insert.bind_text(2, run.base_model_revision);
-            insert.bind_text(3, utf8::utf16to8(run.adapter_path.u16string()));
-            insert.bind_text(4, utf8::utf16to8(run.output_model_path.u16string()));
-            insert.bind_text(5, run.completed_at_utc);
-            insert.bind_integer(6, static_cast<sqlite3_int64>(run.record_count));
-            insert.bind_integer(7, static_cast<sqlite3_int64>(run.cumulative_record_count));
-            insert.bind_integer(8, run.optimizer_steps);
-            insert.bind_integer(9, run.rank);
-            insert.bind_real(10, run.alpha);
-            insert.bind_real(11, run.dropout);
-            insert.bind_text(12, utf8::utf16to8(run.target_modules));
+            if (run.base_model_fingerprint.size() != 64 ||
+                !std::ranges::all_of(run.base_model_fingerprint, [](char c) {
+                    return c >= '0' && c <= '9' || c >= 'a' && c <= 'f';
+                }))
+                throw std::invalid_argument("base model fingerprint is invalid");
+            insert.bind_text(2, run.base_model_fingerprint);
+            insert.bind_text(3, run.base_model_revision);
+            insert.bind_text(4, utf8::utf16to8(run.adapter_path.u16string()));
+            insert.bind_text(5, utf8::utf16to8(run.output_model_path.u16string()));
+            insert.bind_text(6, run.completed_at_utc);
+            insert.bind_integer(7, static_cast<sqlite3_int64>(run.record_count));
+            insert.bind_integer(8, static_cast<sqlite3_int64>(run.cumulative_record_count));
+            insert.bind_integer(9, run.optimizer_steps);
+            insert.bind_integer(10, run.rank);
+            insert.bind_real(11, run.alpha);
+            insert.bind_real(12, run.dropout);
+            insert.bind_text(13, utf8::utf16to8(run.target_modules));
             if (run.training_request_json.empty()) {
                 throw std::invalid_argument("LoRA training request is missing");
             }
-            insert.bind_text(13, run.training_request_json);
+            insert.bind_text(14, run.training_request_json);
             insert.execute();
             const auto run_id = sqlite3_last_insert_rowid(database.get());
 

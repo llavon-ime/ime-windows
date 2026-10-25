@@ -219,6 +219,8 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
                             std::int64_t selected_id,
                             std::int64_t applied_id,
                             LoraHistoryTreeAction action,
+                            std::optional<LoraHistoryBaseView> current_base,
+                            std::vector<LoraHistoryBaseView> catalog,
                             std::function<void(std::int64_t)> on_action) {
     const bool dark = dark_theme();
     const auto background = dark ? brush(31, 35, 42) : brush(250, 251, 253);
@@ -264,10 +266,18 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
     graph.Background(background);
     std::unordered_map<std::int64_t, std::vector<std::int64_t>> children;
     std::unordered_map<std::int64_t, const LoraHistoryRunView*> by_id;
+    auto bases = lora_history_bases(runs, std::move(current_base), catalog);
+    if (bases.empty()) bases.push_back(LoraHistoryBaseView{.id = 0});
+    std::unordered_map<std::string, std::int64_t> root_by_fingerprint;
+    std::unordered_map<std::int64_t, const LoraHistoryBaseView*> base_by_id;
+    for (const auto& base : bases) {
+        root_by_fingerprint.emplace(base.fingerprint, base.id);
+        base_by_id.emplace(base.id, &base);
+    }
     for (const auto& run : runs) by_id.emplace(run.id, &run);
     for (const auto& run : runs) {
         const auto parent = run.parent_id != 0 && by_id.contains(run.parent_id)
-            ? run.parent_id : 0;
+            ? run.parent_id : root_by_fingerprint.at(run.base_model_fingerprint);
         children[parent].push_back(run.id);
     }
     std::unordered_map<std::int64_t, Position> positions;
@@ -293,7 +303,7 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
                 x, graph_padding_y + 26 + depth * level_spacing});
             return x;
         };
-    place(0, 0);
+    for (const auto& base : bases) place(base.id, 0);
     graph.Width(std::max(640.0, 240.0 + (leaf_count - 1) * leaf_spacing) +
         2 * graph_padding_x);
     graph.Height(68 + deepest * level_spacing + node_diameter +
@@ -525,7 +535,7 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
     for (const auto& run : runs) {
         const auto parent = positions.at(
             run.parent_id != 0 && positions.contains(run.parent_id) ?
-                run.parent_id : 0);
+                run.parent_id : root_by_fingerprint.at(run.base_model_fingerprint));
         const auto child = positions.at(run.id);
         const double middle = (parent.y + node_diameter + child.y) / 2;
         add_line(parent.x, parent.y + node_diameter, parent.x, middle);
@@ -559,11 +569,23 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
         StackPanel details;
         details.Spacing(3);
         details.Width(440);
-        if (id == 0) {
+        if (base_by_id.contains(id)) {
+            const auto& base = *base_by_id.at(id);
+            const auto short_fingerprint = base.fingerprint.substr(
+                0, std::min<std::size_t>(8, base.fingerprint.size()));
             add_face_line(L"Base", true);
-            add_face_line(L"model", false);
+            add_face_line(short_fingerprint.empty() ? L"unknown" :
+                std::wstring(short_fingerprint.begin(), short_fingerprint.end()), false);
             details.Children().Append(text(L"Base model", 15,
                 FontWeights::SemiBold(), text_color));
+            details.Children().Append(text(L"SHA-256: " +
+                std::wstring(base.fingerprint.begin(), base.fingerprint.end()), 11,
+                FontWeights::Normal(), muted));
+            details.Children().Append(text(L"Revision: " +
+                std::wstring(base.revision.begin(), base.revision.end()), 11,
+                FontWeights::Normal(), muted));
+            if (base.current) details.Children().Append(text(L"Current base model", 12,
+                FontWeights::SemiBold(), selected));
             details.Children().Append(text(L"原始模型 · 尚未個人化", 12,
                 FontWeights::Normal(), muted));
             if (id == applied_id) {
@@ -682,7 +704,7 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
     {
         const auto found = positions.find(selected_id);
         const auto position = found != positions.end() ?
-            found->second : positions.at(0);
+            found->second : (positions.empty() ? Position{} : positions.begin()->second);
         auto layout_token = std::make_shared<winrt::event_token>();
         *layout_token = scroll.LayoutUpdated(
             [weak_scroll, position, layout_token](const auto&, const auto&) {
@@ -724,7 +746,8 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
         std::vector<LoraHistoryParent> lineage;
         lineage.reserve(runs.size());
         for (const auto& run : runs) {
-            lineage.push_back({run.id, run.parent_id});
+            lineage.push_back({run.id, run.parent_id != 0 ? run.parent_id :
+                root_by_fingerprint.at(run.base_model_fingerprint)});
         }
         const auto latest_id = runs.back().id;
         const auto previous_id = runs[runs.size() - 2].id;

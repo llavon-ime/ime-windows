@@ -66,6 +66,8 @@ private:
         std::int64_t selected_id,
         std::int64_t applied_id,
         LoraHistoryTreeAction action,
+        std::optional<LoraHistoryBaseView> current_base,
+        std::vector<LoraHistoryBaseView> catalog,
         std::function<void(std::int64_t)> on_action);
     void close_history_picker();
     bool begin_lora_history_operation(
@@ -78,6 +80,7 @@ private:
     void show_password_dialog(bool setup, std::function<bool(const char16_t*)> action,
                               bool clean_datasets = false);
     bool updating_protection_ = false;
+    bool password_dialog_open_ = false;
     std::function<void()> close_lora_dialog_;
     bool collect_custom_names(std::vector<CustomNameEntry>& entries) const;
     const std::vector<std::u16string>& lookup_bopomofo(char32_t character) const;

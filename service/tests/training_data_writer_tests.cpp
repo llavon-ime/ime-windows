@@ -2,6 +2,7 @@
 #include "service/lora_dataset_builder.hpp"
 #include "service/commit_crypto.hpp"
 #include "service/training_data_cleanup.hpp"
+#include "service/base_model_fingerprint.hpp"
 
 #include <windows.h>
 #include <sqlite3.h>
@@ -22,6 +23,43 @@ using llavon::service::RawCommitEvent;
 using llavon::service::RawCommitInputEntry;
 using llavon::service::TrainingDataWriter;
 using llavon::service::write_lora_numeric_dataset;
+
+int base_model_fingerprint_tests(const std::filesystem::path& root) {
+    if (std::filesystem::exists(root)) return 119;
+    const auto first = root / L"fingerprint-a";
+    const auto second = root / L"fingerprint-b";
+    std::filesystem::create_directories(first);
+    std::filesystem::create_directories(second);
+    const auto write_fixture = [](const std::filesystem::path& directory,
+                                  std::string_view weight) {
+        std::ofstream(directory / L"config.json", std::ios::binary) << "config";
+        std::ofstream(directory / L"ime_vocab.json", std::ios::binary) << "vocab";
+        std::ofstream(directory / L"model.safetensors", std::ios::binary) << weight;
+    };
+    write_fixture(first, "weights");
+    write_fixture(second, "weights");
+    const auto original = llavon::service::compute_base_model_fingerprint(first);
+    if (original.size() != 64 ||
+        original != llavon::service::compute_base_model_fingerprint(second)) return 116;
+    write_fixture(second, "weights!");
+    if (original == llavon::service::compute_base_model_fingerprint(second)) return 117;
+    write_fixture(second, "weights");
+    std::ofstream(second / L"config.json", std::ios::binary) << "config!";
+    if (original == llavon::service::compute_base_model_fingerprint(second)) return 120;
+    write_fixture(second, "weights");
+    std::ofstream(second / L"ime_vocab.json", std::ios::binary) << "vocab!";
+    if (original == llavon::service::compute_base_model_fingerprint(second)) return 121;
+    std::filesystem::remove(second / L"ime_vocab.json");
+    try {
+        (void)llavon::service::compute_base_model_fingerprint(second);
+        return 118;
+    } catch (const std::exception&) {
+    }
+    std::filesystem::remove_all(first);
+    std::filesystem::remove_all(second);
+    std::filesystem::remove(root);
+    return 0;
+}
 
 struct NumericTrainingRow {
     std::vector<std::int64_t> tokens;
@@ -69,6 +107,7 @@ int reset_tests(const std::filesystem::path& path, RawCommitEvent event) {
         }
         if (writer.pending_count() != 1) return 70;
         const llavon::service::LoraTrainingRun run{
+            .base_model_fingerprint = std::string(64, '1'),
             .base_model_revision = "reset-test",
             .adapter_path = model,
             .output_model_path = model,
@@ -156,6 +195,7 @@ int branch_lineage_tests(const std::filesystem::path& path) {
                                   std::size_t cumulative_count) {
             return llavon::service::LoraTrainingRun{
                 .parent_id = parent_id,
+                .base_model_fingerprint = std::string(64, '2'),
                 .base_model_revision = "test-revision",
                 .adapter_path = path.parent_path() / L"branch-adapter",
                 .output_model_path = path.parent_path() / L"branch.gguf",
@@ -188,12 +228,26 @@ int branch_lineage_tests(const std::filesystem::path& path) {
             writer.available_count(b) != 2 || writer.available_count(c) != 1 ||
             b_items.size() != 2 || b_items.front().event_id != u"branch:c" ||
             writer.pending_count() != 1) return 92;
-        if (writer.complete_lora_training(make_run(b, 1, 3), {u"branch:a"}) ||
+        auto wrong_base = make_run(b, 1, 3);
+        wrong_base.base_model_fingerprint = std::string(64, '4');
+        if (writer.complete_lora_training(wrong_base, {u"branch:d"}) ||
+            writer.complete_lora_training(make_run(b, 1, 3), {u"branch:a"}) ||
             writer.complete_lora_training(make_run(9999, 1, 1), {u"branch:d"}) ||
             writer.lora_training_history().size() != 3) return 93;
         const auto run = writer.lora_training_run(c);
         if (!run || run->parent_id != a ||
             run->training_request_json != R"({"rank":8,"epochs":1})") return 94;
+        auto other_base = make_run(0, 1, 1);
+        other_base.base_model_fingerprint = std::string(64, '5');
+        other_base.base_model_revision = "other-revision";
+        if (!writer.complete_lora_training(other_base, {u"branch:a"})) return 122;
+        if (writer.available_count(c) != 1) return 123;
+        writer.set_active_base_model_fingerprint(std::string(64, '2'));
+        if (writer.pending_count() != 1) return 124;
+        writer.set_active_base_model_fingerprint(std::string(64, '5'));
+        if (writer.pending_count() != 3) return 125;
+        writer.set_active_base_model_fingerprint(std::string(64, '6'));
+        if (writer.pending_count() != 4) return 126;
     }
     sqlite3* legacy_database = nullptr;
     if (sqlite3_open16(path.c_str(), &legacy_database) != SQLITE_OK) return 108;
@@ -213,6 +267,62 @@ int branch_lineage_tests(const std::filesystem::path& path) {
         if (!run || run->training_request_json != R"({"rank":8,"epochs":1})")
             return 110;
     }
+    if (sqlite3_open16(path.c_str(), &legacy_database) != SQLITE_OK) return 111;
+    const auto clear_identity = sqlite3_exec(legacy_database,
+        "DROP TABLE lora_base_model_metadata;"
+        "ALTER TABLE lora_training_runs DROP COLUMN base_model_fingerprint;",
+        nullptr, nullptr, nullptr);
+    sqlite3_close(legacy_database);
+    if (clear_identity != SQLITE_OK) return 112;
+    {
+        TrainingDataWriter writer(path);
+        writer.migrate_legacy_base_model_fingerprint(std::string(64, 'a'));
+        writer.migrate_legacy_base_model_fingerprint(std::string(64, 'b'));
+        const auto history = writer.lora_training_history();
+        if (history.size() != 4 || std::ranges::any_of(history, [](const auto& run) {
+                return run.base_model_fingerprint != std::string(64, 'a');
+            })) return 113;
+        writer.register_lora_base_model({std::string(64, 'a'), "revision-a", L"A.gguf"});
+        writer.register_lora_base_model({std::string(64, 'b'), "revision-b", L"B.gguf"});
+        writer.register_lora_base_model({std::string(64, 'a'), "stale", L"stale.gguf"});
+        auto bases = writer.lora_base_models();
+        if (bases.size() != 2 || bases[0].revision != "revision-a") return 122;
+        writer.register_lora_base_model(
+            {std::string(64, 'a'), "revision-a2", L"A2.gguf"}, true);
+        bases = writer.lora_base_models();
+        if (bases.size() != 2 || bases[0].revision != "revision-a2" ||
+            bases[0].output_model_path != L"A2.gguf") return 123;
+    }
+    // Reopening is an idempotence check for both additive schema migration and
+    // the permanently remembered legacy identity.
+    {
+        TrainingDataWriter writer(path);
+        const auto bases = writer.lora_base_models();
+        if (bases.size() != 2 || bases[0].revision != "revision-a2" ||
+            bases[1].revision != "revision-b") return 124;
+    }
+    if (sqlite3_open16(path.c_str(), &legacy_database) != SQLITE_OK) return 114;
+    sqlite3_stmt* integrity = nullptr;
+    const bool integrity_ok = sqlite3_prepare_v2(legacy_database,
+        "SELECT (SELECT COUNT(*) FROM lora_training_runs)=4 "
+        "AND (SELECT COUNT(*) FROM lora_run_commits)=5 "
+        "AND (SELECT COUNT(*) FROM legacy_training_unknown)=1 "
+        "AND (SELECT COUNT(*) FROM lora_base_models)=2 "
+        "AND (SELECT legacy_fingerprint FROM lora_base_model_metadata WHERE id=1)=?",
+        -1, &integrity, nullptr) == SQLITE_OK;
+    if (integrity_ok) sqlite3_bind_text(integrity, 1, std::string(64, 'a').c_str(),
+                                        64, SQLITE_TRANSIENT);
+    const bool preserved = integrity_ok && sqlite3_step(integrity) == SQLITE_ROW &&
+        sqlite3_column_int(integrity, 0) == 1;
+    sqlite3_finalize(integrity);
+    sqlite3_stmt* check = nullptr;
+    const bool check_prepared = sqlite3_prepare_v2(legacy_database,
+        "PRAGMA integrity_check", -1, &check, nullptr) == SQLITE_OK;
+    const bool database_ok = check_prepared && sqlite3_step(check) == SQLITE_ROW &&
+        std::string(reinterpret_cast<const char*>(sqlite3_column_text(check, 0))) == "ok";
+    sqlite3_finalize(check);
+    sqlite3_close(legacy_database);
+    if (!preserved || !database_ok) return 115;
     DeleteFileW(path.c_str());
     return 0;
 }
@@ -677,6 +787,7 @@ int main() {
         if (remaining.size() != 2 || remaining[0].event_id != u"session:7" ||
             remaining[1].event_id != u"late:1") return 9;
         const llavon::service::LoraTrainingRun first_run{
+            .base_model_fingerprint = std::string(64, '3'),
             .base_model_revision = "0123456789012345678901234567890123456789",
             .adapter_path = path.parent_path() / L"first-adapter",
             .output_model_path = path.parent_path() / L"first-personalized.gguf",
@@ -696,6 +807,7 @@ int main() {
             changed_counts != std::vector<std::size_t>{4, 2, 1}) return 17;
         const llavon::service::LoraTrainingRun run{
             .parent_id = first_id,
+            .base_model_fingerprint = std::string(64, '3'),
             .base_model_revision = "0123456789012345678901234567890123456789",
             .adapter_path = path.parent_path() / L"adapter",
             .output_model_path = path.parent_path() / L"personalized.gguf",
@@ -801,5 +913,9 @@ int main() {
         result != 0) {
         return result;
     }
+    auto fingerprint_root = path;
+    fingerprint_root += L".fingerprint-fixture";
+    if (const int result = base_model_fingerprint_tests(fingerprint_root);
+        result != 0) return result;
     return protection_tests(protection_path, event);
 }

@@ -1,29 +1,17 @@
 #pragma once
 
+#include "lora_history_base.hpp"
+
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace llavon::settings {
-
-struct LoraHistoryRunView {
-    std::int64_t id = 0;
-    std::int64_t parent_id = 0;
-    std::wstring completed_local;
-    std::u16string output_model_path;
-    std::size_t record_count = 0;
-    std::size_t cumulative_record_count = 0;
-    std::int64_t optimizer_steps = 0;
-    std::int32_t rank = 0;
-    double alpha = 0;
-    double dropout = 0;
-    std::u16string target_modules;
-    std::string training_request_json;
-};
 
 enum class LoraHistoryTreeAction {
     apply_model,
@@ -43,6 +31,8 @@ LoraHistoryTreeView make_lora_history_tree(
     std::int64_t selected_id,
     std::int64_t applied_id,
     LoraHistoryTreeAction action,
+    std::optional<LoraHistoryBaseView> current_base,
+    std::vector<LoraHistoryBaseView> catalog,
     std::function<void(std::int64_t)> on_action);
 
 } // namespace llavon::settings

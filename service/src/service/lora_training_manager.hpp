@@ -43,6 +43,8 @@ enum class CudaRuntimeState : std::int32_t {
 
 struct LoraTrainingOptions {
     std::int64_t base_run_id = 0;
+    std::string base_model_fingerprint;
+    std::string base_model_revision;
     std::int32_t rank = 8;
     double alpha = 16;
     double dropout = 0;
@@ -75,6 +77,8 @@ struct LoraOperationStatus {
     bool model_available = false;
     bool model_update_available = false;
     std::u16string model_revision;
+    std::string base_model_fingerprint;
+    std::u16string base_model_output_path;
     std::u16string output_model_path;
     bool trainer_available = false;
     CudaRuntimeState cuda_runtime = CudaRuntimeState::unknown;

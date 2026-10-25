@@ -35,6 +35,8 @@ add_executable(llavon-ime-service
     src/service/training_data_cleanup.hpp
     src/service/lora_dataset_builder.cpp
     src/service/lora_dataset_builder.hpp
+    src/service/base_model_fingerprint.cpp
+    src/service/base_model_fingerprint.hpp
     src/service/lora_training_manager.cpp
     src/service/lora_training_manager.hpp
     src/service/lora_trainer_cleanup.hpp
@@ -358,6 +360,8 @@ if(BUILD_TESTING)
 
     add_executable(training-data-writer-tests
         tests/training_data_writer_tests.cpp
+        src/service/base_model_fingerprint.cpp
+        src/service/base_model_fingerprint.hpp
         src/service/lora_dataset_builder.cpp
         src/service/lora_dataset_builder.hpp
         src/service/training_data_writer.cpp
@@ -388,6 +392,7 @@ if(BUILD_TESTING)
         unofficial-sodium::sodium
         unofficial::sqlite3::sqlite3
         ole32
+        bcrypt
         shell32
     )
     add_test(NAME training-data-writer COMMAND training-data-writer-tests)

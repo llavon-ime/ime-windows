@@ -62,6 +62,15 @@ struct UiClientState {
 };
 class Runtime final {
 public:
+    int32_t configure_lora_base_models(
+        llavon_settings_get_lora_base_models_callback callback, void* context) {
+        std::lock_guard lock(mutex_);
+        if (settings_client_.connected) return ERROR_BUSY;
+        if (!callback) return ERROR_INVALID_PARAMETER;
+        configuration_.get_lora_base_models_callback = callback;
+        configuration_.get_lora_base_models_context = context;
+        return ERROR_SUCCESS;
+    }
     int32_t configure_gpu_boost(
         bool enabled, llavon_settings_save_gpu_boost_callback save_callback,
         void* save_context) {
@@ -448,7 +457,7 @@ Runtime& runtime() {
 }  // namespace
 }  // namespace llavon::settings
 
-extern "C" int32_t llavon_settings_ui_configure_v5(
+extern "C" int32_t llavon_settings_ui_configure_v6(
     const struct llavon_settings_inference_device* devices,
     size_t device_count,
     int32_t selected_backend,
@@ -507,6 +516,11 @@ extern "C" int32_t llavon_settings_ui_configure_model_preparation_v2(
     const char16_t* base_model_path) {
     return llavon::settings::runtime().configure_model_preparation(
         callback, context, base_model_path);
+}
+
+extern "C" int32_t llavon_settings_ui_configure_lora_base_models_v1(
+    llavon_settings_get_lora_base_models_callback callback, void* context) {
+    return llavon::settings::runtime().configure_lora_base_models(callback, context);
 }
 
 extern "C" int32_t llavon_settings_ui_configure_update_notifications(
