@@ -48,6 +48,8 @@ private:
     void build_page();
     void browse_model_file();
     void save_model_path();
+    void switch_to_default_model();
+    void update_default_model_button();
     void update_model_path_save_state();
     void save_inference_setting();
     void update_inference_save_state();
@@ -136,6 +138,7 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::TextBlock lora_note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBox model_path_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button browse_model_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button default_model_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button model_history_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button save_model_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock model_note_{nullptr};

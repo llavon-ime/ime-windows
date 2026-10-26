@@ -801,6 +801,11 @@ void SettingsWindow::build_page() {
         [this](const auto&, const auto&) { update_model_path_save_state(); });
     browse_model_button_ = named<Button>(shell_, L"BrowseModelButton");
     browse_model_button_.Click([this](const auto&, const auto&) { browse_model_file(); });
+    default_model_button_ = named<Button>(shell_, L"DefaultModelButton");
+    default_model_button_.Click([this](const auto&, const auto&) {
+        switch_to_default_model();
+    });
+    update_default_model_button();
     model_history_button_ = named<Button>(shell_, L"ModelHistoryButton");
     model_history_button_.Click([this](const auto&, const auto&) {
         show_model_history_tree();
@@ -3262,6 +3267,7 @@ void SettingsWindow::save_model_path() {
         configuration_.model_path = path;
         model_path_.Text(to_hstring(path));
         save_model_button_.IsEnabled(false);
+        update_default_model_button();
         model_note_.Text(L"已載入並儲存模型檔案位置。");
     } else {
         model_note_.Text(L"無法載入模型；請確認檔案存在且為有效的 GGUF 模型。");
@@ -3269,7 +3275,30 @@ void SettingsWindow::save_model_path() {
     model_note_.Visibility(Visibility::Visible);
 }
 
+void SettingsWindow::switch_to_default_model() {
+    if (!model_path_ || !model_note_ || configuration_.base_model_path.empty()) return;
+    const std::filesystem::path default_path(configuration_.base_model_path);
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(default_path, error)) {
+        model_note_.Text(L"找不到預設模型；請重新執行安裝程式以下載模型。");
+        model_note_.Visibility(Visibility::Visible);
+        return;
+    }
+    model_path_.Text(to_hstring(configuration_.base_model_path));
+    save_model_path();
+}
+
+void SettingsWindow::update_default_model_button() {
+    if (!default_model_button_) return;
+    const bool using_default = configuration_.base_model_path.empty() ||
+        std::filesystem::path(configuration_.model_path).lexically_normal() ==
+            std::filesystem::path(configuration_.base_model_path).lexically_normal();
+    default_model_button_.Visibility(
+        using_default ? Visibility::Collapsed : Visibility::Visible);
+}
+
 void SettingsWindow::update_model_path_save_state() {
+    update_default_model_button();
     if (!model_path_ || !save_model_button_ || !model_note_) return;
     const std::u16string path = trim(to_utf16(model_path_.Text()));
     const bool changed = !path.empty() && path != configuration_.model_path;
@@ -3596,6 +3625,7 @@ void SettingsWindow::close_xaml() noexcept {
     model_path_ = nullptr;
     model_history_button_ = nullptr;
     browse_model_button_ = nullptr;
+    default_model_button_ = nullptr;
     save_model_button_ = nullptr;
     model_note_ = nullptr;
     active_device_status_ = nullptr;
