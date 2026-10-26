@@ -20,10 +20,10 @@ public:
     using Boost = std::move_only_function<Result(bool)>;
     using Duration = std::chrono::steady_clock::duration;
 
-    explicit GpuActivityLease(asio::io_context& context,
+    explicit GpuActivityLease(asio::any_io_executor executor,
                               Duration idle_timeout = std::chrono::seconds(2),
                               Duration retry_delay = std::chrono::seconds(1))
-        : state_(std::make_shared<State>(context, idle_timeout, retry_delay)) {}
+        : state_(std::make_shared<State>(std::move(executor), idle_timeout, retry_delay)) {}
 
     ~GpuActivityLease() { state_->reset(); }
     GpuActivityLease(const GpuActivityLease&) = delete;
@@ -54,8 +54,8 @@ private:
         unsigned release_failures = 0;
         static constexpr unsigned max_release_attempts = 4;
 
-        State(asio::io_context& context, Duration timeout, Duration retry)
-            : timer(context), idle_timeout(timeout), retry_delay(retry) {}
+        State(asio::any_io_executor executor, Duration timeout, Duration retry)
+            : timer(std::move(executor)), idle_timeout(timeout), retry_delay(retry) {}
 
         void reset() noexcept {
             ++generation;

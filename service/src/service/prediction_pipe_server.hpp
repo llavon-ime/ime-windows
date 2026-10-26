@@ -19,7 +19,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "candidate_pipe_server.hpp"
@@ -108,36 +110,51 @@ inline const char* priority_name(ServicePriority priority) {
     }
 }
 
-inline void configure_windows_scheduling(ServicePriority priority) {
-    DWORD priority_class = HIGH_PRIORITY_CLASS;
+inline void configure_thread_priority(ServicePriority priority) {
     int thread_priority = THREAD_PRIORITY_HIGHEST;
-
     switch (priority) {
         case ServicePriority::Normal:
-            priority_class = NORMAL_PRIORITY_CLASS;
             thread_priority = THREAD_PRIORITY_NORMAL;
             break;
         case ServicePriority::AboveNormal:
-            priority_class = ABOVE_NORMAL_PRIORITY_CLASS;
             thread_priority = THREAD_PRIORITY_ABOVE_NORMAL;
             break;
         case ServicePriority::Realtime:
-            priority_class = REALTIME_PRIORITY_CLASS;
             thread_priority = THREAD_PRIORITY_TIME_CRITICAL;
             break;
         case ServicePriority::High:
         default:
-            priority_class = HIGH_PRIORITY_CLASS;
             thread_priority = THREAD_PRIORITY_HIGHEST;
+            break;
+    }
+
+    if (!SetThreadPriority(GetCurrentThread(), thread_priority)) {
+        std::cerr << "[WARN] SetThreadPriority failed: " << GetLastError() << std::endl;
+    }
+}
+
+inline void configure_windows_scheduling(ServicePriority priority) {
+    DWORD priority_class = HIGH_PRIORITY_CLASS;
+    switch (priority) {
+        case ServicePriority::Normal:
+            priority_class = NORMAL_PRIORITY_CLASS;
+            break;
+        case ServicePriority::AboveNormal:
+            priority_class = ABOVE_NORMAL_PRIORITY_CLASS;
+            break;
+        case ServicePriority::Realtime:
+            priority_class = REALTIME_PRIORITY_CLASS;
+            break;
+        case ServicePriority::High:
+        default:
+            priority_class = HIGH_PRIORITY_CLASS;
             break;
     }
 
     if (!SetPriorityClass(GetCurrentProcess(), priority_class)) {
         std::cerr << "[WARN] SetPriorityClass failed: " << GetLastError() << std::endl;
     }
-    if (!SetThreadPriority(GetCurrentThread(), thread_priority)) {
-        std::cerr << "[WARN] SetThreadPriority failed: " << GetLastError() << std::endl;
-    }
+    configure_thread_priority(priority);
 
     PROCESS_POWER_THROTTLING_STATE throttling{};
     throttling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
@@ -264,9 +281,9 @@ public:
     using ClientId = std::uint64_t;
     static constexpr std::size_t capacity = 5;
 
-    SessionLru(asio::io_context& context, std::shared_ptr<llavon::ime::core::Core> core,
+    SessionLru(asio::any_io_executor executor, std::shared_ptr<llavon::ime::core::Core> core,
                bool gpu_boost_enabled)
-        : core_(std::move(core)), gpu_activity_(context),
+        : core_(std::move(core)), gpu_activity_(std::move(executor)),
           gpu_boost_enabled_(gpu_boost_enabled) {
         if (!core_) {
             throw std::invalid_argument("inference core is required");
@@ -362,7 +379,7 @@ private:
         std::list<ClientId>::iterator recency;
     };
 
-    // SessionLru is confined to the prediction server's single io_context thread.
+    // SessionLru is confined to the prediction server's single inference thread.
     std::shared_ptr<llavon::ime::core::Core> core_;
     GpuActivityLease gpu_activity_;
     bool gpu_boost_enabled_ = true;
@@ -372,32 +389,59 @@ private:
     std::vector<std::unique_ptr<llavon::ime::core::Session>> idle_;
 };
 
+using InferenceExecutor = asio::thread_pool::executor_type;
+
+template <typename F>
+using SessionResult = std::invoke_result_t<F&, llavon::ime::core::Session&>;
+
+template <typename F>
+inline asio::awaitable<SessionResult<F>> invoke_with_session(
+    std::shared_ptr<SessionLru> sessions, SessionLru::ClientId client_id, F f) {
+    co_return f(sessions->acquire(client_id));
+}
+
 class ClientSession final {
 public:
-    ClientSession(std::shared_ptr<SessionLru> sessions, SessionLru::ClientId client_id)
-        : sessions_(std::move(sessions)), client_id_(client_id) {}
+    ClientSession(InferenceExecutor inference, std::shared_ptr<SessionLru> sessions,
+                  SessionLru::ClientId client_id)
+        : inference_(std::move(inference)), sessions_(std::move(sessions)),
+          client_id_(client_id) {}
 
     ~ClientSession() {
-        sessions_->erase(client_id_);
+        try {
+            asio::post(inference_, [sessions = std::move(sessions_), client_id = client_id_] {
+                sessions->erase(client_id);
+            });
+        } catch (const std::exception& e) {
+            std::cerr << "[ERR] release inference context: " << e.what() << std::endl;
+        }
     }
 
-    llavon::ime::core::Session& acquire() {
-        return sessions_->acquire(client_id_);
+    ClientSession(const ClientSession&) = delete;
+    ClientSession& operator=(const ClientSession&) = delete;
+
+    template <typename F>
+    asio::awaitable<SessionResult<F>> run(F f) {
+        co_return co_await asio::co_spawn(
+            inference_, invoke_with_session(sessions_, client_id_, std::move(f)),
+            asio::use_awaitable);
     }
 
 private:
+    InferenceExecutor inference_;
     std::shared_ptr<SessionLru> sessions_;
     SessionLru::ClientId client_id_;
 };
 
 inline asio::awaitable<void> handle_client(
     asio::windows::stream_handle pipe,
+    InferenceExecutor inference,
     std::shared_ptr<SessionLru> sessions,
     std::shared_ptr<CustomNameMatcher> custom_names,
     std::shared_ptr<TrainingDataWriter> training_data,
     std::string collection_session_id,
     SessionLru::ClientId client_id) {
-    ClientSession client_session(std::move(sessions), client_id);
+    ClientSession client_session(std::move(inference), std::move(sessions), client_id);
     std::uint64_t latest_commit_token = 0;
 
     while (true) {
@@ -420,7 +464,8 @@ inline asio::awaitable<void> handle_client(
         if (command == PipeCommand::Ready) {
             uint8_t ok = 0;
             try {
-                client_session.acquire().ready();
+                co_await client_session.run(
+                    [](llavon::ime::core::Session& session) { session.ready(); });
                 ok = 1;
             } catch (const std::exception& e) {
                 std::cerr << "[ERR] ready: " << e.what() << std::endl;
@@ -501,7 +546,11 @@ inline asio::awaitable<void> handle_client(
         std::vector<llavon::ime::core::Prediction> results;
         bool ok = false;
         try {
-            results = client_session.acquire().predict(context, padding);
+            results = co_await client_session.run(
+                [context = std::move(context), padding = std::move(padding)](
+                    llavon::ime::core::Session& session) {
+                    return session.predict(context, padding);
+                });
             for (std::size_t index = 0;
                  index < results.size() && index < custom_name_replacements.size(); ++index) {
                 if (custom_name_replacements[index]) {
@@ -524,7 +573,7 @@ inline asio::awaitable<void> handle_client(
 }
 
 inline asio::awaitable<void> listener(
-    asio::io_context& io_ctx,
+    InferenceExecutor inference,
     std::shared_ptr<SessionLru> sessions,
     std::shared_ptr<CustomNameMatcher> custom_names,
     std::shared_ptr<TrainingDataWriter> training_data) {
@@ -573,7 +622,7 @@ inline asio::awaitable<void> listener(
         asio::windows::stream_handle stream(executor, hPipe);
         const SessionLru::ClientId client_id = next_client_id++;
         co_spawn(executor,
-                 handle_client(std::move(stream), sessions, custom_names,
+                 handle_client(std::move(stream), inference, sessions, custom_names,
                                training_data, new_collection_session_id(), client_id),
                  asio::detached);
     }
@@ -589,7 +638,7 @@ public:
         std::shared_ptr<CustomNameMatcher> custom_names,
         bool gpu_boost_enabled = true)
         : sessions_(std::make_shared<prediction_pipe::SessionLru>(
-              io_ctx_, std::move(core), gpu_boost_enabled)),
+              inference_.get_executor(), std::move(core), gpu_boost_enabled)),
           candidate_ui_(candidate_ui),
           custom_names_(std::move(custom_names)),
           training_data_(std::make_shared<TrainingDataWriter>()) {
@@ -611,7 +660,7 @@ public:
         auto completion =
             std::make_shared<std::promise<llavon::ime::core::InferenceRuntimeInfo>>();
         auto result = completion->get_future();
-        asio::post(io_ctx_,
+        asio::post(inference_,
                    [sessions = sessions_, config = std::move(config), completion]() mutable {
                        try {
                            completion->set_value(sessions->replace_core(std::move(config)));
@@ -628,7 +677,7 @@ public:
     }
 
     void set_gpu_boost_enabled(bool enabled) {
-        asio::post(io_ctx_, [sessions = sessions_, enabled] {
+        asio::post(inference_, [sessions = sessions_, enabled] {
             sessions->set_gpu_boost_enabled(enabled);
         });
     }
@@ -663,22 +712,30 @@ public:
 
         std::clog << "[SRV] model loaded\n";
 
+        asio::post(inference_, [priority] {
+            prediction_pipe::configure_thread_priority(priority);
+        });
+
         CandidatePipeServer candidate_pipe(candidate_ui_);
         co_spawn(io_ctx_,
                  prediction_pipe::listener(
-                     io_ctx_, sessions_, custom_names_, training_data_),
+                     inference_.get_executor(), sessions_, custom_names_, training_data_),
                  asio::detached);
         co_spawn(io_ctx_, candidate_pipe.listen(), asio::detached);
         io_ctx_.run();
+        accepting_reloads_.store(false, std::memory_order_release);
         // Release on the inference thread even when stop() prevented the idle
         // timer from running and outstanding clients still retain sessions_.
-        sessions_->release_gpu_activity();
-        accepting_reloads_.store(false, std::memory_order_release);
+        asio::post(inference_, [sessions = sessions_] {
+            sessions->release_gpu_activity();
+        });
+        inference_.join();
 
         return 0;
     }
 
 private:
+    asio::thread_pool inference_{1};
     asio::io_context io_ctx_;
     std::shared_ptr<prediction_pipe::SessionLru> sessions_;
     CandidateUiLoader& candidate_ui_;

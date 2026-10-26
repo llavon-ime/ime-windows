@@ -28,7 +28,7 @@ int main() {
     std::vector<bool> calls;
     const auto backend = [&](bool enabled) { calls.push_back(enabled); return Result::success; };
     {
-        GpuActivityLease lease(context, 1h);
+        GpuActivityLease lease(context.get_executor(), 1h);
         lease.set_backend(backend);
         for (int key = 0; key < 100; ++key) lease.activate();
         if (calls != std::vector<bool>{true}) return 1;
@@ -41,7 +41,7 @@ int main() {
     context.restart();
     calls.clear();
     {
-        GpuActivityLease lease(context, 0ms);
+        GpuActivityLease lease(context.get_executor(), 0ms);
         lease.set_backend(backend);
         lease.activate();
         context.run();
@@ -58,7 +58,7 @@ int main() {
     calls.clear();
     std::vector<bool> replacement;
     {
-        GpuActivityLease lease(context, 1h);
+        GpuActivityLease lease(context.get_executor(), 1h);
         lease.set_backend(backend);
         lease.activate();
         lease.set_backend([&](bool enabled) { replacement.push_back(enabled); return Result::success; });
@@ -72,7 +72,7 @@ int main() {
     context.restart();
     int attempts = 0;
     {
-        GpuActivityLease lease(context, 0ms);
+        GpuActivityLease lease(context.get_executor(), 0ms);
         lease.activate();
         lease.set_backend([&](bool) { ++attempts; return Result::unavailable; });
         lease.activate();
@@ -88,7 +88,7 @@ int main() {
     context.restart();
     calls.clear();
     {
-        GpuActivityLease lease(context, 0ms);
+        GpuActivityLease lease(context.get_executor(), 0ms);
         lease.set_backend(backend);
         lease.activate();
     }
@@ -100,7 +100,7 @@ int main() {
     context.restart();
     calls.clear();
     {
-        GpuActivityLease lease(context, 0ms);
+        GpuActivityLease lease(context.get_executor(), 0ms);
         lease.set_backend(backend);
         lease.activate();
         lease.set_enabled(false);
@@ -121,7 +121,7 @@ int main() {
     context.restart();
     attempts = 0;
     {
-        GpuActivityLease lease(context, 0ms, 1h);
+        GpuActivityLease lease(context.get_executor(), 0ms, 1h);
         lease.set_backend([&](bool) { ++attempts; return Result::retry_later; });
         for (int key = 0; key < 100; ++key) lease.activate();
         if (attempts != 1) return 13;
@@ -130,7 +130,7 @@ int main() {
     context.restart();
     calls.clear();
     {
-        GpuActivityLease lease(context, 0ms, 0ms);
+        GpuActivityLease lease(context.get_executor(), 0ms, 0ms);
         lease.set_backend([&](bool enabled) {
             calls.push_back(enabled);
             return calls.size() == 1 ? Result::retry_later : Result::success;
@@ -145,7 +145,7 @@ int main() {
     context.restart();
     calls.clear();
     {
-        GpuActivityLease lease(context, 0ms, 0ms);
+        GpuActivityLease lease(context.get_executor(), 0ms, 0ms);
         lease.set_backend([&](bool enabled) {
             calls.push_back(enabled);
             return !enabled && calls.size() == 2 ? Result::retry_later : Result::success;
@@ -169,7 +169,7 @@ int main() {
     auto retained = std::make_shared<int>(0);
     const std::weak_ptr<int> weak_retained = retained;
     {
-        GpuActivityLease lease(context, 0ms, 0ms);
+        GpuActivityLease lease(context.get_executor(), 0ms, 0ms);
         lease.set_backend([&, saved = std::move(retained)](bool enabled) {
             ++*saved;
             calls.push_back(enabled);
@@ -187,7 +187,7 @@ int main() {
     context.restart();
     calls.clear();
     {
-        GpuActivityLease lease(context, 0ms, 0ms);
+        GpuActivityLease lease(context.get_executor(), 0ms, 0ms);
         lease.set_backend([&](bool enabled) {
             calls.push_back(enabled);
             if (!enabled && calls.size() == 2) throw std::runtime_error("transient release");
@@ -203,7 +203,7 @@ int main() {
     calls.clear();
     replacement.clear();
     {
-        GpuActivityLease lease(context, 0ms, 0ms);
+        GpuActivityLease lease(context.get_executor(), 0ms, 0ms);
         lease.set_backend([&](bool enabled) {
             calls.push_back(enabled);
             return !enabled && calls.size() == 2 ? Result::retry_later : Result::success;
