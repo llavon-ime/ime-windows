@@ -27,14 +27,14 @@ enum class PipeCommand : uint8_t {
 };
 
 class PipeEngine : public IEngine {
-    static inline HANDLE hPipe = INVALID_HANDLE_VALUE;
+    HANDLE hPipe = INVALID_HANDLE_VALUE;
     static inline std::atomic_uint64_t next_commit_token{1};
     static constexpr const wchar_t* pipe_base_name = L"llavon-ime";
     static constexpr uint32_t maximum_candidate_count = 4096;
     static constexpr std::chrono::seconds launch_retry_interval{5};
-    static inline std::optional<std::chrono::steady_clock::time_point> last_launch_request;
+    std::optional<std::chrono::steady_clock::time_point> last_launch_request;
 
-    static bool connect_pipe() {
+    bool connect_pipe() {
         const auto pipe_name = llavon::ipc::session_pipe_name(pipe_base_name);
         hPipe = CreateFileW(pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
         if (hPipe == INVALID_HANDLE_VALUE) return false;
@@ -48,7 +48,7 @@ class PipeEngine : public IEngine {
     // Starts the backend without waiting for its pipe. Until it is reachable the
     // engine reports English mode, so key handling never blocks while the backend
     // loads or while an update holds the launch mutex.
-    static void request_backend_launch() {
+    void request_backend_launch() {
         const auto now = std::chrono::steady_clock::now();
         if (last_launch_request && now - *last_launch_request < launch_retry_interval) return;
         last_launch_request = now;
@@ -67,7 +67,7 @@ class PipeEngine : public IEngine {
         CloseHandle(launch_mutex);
     }
 
-    static bool ensure_pipe() {
+    bool ensure_pipe() {
         if (hPipe != INVALID_HANDLE_VALUE) return true;
         if (connect_pipe()) return true;
 
@@ -75,7 +75,7 @@ class PipeEngine : public IEngine {
         return hPipe != INVALID_HANDLE_VALUE;
     }
 
-    static void disconnect() {
+    void disconnect() {
         if (hPipe != INVALID_HANDLE_VALUE) {
             CloseHandle(hPipe);
             hPipe = INVALID_HANDLE_VALUE;
@@ -83,23 +83,23 @@ class PipeEngine : public IEngine {
     }
 
     template <typename T>
-    static bool write_exact(const T& val) {
+    bool write_exact(const T& val) {
         DWORD written = 0;
         return WriteFile(hPipe, &val, sizeof(T), &written, nullptr) && written == sizeof(T);
     }
 
-    static bool write_exact(const void* buf, DWORD size) {
+    bool write_exact(const void* buf, DWORD size) {
         DWORD written = 0;
         while (written < size) {
             DWORD n = 0;
-            if (!WriteFile(hPipe, static_cast<const char*>(buf) + written, size - written, &n, nullptr)) return false;
+            if (!WriteFile(hPipe, static_cast<const char*>(buf) + written, size - written, &n, nullptr) || n == 0) return false;
             written += n;
         }
         return true;
     }
 
     template <typename T>
-    static bool read_exact(T& val) {
+    bool read_exact(T& val) {
         DWORD total = 0;
         while (total < sizeof(T)) {
             DWORD n = 0;
@@ -110,7 +110,7 @@ class PipeEngine : public IEngine {
         return true;
     }
 
-    static bool read_exact(void* buf, DWORD size) {
+    bool read_exact(void* buf, DWORD size) {
         DWORD total = 0;
         while (total < size) {
             DWORD n = 0;
@@ -120,12 +120,12 @@ class PipeEngine : public IEngine {
         return true;
     }
 
-    static bool write_command(PipeCommand command) {
+    bool write_command(PipeCommand command) {
         const uint8_t raw_command = static_cast<uint8_t>(command);
         return write_exact(raw_command);
     }
 
-    static bool read_input_mode(InputMode& mode) {
+    bool read_input_mode(InputMode& mode) {
         uint8_t raw_mode = 0;
         if (!read_exact(raw_mode)) return false;
 
@@ -134,6 +134,11 @@ class PipeEngine : public IEngine {
     }
 
 public:
+    PipeEngine() = default;
+    ~PipeEngine() override { disconnect(); }
+    PipeEngine(const PipeEngine&) = delete;
+    PipeEngine& operator=(const PipeEngine&) = delete;
+
     void ready() override {
         if (!ensure_pipe()) return;
 
@@ -211,7 +216,7 @@ public:
             return 0;
         }
 
-        const auto write_string = [](std::u16string_view value) {
+        const auto write_string = [this](std::u16string_view value) {
             const auto length = static_cast<std::uint32_t>(value.size());
             if (!write_exact(length)) return false;
             return length == 0 || write_exact(value.data(), length * sizeof(char16_t));

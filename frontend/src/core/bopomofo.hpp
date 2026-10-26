@@ -272,6 +272,7 @@ struct BopomofoPos {
 
     // TODO temp
     std::optional<std::vector<char32_t>> predicted_candidate;
+    bool operator==(const BopomofoPos&) const = default;
     bool accept(char16_t c) {
         if (is_compositable() || invalid) {
             return false;

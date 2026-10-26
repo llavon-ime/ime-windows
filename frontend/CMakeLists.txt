@@ -97,6 +97,19 @@ install(TARGETS llavon-ime
 )
 
 if(BUILD_TESTING)
+    add_executable(frontend-engine-worker-tests tests/engine_worker_tests.cpp)
+    target_compile_features(frontend-engine-worker-tests PRIVATE cxx_std_23)
+    target_compile_definitions(frontend-engine-worker-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(frontend-engine-worker-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    set_target_properties(frontend-engine-worker-tests PROPERTIES
+        CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+    target_link_libraries(frontend-engine-worker-tests PRIVATE
+        ole32 reflectcpp::reflectcpp utf8::cpp utf8cpp::utf8cpp)
+    add_test(NAME frontend-engine-worker COMMAND frontend-engine-worker-tests)
+    set_tests_properties(frontend-engine-worker PROPERTIES TIMEOUT 30)
+
     add_executable(frontend-dll-load-tests tests/dll_load_tests.cpp)
     target_compile_features(frontend-dll-load-tests PRIVATE cxx_std_23)
     target_compile_definitions(frontend-dll-load-tests PRIVATE

@@ -15,11 +15,13 @@
 
 #include "core/buffer.hpp"
 #include "engine/impl/engine.h"
+#include "system/sysutil.hpp"
 
 namespace tsf {
 
 class CandidateUiController;
 class InputModeLangBarItem;
+class EngineWorker;
 
 // clang-format off
 class TextService : 
@@ -31,7 +33,7 @@ class TextService :
         ITfKeyEventSink, 
         ITfCompositionSink, 
         ITfTextEditSink,
-        ITfDisplayAttributeProvider> {
+        ITfDisplayAttributeProvider>, private module_lock_updater {
     // clang-format on
 public:
     TextService();
@@ -97,6 +99,21 @@ private:
         std::chrono::steady_clock::time_point edit_operation_finished;
     };
 
+    struct PendingPrediction {
+        std::uint64_t sequence;
+        winrt::com_ptr<ITfContext> context;
+        std::vector<BopomofoPos> snapshot;
+        E2eTrace trace;
+    };
+
+    void start_engine_worker();
+    void stop_engine_worker() noexcept;
+    static LRESULT CALLBACK engine_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+    void on_engine_result();
+    void queue_prediction(ITfContext* context, std::u16string preceding, E2eTrace trace);
+    void invalidate_prediction();
+    bool prediction_is_current(const PendingPrediction& request) const;
+
     HRESULT activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId);
     void deactivate();
     HRESULT handle_com_exception(
@@ -110,6 +127,10 @@ private:
                                  size_t select_start = std::u16string::npos,
                                  size_t select_length = 0,
                                  std::optional<E2eTrace> e2e_trace = std::nullopt);
+    void write_composition_text(ITfContext* context, TfEditCookie cookie,
+                                const std::u16string& text, size_t select_start,
+                                size_t select_length, std::optional<E2eTrace> trace,
+                                std::chrono::steady_clock::time_point requested);
     void refresh_composition_after_candidate_finalize(ITfContext* pContext,
                                                        E2eTrace e2e_trace);
     HRESULT ensure_text_edit_sink(ITfContext* context);
@@ -118,7 +139,7 @@ private:
     void show_candidate_list(BopomofoPos& pos, ITfContext* pContext);
     std::u16string get_pre_composit_context(ITfContext* pContext);
     InputMode read_backend_input_mode();
-    InputMode refresh_input_mode_indicator();
+    InputMode refresh_input_mode_indicator(bool query_backend = true);
     void sync_input_mode_compartments(InputMode mode);
     void refresh_width_toggle_setting();
     bool context_accepts_input(ITfContext* context) const;
@@ -141,6 +162,11 @@ private:
     std::unique_ptr<CandidateUiController> candidate_ui_;
     winrt::com_ptr<InputModeLangBarItem> input_mode_lang_bar_item_;
     CompositionBuffer compositionBuffer;
+    std::unique_ptr<EngineWorker> engine_worker_;
+    HWND engine_window_ = nullptr;
+    std::wstring engine_window_class_;
+    std::uint64_t prediction_sequence_ = 0;
+    std::optional<PendingPrediction> pending_prediction_;
     bool shift_toggle_pending_ = false;
     bool shift_used_as_modifier_ = false;
     bool full_width_mode_ = false;

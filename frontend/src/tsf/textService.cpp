@@ -18,6 +18,7 @@
 #include "core/bopomofo.hpp"
 #include "editSession.hpp"
 #include "engine/engine.hpp"
+#include "engine/engine_worker.hpp"
 #include "inputModeLangBarItem.hpp"
 #include "system/globals.h"
 #include "utils/healper.hpp"
@@ -559,6 +560,123 @@ TextService::~TextService() {
     deactivate();
 }
 
+void TextService::start_engine_worker() {
+    if (engine_worker_) return;
+    engine_window_class_ = std::format(L"LlavonIme.Engine.{}", reinterpret_cast<std::uintptr_t>(this));
+    WNDCLASSW window_class{};
+    window_class.lpfnWndProc = &TextService::engine_window_proc;
+    window_class.hInstance = Globals::hinstance;
+    window_class.lpszClassName = engine_window_class_.c_str();
+    winrt::check_bool(RegisterClassW(&window_class));
+    try {
+        engine_window_ = CreateWindowExW(0, engine_window_class_.c_str(), L"", 0,
+            0, 0, 0, 0, HWND_MESSAGE, nullptr, Globals::hinstance, this);
+        winrt::check_bool(engine_window_ != nullptr);
+        engine_worker_ = std::make_unique<EngineWorker>(
+            [] { return get_engine(); },
+            [window = engine_window_] { PostMessageW(window, WM_APP + 1, 0, 0); });
+        engine_worker_->refresh_input_mode();
+    } catch (...) {
+        stop_engine_worker();
+        throw;
+    }
+}
+
+void TextService::stop_engine_worker() noexcept {
+    // Join before destroying the notification target; callbacks own no TSF state.
+    engine_worker_.reset();
+    if (engine_window_) {
+        DestroyWindow(engine_window_);
+        engine_window_ = nullptr;
+    }
+    if (!engine_window_class_.empty()) {
+        UnregisterClassW(engine_window_class_.c_str(), Globals::hinstance);
+        engine_window_class_.clear();
+    }
+}
+
+LRESULT CALLBACK TextService::engine_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    }
+    if (message == WM_APP + 1) {
+        auto* service = reinterpret_cast<TextService*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (service) {
+            auto lifetime = service->get_strong();
+            try { service->on_engine_result(); }
+            catch (...) { service->handle_com_exception(); }
+        }
+        return 0;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+void TextService::invalidate_prediction() {
+    ++prediction_sequence_;
+    pending_prediction_.reset();
+}
+
+void TextService::queue_prediction(ITfContext* context, std::u16string preceding, E2eTrace trace) {
+    if (!engine_worker_ || !context) return;
+    auto snapshot = compositionBuffer.prediction_snapshot();
+    if (!snapshot) return;
+    trace.predict_started = std::chrono::steady_clock::now();
+    PendingPrediction request{.sequence = ++prediction_sequence_,
+                              .snapshot = std::move(*snapshot), .trace = trace};
+    request.context.copy_from(context);
+    engine_worker_->predict(request.sequence, std::move(preceding), request.snapshot);
+    pending_prediction_ = std::move(request);
+}
+
+bool TextService::prediction_is_current(const PendingPrediction& request) const {
+    if (!engine_worker_ || request.sequence != prediction_sequence_ ||
+        !composition_belongs_to(request.context.get()) ||
+        !compositionBuffer.matches_prediction(request.snapshot) || candidate_ui_->is_active() ||
+        !context_accepts_input(request.context.get())) return false;
+    winrt::com_ptr<ITfDocumentMgr> document;
+    winrt::com_ptr<ITfContext> focused;
+    return threadMgr && SUCCEEDED(threadMgr->GetFocus(document.put())) && document &&
+        SUCCEEDED(document->GetTop(focused.put())) &&
+        same_com_object(focused.get(), request.context.get());
+}
+
+void TextService::on_engine_result() {
+    if (!engine_worker_) return;
+    refresh_input_mode_indicator(false);
+    if (!engine_worker_) return;
+    auto result = engine_worker_->take_prediction();
+    if (!result || !pending_prediction_ || result->sequence != pending_prediction_->sequence) return;
+    auto request = std::move(*pending_prediction_);
+    pending_prediction_.reset();
+    if (!result->succeeded || !prediction_is_current(request)) return;
+    request.trace.predict_finished = result->finished;
+    const auto context = request.context;
+    const HRESULT sink_hr = ensure_text_edit_sink(context.get());
+    if (FAILED(sink_hr)) return;
+    auto session = winrt::make_self<EditSession>();
+    session->set_operation(
+        [self = get_strong(), request = std::move(request), padding = std::move(result->padding),
+         requested = std::chrono::steady_clock::now()](TfEditCookie cookie) mutable {
+            // TSF may defer this callback past another key, focus change or Deactivate.
+            try {
+                if (!self->prediction_is_current(request)) return;
+                if (!self->compositionBuffer.apply_prediction(request.snapshot, std::move(padding))) return;
+                self->write_composition_text(request.context.get(), cookie,
+                    self->compositionBuffer.to_string(), std::u16string::npos, 0,
+                    request.trace, requested);
+            } catch (...) {
+                self->handle_com_exception();
+                throw;
+            }
+        });
+    HRESULT session_hr = E_FAIL;
+    const HRESULT request_hr = context->RequestEditSession(
+        _tfClientId, session.get(), TF_ES_READWRITE | TF_ES_ASYNC, &session_hr);
+    winrt::check_hresult(request_hr);
+    winrt::check_hresult(session_hr);
+}
+
 HRESULT TextService::handle_com_exception(std::source_location location) noexcept {
     return tsf::handle_com_exception(logger_, location);
 }
@@ -636,6 +754,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* pThreadMgr, TfClientId tfClie
 HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
     if (!pThreadMgr) return E_INVALIDARG;
 
+    start_engine_worker();
     threadMgr.copy_from(pThreadMgr);
     _tfClientId = tfClientId;
     refresh_width_toggle_setting();
@@ -643,7 +762,7 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
 
     input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>(
         [this]() {
-            get_engine()->toggle_input_mode();
+            if (engine_worker_) engine_worker_->toggle_input_mode();
             refresh_input_mode_indicator();
         },
         [] { request_settings_window(); },
@@ -687,6 +806,8 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
  * Releases TSF sinks, clears composition state, and stops debug logging.
  */
 void TextService::deactivate() {
+    invalidate_prediction();
+    stop_engine_worker();
     unadvise_text_edit_sink();
     candidate_ui_->hide();
 
@@ -725,8 +846,9 @@ InputMode TextService::read_backend_input_mode() {
     return refresh_input_mode_indicator();
 }
 
-InputMode TextService::refresh_input_mode_indicator() {
-    const InputMode mode = get_engine()->current_input_mode();
+InputMode TextService::refresh_input_mode_indicator(bool query_backend) {
+    if (engine_worker_ && query_backend) engine_worker_->refresh_input_mode();
+    const InputMode mode = engine_worker_ ? engine_worker_->cached_input_mode() : InputMode::English;
     if (mode == InputMode::English) {
         backtick_used_as_modifier_ = false;
     }
@@ -771,7 +893,7 @@ void TextService::refresh_width_toggle_setting() {
     if (!enabled && shift_space_width_toggle_enabled_ && full_width_mode_) {
         full_width_mode_ = false;
         if (threadMgr && _tfClientId != TF_CLIENTID_NULL) {
-            sync_input_mode_compartments(get_engine()->current_input_mode());
+            sync_input_mode_compartments(engine_worker_ ? engine_worker_->cached_input_mode() : InputMode::English);
         }
     }
     shift_space_width_toggle_enabled_ = enabled;
@@ -800,6 +922,7 @@ bool TextService::has_composition_state() const {
 }
 
 void TextService::clear_composition_state() {
+    invalidate_prediction();
     candidate_ui_->hide();
     itfComposition = nullptr;
     composition_context_ = nullptr;
@@ -815,7 +938,7 @@ void TextService::record_commit(CommitSample sample, bool private_input_scope,
         return;
     }
     try {
-        const std::uint64_t token = get_engine()->record_commit(sample);
+        const std::uint64_t token = engine_worker_ ? engine_worker_->record_commit(sample) : 0;
         if (token == 0) return;
         recent_commit_context_.copy_from(context);
         recent_commit_time_ = std::chrono::steady_clock::now();
@@ -849,7 +972,7 @@ void TextService::discard_recent_commit(ITfContext* context) noexcept {
             forget_recent_commit();
             return;
         }
-        get_engine()->discard_commit(recent_commit_token_);
+        if (engine_worker_) engine_worker_->discard_commit(recent_commit_token_);
         forget_recent_commit();
     } catch (...) {
         forget_recent_commit();
@@ -880,6 +1003,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* /*pDocMgr*/) try {
  * Receives document focus changes but does not react to them yet.
  */
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocumentMgr* /*pDocMgrPrevFocus*/) try {
+    invalidate_prediction();
     forget_recent_commit();
     refresh_width_toggle_setting();
     refresh_input_mode_indicator();
@@ -893,7 +1017,10 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocume
  *
  * Accepts new contexts without additional bookkeeping.
  */
-STDMETHODIMP TextService::OnPushContext(ITfContext* /*pContext*/) try { return S_OK; } catch (...) {
+STDMETHODIMP TextService::OnPushContext(ITfContext* /*pContext*/) try {
+    invalidate_prediction();
+    return S_OK;
+} catch (...) {
     return handle_com_exception();
 }
 
@@ -903,6 +1030,9 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* /*pContext*/) try { return S
  * Releases contexts without additional cleanup.
  */
 STDMETHODIMP TextService::OnPopContext(ITfContext* pContext) try {
+    if (composition_belongs_to(pContext) ||
+        (pending_prediction_ && same_com_object(pending_prediction_->context.get(), pContext)))
+        invalidate_prediction();
     if (recent_commit_context_ &&
         same_com_object(recent_commit_context_.get(), pContext)) {
         forget_recent_commit();
@@ -922,6 +1052,7 @@ STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
         refresh_width_toggle_setting();
         refresh_input_mode_indicator();
     } else {
+        invalidate_prediction();
         forget_recent_commit();
     }
     return S_OK;
@@ -1110,7 +1241,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         shift_used_as_modifier_ = true;
         const bool repeated_keydown = (lParam & (1LL << 30)) != 0;
         if (!repeated_keydown) full_width_mode_ = !full_width_mode_;
-        sync_input_mode_compartments(get_engine()->current_input_mode());
+        sync_input_mode_compartments(engine_worker_ ? engine_worker_->cached_input_mode() : InputMode::English);
         *pfEaten = TRUE;
         return S_OK;
     }
@@ -1299,7 +1430,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
 
     if (!Bopomofo::tone.contains(cur_char.value())) {
         e2e_trace.ready_started = std::chrono::steady_clock::now();
-        get_engine()->ready();
+        if (engine_worker_) engine_worker_->ready();
         e2e_trace.ready_finished = std::chrono::steady_clock::now();
     }
 
@@ -1308,22 +1439,17 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     // }
     compositionBuffer.add(cur_char.value());
     const auto invalid_span = compositionBuffer.current_invalid_span();
-    bool prediction_performed = false;
     if (!invalid_span) {
         e2e_trace.pre_context_started = std::chrono::steady_clock::now();
         auto pre_context = get_pre_composit_context(pContext);
         collection_context_ = pre_context;
         e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
-        e2e_trace.predict_started = std::chrono::steady_clock::now();
-        prediction_performed = compositionBuffer.predict_paddings(std::move(pre_context));
-        e2e_trace.predict_finished = std::chrono::steady_clock::now();
+        queue_prediction(pContext, std::move(pre_context), e2e_trace);
     }
     if (invalid_span) {
         set_composition_text(pContext, compositionBuffer.to_string(), invalid_span->first, invalid_span->second);
     } else {
-        set_composition_text(pContext, compositionBuffer.to_string(), std::u16string::npos, 0,
-                             prediction_performed ? std::optional<E2eTrace>(e2e_trace)
-                                                  : std::nullopt);
+        set_composition_text(pContext, compositionBuffer.to_string());
     }
     *pfEaten = TRUE;
     return S_OK;
@@ -1340,7 +1466,7 @@ STDMETHODIMP TextService::OnKeyUp(ITfContext* /*pContext*/, WPARAM wParam, LPARA
     if (!pfEaten) return E_INVALIDARG;
     if (shift_key(wParam) && shift_toggle_pending_) {
         if (!shift_used_as_modifier_) {
-            get_engine()->toggle_input_mode();
+            if (engine_worker_) engine_worker_->toggle_input_mode();
             refresh_input_mode_indicator();
         }
 
@@ -1696,75 +1822,78 @@ HRESULT TextService::insert_text(ITfContext* pContext, const std::u16string& tex
  *
  * Applies the visible composition string to the current TSF context.
  */
+void TextService::write_composition_text(ITfContext* pContext, TfEditCookie ec,
+                                         const std::u16string& text, size_t select_start,
+                                         size_t select_length, std::optional<E2eTrace> e2e_trace,
+                                         std::chrono::steady_clock::time_point edit_request_started) {
+    winrt::com_ptr<ITfContextComposition> contextComposition;
+    pContext->QueryInterface<ITfContextComposition>(contextComposition.put()) | win::check();
+    winrt::com_ptr<ITfInsertAtSelection> insertAtSelection;
+    pContext->QueryInterface<ITfInsertAtSelection>(insertAtSelection.put()) | win::check();
+    const auto edit_operation_started = std::chrono::steady_clock::now();
+    winrt::com_ptr<ITfRange> range;
+    if (!itfComposition) {
+        insertAtSelection->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, nullptr, 0, range.put()) | win::check();
+        contextComposition->StartComposition(
+            ec, range.get(), static_cast<ITfCompositionSink*>(this), itfComposition.put()) |
+            win::check();
+        composition_context_.copy_from(pContext);
+    }
+
+    range = nullptr;
+    itfComposition->GetRange(range.put()) | win::check();
+    const auto edit_set_text_started = std::chrono::steady_clock::now();
+    range->SetText(ec, 0, convu16(text.data()), ULONG(text.size())) | win::check();
+    const auto edit_set_text_finished = std::chrono::steady_clock::now();
+
+    apply_composition_display_attribute(pContext, ec, range.get()) | win::check();
+    const auto edit_attribute_finished = std::chrono::steady_clock::now();
+
+    const bool select_span = select_start != std::u16string::npos && select_length > 0;
+    winrt::com_ptr<ITfRange> selection_range;
+    range->Clone(selection_range.put()) | win::check();
+    if (select_span) {
+        const LONG start = static_cast<LONG>(select_start);
+        const LONG length = static_cast<LONG>(select_length);
+        LONG shifted = 0;
+        selection_range->Collapse(ec, TF_ANCHOR_START) | win::check();
+        selection_range->ShiftEnd(ec, start + length, &shifted, nullptr) | win::check();
+        selection_range->ShiftStart(ec, start, &shifted, nullptr) | win::check();
+    } else {
+        const LONG caret = static_cast<LONG>(std::min(compositionBuffer.caret_offset(), text.size()));
+        LONG shifted = 0;
+        selection_range->Collapse(ec, TF_ANCHOR_START) | win::check();
+        selection_range->ShiftEnd(ec, caret, &shifted, nullptr) | win::check();
+        selection_range->Collapse(ec, TF_ANCHOR_END) | win::check();
+    }
+
+    TF_SELECTION selection = {};
+    selection.range = selection_range.get();
+    selection.style.ase = select_span ? TF_AE_NONE : TF_AE_END;
+    selection.style.fInterimChar = FALSE;
+    pContext->SetSelection(ec, 1, &selection) | win::check();
+    if (e2e_trace) {
+        pending_e2e_trace_ = PendingE2eTrace{
+            .trace = *e2e_trace,
+            .edit_request_started = edit_request_started,
+            .edit_operation_started = edit_operation_started,
+            .edit_set_text_started = edit_set_text_started,
+            .edit_set_text_finished = edit_set_text_finished,
+            .edit_attribute_finished = edit_attribute_finished,
+            .edit_operation_finished = std::chrono::steady_clock::now(),
+        };
+    }
+}
+
 HRESULT TextService::set_composition_text(ITfContext* pContext, const std::u16string& text,
                                           size_t select_start, size_t select_length,
                                           std::optional<E2eTrace> e2e_trace) {
     if (!pContext) return E_INVALIDARG;
 
-    winrt::com_ptr<ITfContextComposition> contextComposition;
-    HRESULT hr = pContext->QueryInterface<ITfContextComposition>(contextComposition.put());
-    if (FAILED(hr)) return hr;
-
-    winrt::com_ptr<ITfInsertAtSelection> insertAtSelection;
-    hr = pContext->QueryInterface<ITfInsertAtSelection>(insertAtSelection.put());
-    if (FAILED(hr)) return hr;
-
     winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
     std::chrono::steady_clock::time_point edit_request_started;
     editSession->set_operation([=, this, &edit_request_started](TfEditCookie ec) {
-        const auto edit_operation_started = std::chrono::steady_clock::now();
-        winrt::com_ptr<ITfRange> range;
-        if (!itfComposition) {
-            insertAtSelection->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, nullptr, 0, range.put()) | win::check();
-            contextComposition->StartComposition(
-                ec, range.get(), static_cast<ITfCompositionSink*>(this), itfComposition.put()) |
-                win::check();
-            composition_context_.copy_from(pContext);
-        }
-
-        range = nullptr;
-        itfComposition->GetRange(range.put()) | win::check();
-        const auto edit_set_text_started = std::chrono::steady_clock::now();
-        range->SetText(ec, 0, convu16(text.data()), ULONG(text.size())) | win::check();
-        const auto edit_set_text_finished = std::chrono::steady_clock::now();
-
-        apply_composition_display_attribute(pContext, ec, range.get()) | win::check();
-        const auto edit_attribute_finished = std::chrono::steady_clock::now();
-
-        const bool select_span = select_start != std::u16string::npos && select_length > 0;
-        winrt::com_ptr<ITfRange> selection_range;
-        range->Clone(selection_range.put()) | win::check();
-        if (select_span) {
-            const LONG start = static_cast<LONG>(select_start);
-            const LONG length = static_cast<LONG>(select_length);
-            LONG shifted = 0;
-            selection_range->Collapse(ec, TF_ANCHOR_START) | win::check();
-            selection_range->ShiftEnd(ec, start + length, &shifted, nullptr) | win::check();
-            selection_range->ShiftStart(ec, start, &shifted, nullptr) | win::check();
-        } else {
-            const LONG caret = static_cast<LONG>(std::min(compositionBuffer.caret_offset(), text.size()));
-            LONG shifted = 0;
-            selection_range->Collapse(ec, TF_ANCHOR_START) | win::check();
-            selection_range->ShiftEnd(ec, caret, &shifted, nullptr) | win::check();
-            selection_range->Collapse(ec, TF_ANCHOR_END) | win::check();
-        }
-
-        TF_SELECTION selection = {};
-        selection.range = selection_range.get();
-        selection.style.ase = select_span ? TF_AE_NONE : TF_AE_END;
-        selection.style.fInterimChar = FALSE;
-        pContext->SetSelection(ec, 1, &selection) | win::check();
-        if (e2e_trace) {
-            pending_e2e_trace_ = PendingE2eTrace{
-                .trace = *e2e_trace,
-                .edit_request_started = edit_request_started,
-                .edit_operation_started = edit_operation_started,
-                .edit_set_text_started = edit_set_text_started,
-                .edit_set_text_finished = edit_set_text_finished,
-                .edit_attribute_finished = edit_attribute_finished,
-                .edit_operation_finished = std::chrono::steady_clock::now(),
-            };
-        }
+        write_composition_text(pContext, ec, text, select_start, select_length, e2e_trace, edit_request_started);
     });
     if (e2e_trace) {
         const HRESULT sink_hr = ensure_text_edit_sink(pContext);
@@ -1796,12 +1925,8 @@ void TextService::refresh_composition_after_candidate_finalize(
     auto pre_context = get_pre_composit_context(pContext);
     collection_context_ = pre_context;
     e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
-    e2e_trace.predict_started = std::chrono::steady_clock::now();
-    const bool prediction_performed = compositionBuffer.predict_paddings(std::move(pre_context));
-    e2e_trace.predict_finished = std::chrono::steady_clock::now();
-    set_composition_text(pContext, compositionBuffer.to_string(), std::u16string::npos, 0,
-                         prediction_performed ? std::optional<E2eTrace>(e2e_trace)
-                                              : std::nullopt);
+    queue_prediction(pContext, std::move(pre_context), e2e_trace);
+    set_composition_text(pContext, compositionBuffer.to_string());
 }
 
 HRESULT TextService::ensure_text_edit_sink(ITfContext* context) {

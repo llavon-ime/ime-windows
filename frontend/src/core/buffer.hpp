@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "bopomofo.hpp"
-#include "engine/engine.hpp"
+#include "engine/impl/engine.h"
 using namespace std::literals;
 
 namespace tsf {
@@ -167,27 +167,25 @@ public:
         }
         buffer[idx].predicted = true;
     }
-    bool predict_paddings(std::u16string context) {
-        if (buffer.empty()) {
-            return false;
-        }
-
+    std::optional<std::vector<BopomofoPos>> prediction_snapshot() const {
+        if (buffer.empty()) return std::nullopt;
         bool need_predict = false;
-        for (auto& item : buffer) {
+        for (const auto& item : buffer) {
             if (!item.is_predictable_by_engine()) {
-                return false;
+                return std::nullopt;
             }
-            if (!item.predicted) {
-                need_predict = true;
-                break;
-            }
+            need_predict |= !item.predicted;
         }
-        if (!need_predict) {
-            return false;
-        }
-
-        auto engine = get_engine();
-        engine->predict(context, std::span<BopomofoPos>(buffer.begin(), buffer.end()));
+        if (!need_predict) return std::nullopt;
+        return buffer;
+    }
+    bool matches_prediction(const std::vector<BopomofoPos>& snapshot) const {
+        return buffer == snapshot;
+    }
+    bool apply_prediction(const std::vector<BopomofoPos>& snapshot,
+                          std::vector<BopomofoPos> result) {
+        if (result.size() != buffer.size() || !matches_prediction(snapshot)) return false;
+        buffer = std::move(result);
         return true;
     }
     BopomofoPos& cur() {
