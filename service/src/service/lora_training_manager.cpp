@@ -170,19 +170,9 @@ std::wstring request_path(std::string_view revision, std::string_view filename) 
                  "?download=true");
 }
 
-std::string http_get_string(const std::wstring& path,
-                            WinrtHttpTransfer& transfer) {
-    std::string output;
-    transfer.get_stream(L"https://huggingface.co" + path,
-        [&](const std::uint8_t* bytes, std::uint32_t count,
-            std::uint64_t, std::uint64_t) {
-            if (output.size() + count > 4 * 1024 * 1024) {
-                throw std::runtime_error("Hugging Face model metadata is too large");
-            }
-            output.append(reinterpret_cast<const char*>(bytes), count);
-        });
-    return output;
-}
+constexpr std::size_t metadata_size_limit = 4 * 1024 * 1024;
+constexpr std::wstring_view model_revision_url =
+    L"https://huggingface.co/api/models/tony65535/llavon-ime-llama-250m/revision/main";
 
 std::string run_name() {
     const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -236,17 +226,31 @@ bool valid_https(std::string_view value);
 bool valid_sha256(std::string_view value);
 std::string download_text(WinrtHttpTransfer& transfer, std::wstring url);
 
-TrainerReleaseManifest resolve_trainer_release(WinrtHttpTransfer& transfer) {
+std::string parse_model_revision(const std::string& body) {
+    const auto metadata = rfl::json::read<ModelRevision>(body).value();
+    if (!valid_revision(metadata.sha)) {
+        throw std::runtime_error("Hugging Face returned an invalid model revision");
+    }
+    return metadata.sha;
+}
+
+std::wstring trainer_release_url() {
     if (!valid_revision(trainer_commit))
         throw std::runtime_error("LoRA submodule commit is unavailable in this build");
-    const auto body = download_text(transfer,
-        std::wstring(trainer_release_root) + L"commit-" +
-            widen(trainer_commit) + L"/latest.json");
+    return std::wstring(trainer_release_root) + L"commit-" +
+           widen(trainer_commit) + L"/latest.json";
+}
+
+TrainerReleaseManifest parse_trainer_release(const std::string& body) {
     auto manifest = rfl::json::read<TrainerReleaseManifest>(body).value();
     if (manifest.schema != 1 || manifest.trainerApi != 1 ||
         manifest.commit != trainer_commit || !valid_calver(manifest.version))
         throw std::runtime_error("LoRA release does not match the pinned submodule");
     return manifest;
+}
+
+TrainerReleaseManifest resolve_trainer_release(WinrtHttpTransfer& transfer) {
+    return parse_trainer_release(download_text(transfer, trainer_release_url()));
 }
 
 bool valid_calver(std::string_view value) {
@@ -274,8 +278,8 @@ std::string download_text(WinrtHttpTransfer& transfer, std::wstring url) {
     transfer.get_stream(std::move(url), [&](const std::uint8_t* bytes,
                                               std::uint32_t size,
                                               std::uint64_t, std::uint64_t) {
-        if (body.size() + size > 4 * 1024 * 1024)
-            throw std::runtime_error("LoRA release metadata is too large");
+        if (body.size() + size > metadata_size_limit)
+            throw std::runtime_error("HTTP metadata is too large");
         body.append(reinterpret_cast<const char*>(bytes), size);
     });
     return body;
@@ -681,16 +685,12 @@ LoraOperationStatus LoraTrainingManager::status() {
     return status_;
 }
 
-bool LoraTrainingManager::check_model_async() {
-    return launch(&LoraTrainingManager::check_model_worker);
+bool LoraTrainingManager::check_updates_async() {
+    return launch(&LoraTrainingManager::check_updates_worker);
 }
 
 bool LoraTrainingManager::download_model_async() {
     return launch(&LoraTrainingManager::download_model_worker);
-}
-
-bool LoraTrainingManager::check_trainer_async() {
-    return launch(&LoraTrainingManager::check_trainer_worker);
 }
 
 bool LoraTrainingManager::install_trainer_async() {
@@ -910,6 +910,7 @@ void LoraTrainingManager::set_status(LoraOperationStage stage, double progress,
     status_.progress = std::clamp(progress, 0.0, 1.0);
     status_.message = std::move(message);
     if (stage != LoraOperationStage::completed &&
+        stage != LoraOperationStage::checking_updates &&
         stage != LoraOperationStage::checking_trainer &&
         stage != LoraOperationStage::installing_trainer)
         status_.output_model_path.clear();
@@ -949,15 +950,8 @@ void LoraTrainingManager::set_failed_unknown() noexcept {
 }
 
 std::string LoraTrainingManager::resolve_remote_revision() {
-    const std::string body = http_get_string(
-        L"/api/models/tony65535/llavon-ime-llama-250m/revision/main",
-        http_transfer_);
-    const auto metadata = rfl::json::read<ModelRevision>(body).value();
-    const std::string revision = metadata.sha;
-    if (!valid_revision(revision)) {
-        throw std::runtime_error("Hugging Face returned an invalid model revision");
-    }
-    return revision;
+    return parse_model_revision(
+        download_text(http_transfer_, std::wstring(model_revision_url)));
 }
 
 bool LoraTrainingManager::installed_model_is_complete(std::string* revision) const {
@@ -974,8 +968,8 @@ bool LoraTrainingManager::installed_model_is_complete(std::string* revision) con
     return true;
 }
 
-void LoraTrainingManager::check_model_worker() {
-    set_status(LoraOperationStage::checking_model, 0, u"正在檢查基礎模型更新…");
+void LoraTrainingManager::check_updates_worker() {
+    set_status(LoraOperationStage::checking_updates, 0, u"正在檢查更新…");
     std::string local;
     const bool available = installed_model_is_complete(&local);
     std::string fingerprint;
@@ -999,18 +993,61 @@ void LoraTrainingManager::check_model_worker() {
             widen("base-" + fingerprint) / L"base-Q4_K_M.gguf").u16string() :
             std::u16string{};
     }
-    const std::string remote = resolve_remote_revision();
+    refresh_cuda_runtime();
+
+    std::vector<std::wstring> urls{std::wstring(model_revision_url)};
+    std::u16string trainer_error;
+    try {
+        urls.push_back(trainer_release_url());
+    } catch (const std::exception& error) {
+        trainer_error = to_utf16(error.what());
+    }
+    auto responses = http_transfer_.get_texts(std::move(urls), metadata_size_limit);
+    const auto body = [](const HttpTextResult& response) -> const std::string& {
+        if (!response) std::rethrow_exception(response.error());
+        return *response;
+    };
+
+    std::u16string model_error;
+    std::string remote;
+    try {
+        remote = parse_model_revision(body(responses[0]));
+    } catch (const std::exception& error) {
+        model_error = to_utf16(error.what());
+    }
+    std::optional<TrainerReleaseManifest> manifest;
+    if (trainer_error.empty()) {
+        try {
+            manifest = parse_trainer_release(body(responses[1]));
+            const auto asset = manifest->assets.find(std::string(trainer_asset));
+            if (asset == manifest->assets.end() || !valid_trainer_asset(asset->second))
+                throw std::runtime_error("This release has no Windows LoRA trainer download");
+        } catch (const std::exception& error) {
+            manifest.reset();
+            trainer_error = to_utf16(error.what());
+        }
+    }
+
     std::lock_guard lock(status_mutex_);
-    status_.model_available = available;
-    status_.model_update_available = !available || local != remote;
-    status_.model_revision = utf8::utf8to16(available ? local : remote);
-    status_.stage = available ? LoraOperationStage::model_ready
-                              : LoraOperationStage::idle;
-    status_.progress = available ? 1 : 0;
-    status_.message = !available
-        ? u"尚未下載基礎模型"
-        : (local == remote ? u"基礎模型已是最新版本"
-                           : u"有新的基礎模型可以下載");
+    if (model_error.empty()) {
+        status_.model_update_available = !available || local != remote;
+        status_.model_revision = utf8::utf8to16(available ? local : remote);
+    }
+    if (manifest) {
+        status_.trainer_release_version = to_utf16(manifest->version);
+        status_.trainer_update_available =
+            status_.trainer_version != status_.trainer_release_version ||
+            status_.trainer_commit != to_utf16(manifest->commit);
+    } else {
+        status_.trainer_release_version.clear();
+        status_.trainer_update_available = false;
+    }
+    status_.trainer_message = std::move(trainer_error);
+    status_.stage = !status_.output_model_path.empty()
+        ? LoraOperationStage::completed
+        : (available ? LoraOperationStage::model_ready : LoraOperationStage::idle);
+    status_.progress = 0;
+    status_.message = std::move(model_error);
 }
 
 void LoraTrainingManager::download_asset(
@@ -1132,42 +1169,6 @@ void LoraTrainingManager::download_model_worker() {
         widen("base-" + fingerprint) / L"base-Q4_K_M.gguf").u16string();
 }
 
-void LoraTrainingManager::check_trainer_worker() {
-    set_status(LoraOperationStage::checking_trainer, 0,
-               u"正在查詢 LoRA 訓練器發行版…");
-    try {
-        refresh_cuda_runtime();
-        const auto manifest = resolve_trainer_release(http_transfer_);
-        const auto asset = manifest.assets.find(std::string(trainer_asset));
-        if (asset == manifest.assets.end() || !valid_trainer_asset(asset->second))
-            throw std::runtime_error("This release has no Windows LoRA trainer download");
-        std::lock_guard lock(status_mutex_);
-        status_.trainer_release_version = to_utf16(manifest.version);
-        status_.trainer_update_available =
-            status_.trainer_version != status_.trainer_release_version ||
-            status_.trainer_commit != to_utf16(manifest.commit);
-        status_.trainer_message = status_.trainer_update_available
-            ? u"可下載目前版本對應之訓練器"
-            : u"已安裝目前版本對應之訓練器";
-        status_.stage = !status_.output_model_path.empty()
-            ? LoraOperationStage::completed
-            : (status_.model_available ? LoraOperationStage::model_ready
-                                       : LoraOperationStage::idle);
-        status_.message = status_.trainer_message;
-    } catch (const std::exception& error) {
-        std::lock_guard lock(status_mutex_);
-        status_.trainer_release_version.clear();
-        status_.trainer_update_available = false;
-        status_.trainer_message = cancelling_.load(std::memory_order_acquire)
-            ? u"查詢已取消" : to_utf16(error.what());
-        status_.stage = !status_.output_model_path.empty()
-            ? LoraOperationStage::completed
-            : (status_.model_available ? LoraOperationStage::model_ready
-                                       : LoraOperationStage::idle);
-        status_.message = status_.trainer_message;
-    }
-}
-
 void LoraTrainingManager::install_trainer_worker() {
     set_status(LoraOperationStage::checking_trainer, 0,
                u"正在查詢 LoRA 訓練器版本…");
@@ -1203,9 +1204,9 @@ void LoraTrainingManager::install_trainer_worker() {
             status_.trainer_release_version = to_utf16(manifest.version);
             status_.trainer_update_available = false;
         }
-        finish_trainer_operation(cleanup_complete
-            ? u"已安裝目前版本對應之訓練器"
-            : u"訓練器已安裝，但部分舊版檔案無法清除；請關閉使用中的訓練器後重試安裝");
+        finish_trainer_operation(u"LoRA 訓練器已安裝", cleanup_complete
+            ? u""
+            : u"部分舊版檔案無法清除；請關閉使用中的訓練器後重新安裝");
     };
     if (matches_release(destination)) {
         select_trainer(root, relative);
@@ -1289,15 +1290,16 @@ void LoraTrainingManager::install_trainer_worker() {
     if (had_previous) std::filesystem::remove_all(backup, cleanup_error);
     finish_install(!cleanup_error);
 }
-void LoraTrainingManager::finish_trainer_operation(std::u16string message) {
+void LoraTrainingManager::finish_trainer_operation(std::u16string message,
+                                                   std::u16string trainer_warning) {
     std::lock_guard lock(status_mutex_);
-    status_.trainer_message = std::move(message);
+    status_.trainer_message = std::move(trainer_warning);
     status_.stage = !status_.output_model_path.empty()
         ? LoraOperationStage::completed
         : (status_.model_available ? LoraOperationStage::model_ready
                                    : LoraOperationStage::idle);
     status_.progress = 0;
-    status_.message = status_.trainer_message;
+    status_.message = std::move(message);
 }
 
 void LoraTrainingManager::refresh_cuda_runtime() {
@@ -1381,7 +1383,7 @@ void LoraTrainingManager::install_cuda_runtime_worker() {
                      gigabytes(total) + " GB"));
     });
     refresh_cuda_runtime();
-    finish_trainer_operation(u"CUDA 執行階段已安裝");
+    finish_trainer_operation(u"CUDA 加速元件已安裝");
 }
 
 void LoraTrainingManager::remove_cuda_runtime_worker() {
@@ -1396,7 +1398,7 @@ void LoraTrainingManager::remove_cuda_runtime_worker() {
         L"--runtime-root", cuda_runtime_root().wstring(),
     }, false);
     refresh_cuda_runtime();
-    finish_trainer_operation(u"CUDA 執行階段已移除");
+    finish_trainer_operation(u"CUDA 加速元件已移除");
 }
 
 int LoraTrainingManager::run_process(

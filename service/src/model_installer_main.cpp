@@ -1,3 +1,4 @@
+#include "service/process_mta.hpp"
 #include "service/winrt_http.hpp"
 
 #include <windows.h>
@@ -153,6 +154,7 @@ void install_model(std::wstring_view revision, std::wstring_view expected_sha,
 
 int wmain(int argc, wchar_t** argv) {
     try {
+        const llavon::service::ProcessMta process_mta;
         if (argc != 5 || std::wstring_view(argv[1]) != L"--install-model")
             throw std::invalid_argument(
                 "usage: llavon-ime-model-installer --install-model REVISION SHA256 SIZE");

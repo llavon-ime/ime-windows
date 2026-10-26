@@ -2,16 +2,22 @@
 
 #include <asio.hpp>
 
+#include "service/process_mta.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <iostream>
+#include <istream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 int main() {
+    const llavon::service::ProcessMta process_mta;
     using asio::ip::tcp;
     asio::io_context io;
     tcp::acceptor listener(io, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
@@ -141,6 +147,69 @@ int main() {
     if (!reported_winrt_error) {
         std::cerr << "WinRT HTTP exception escaped the worker error boundary\n";
         return 3;
+    }
+
+    asio::io_context concurrent_io;
+    tcp::acceptor concurrent_listener(
+        concurrent_io, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+    const auto concurrent_port = concurrent_listener.local_endpoint().port();
+    std::vector<std::shared_ptr<tcp::socket>> peers;
+    bool both_connected_before_reply = false;
+    const auto reply_all = [&] {
+        for (const auto& peer : peers) {
+            auto request = std::make_shared<asio::streambuf>();
+            asio::async_read_until(*peer, *request, "\r\n\r\n",
+                [peer, request](const asio::error_code& error, std::size_t) {
+                    if (error) return;
+                    std::istream lines(request.get());
+                    std::string method, path;
+                    lines >> method >> path;
+                    auto response = std::make_shared<std::string>(
+                        "HTTP/1.1 200 OK\r\nContent-Length: " +
+                        std::to_string(path.size()) +
+                        "\r\nConnection: close\r\n\r\n" + path);
+                    asio::async_write(*peer, asio::buffer(*response),
+                        [peer, response](const asio::error_code&, std::size_t) {});
+                });
+        }
+    };
+    asio::steady_timer give_up(concurrent_io, std::chrono::seconds(3));
+    give_up.async_wait([&](const asio::error_code& error) {
+        if (!error) reply_all();
+    });
+    std::function<void()> accept_next = [&] {
+        concurrent_listener.async_accept(
+            [&](const asio::error_code& error, tcp::socket peer) {
+                if (error) return;
+                peers.push_back(std::make_shared<tcp::socket>(std::move(peer)));
+                if (peers.size() < 2) {
+                    accept_next();
+                    return;
+                }
+                both_connected_before_reply = give_up.cancel() == 1;
+                reply_all();
+            });
+    };
+    accept_next();
+    std::thread concurrent_server([&] {
+        concurrent_io.run_for(std::chrono::seconds(10));
+    });
+    const auto base = L"http://127.0.0.1:" + std::to_wstring(concurrent_port);
+    std::vector<llavon::service::HttpTextResult> texts;
+    try {
+        texts = transfer.get_texts(
+            {base + L"/first", base + L"/second", L"http://127.0.0.1:1/refused"}, 1024);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+    }
+    concurrent_io.stop();
+    concurrent_server.join();
+    if (!both_connected_before_reply || texts.size() != 3 ||
+        texts[0].value_or("") != "/first" || texts[1].value_or("") != "/second" ||
+        texts[2].has_value()) {
+        std::cerr << "WinRT HTTP did not run requests concurrently with "
+                     "independent results\n";
+        return 4;
     }
     return 0;
 }

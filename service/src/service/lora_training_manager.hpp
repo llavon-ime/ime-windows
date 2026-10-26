@@ -31,6 +31,7 @@ enum class LoraOperationStage : std::int32_t {
     cancelled = 9,
     checking_trainer = 10,
     installing_trainer = 11,
+    checking_updates = 12,
 };
 
 // Mirrors llavon_settings_cuda_runtime_state.
@@ -100,9 +101,8 @@ public:
     LoraTrainingManager& operator=(const LoraTrainingManager&) = delete;
 
     LoraOperationStatus status();
-    bool check_model_async();
+    bool check_updates_async();
     bool download_model_async();
-    bool check_trainer_async();
     bool install_trainer_async();
     bool install_cuda_runtime_async();
     bool remove_cuda_runtime_async();
@@ -119,9 +119,8 @@ private:
     using Operation = void (LoraTrainingManager::*)();
 
     bool launch(Operation operation);
-    void check_model_worker();
+    void check_updates_worker();
     void download_model_worker();
-    void check_trainer_worker();
     void install_trainer_worker();
     void install_cuda_runtime_worker();
     void remove_cuda_runtime_worker();
@@ -129,7 +128,8 @@ private:
     // Asks the installed trainer; runs a child process, so only call it from
     // a worker, never from status().
     void refresh_cuda_runtime();
-    void finish_trainer_operation(std::u16string message);
+    void finish_trainer_operation(std::u16string message,
+                                  std::u16string trainer_warning = {});
     void training_worker();
     void prune_obsolete_gguf_models(
         const std::filesystem::path& applied_model_path) const noexcept;

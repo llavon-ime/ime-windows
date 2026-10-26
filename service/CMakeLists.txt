@@ -59,6 +59,7 @@ add_executable(llavon-ime-service
     src/service/training_data_writer.hpp
     src/service/winrt_http.cpp
     src/service/winrt_http.hpp
+    src/service/process_mta.hpp
     src/settings/update_checker.cpp
     src/settings/update_checker.hpp
     src/service.rc
@@ -69,6 +70,7 @@ add_executable(llavon-ime-model-installer
     src/model_installer_main.cpp
     src/service/winrt_http.cpp
     src/service/winrt_http.hpp
+    src/service/process_mta.hpp
 )
 target_compile_features(llavon-ime-model-installer PRIVATE cxx_std_23)
 target_compile_definitions(llavon-ime-model-installer PRIVATE
@@ -142,6 +144,7 @@ add_library(llavon-ime-settings-ui SHARED
     src/settings/update_installer.hpp
     src/service/winrt_http.cpp
     src/service/winrt_http.hpp
+    src/service/process_mta.hpp
 )
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/WinUI3.cmake")
@@ -401,6 +404,7 @@ if(BUILD_TESTING)
         tests/winrt_http_tests.cpp
         src/service/winrt_http.cpp
         src/service/winrt_http.hpp
+        src/service/process_mta.hpp
     )
     target_compile_features(winrt-http-tests PRIVATE cxx_std_23)
     target_compile_definitions(winrt-http-tests PRIVATE

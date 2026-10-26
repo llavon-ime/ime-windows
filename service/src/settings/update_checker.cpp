@@ -103,20 +103,6 @@ std::optional<CalVersion> parse_calver(std::wstring_view value) noexcept {
     return CalVersion{*year, *month, *day, *revision};
 }
 
-class WinrtApartment final {
-public:
-    WinrtApartment() {
-        winrt::init_apartment(winrt::apartment_type::multi_threaded);
-    }
-
-    WinrtApartment(const WinrtApartment&) = delete;
-    WinrtApartment& operator=(const WinrtApartment&) = delete;
-
-    ~WinrtApartment() {
-        winrt::uninit_apartment();
-    }
-};
-
 bool is_commit_id(std::wstring_view value) noexcept {
     if (value.size() < 7 || value.size() > 64) {
         return false;
@@ -180,7 +166,6 @@ UpdateCheckResult perform_check() {
         throw std::runtime_error("this build does not contain a repository commit id");
     }
 
-    WinrtApartment apartment;
     HttpClient client;
     const auto headers = client.DefaultRequestHeaders();
     headers.UserAgent().ParseAdd(L"LlavonIME update-checker");

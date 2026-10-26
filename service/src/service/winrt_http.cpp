@@ -4,6 +4,7 @@
 #include <winrt/Windows.Web.Http.Headers.h>
 #include <winrt/Windows.Web.Http.h>
 
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -11,14 +12,6 @@
 
 namespace llavon::service {
 namespace {
-
-class WinrtApartment final {
-public:
-    WinrtApartment() { winrt::init_apartment(winrt::apartment_type::multi_threaded); }
-    ~WinrtApartment() { winrt::uninit_apartment(); }
-    WinrtApartment(const WinrtApartment&) = delete;
-    WinrtApartment& operator=(const WinrtApartment&) = delete;
-};
 
 winrt::Windows::Foundation::IAsyncAction get_stream_async(
     std::wstring url, HttpChunkSink consume) {
@@ -61,12 +54,58 @@ winrt::Windows::Foundation::IAsyncAction get_stream_async(
     }
 }
 
+std::runtime_error winrt_http_error(const winrt::hresult_error& error) {
+    return std::runtime_error("WinRT HTTP: " + winrt::to_string(error.message()));
+}
+
+winrt::Windows::Foundation::IAsyncAction get_texts_async(
+    std::vector<std::wstring> urls, std::size_t max_size,
+    std::shared_ptr<std::vector<HttpTextResult>> results) {
+    auto cancellation = co_await winrt::get_cancellation_token();
+    std::vector<winrt::Windows::Foundation::IAsyncAction> requests;
+    requests.reserve(urls.size());
+    for (std::size_t index = 0; index < urls.size(); ++index) {
+        requests.push_back(get_stream_async(std::move(urls[index]),
+            [results, index, max_size](const std::uint8_t* bytes, std::uint32_t count,
+                                       std::uint64_t, std::uint64_t) {
+                auto& body = *(*results)[index];
+                if (body.size() + count > max_size)
+                    throw std::runtime_error("HTTP response is too large");
+                body.append(reinterpret_cast<const char*>(bytes), count);
+            }));
+    }
+    cancellation.callback([requests] {
+        for (const auto& request : requests) request.Cancel();
+    });
+    for (std::size_t index = 0; index < requests.size(); ++index) {
+        try {
+            co_await requests[index];
+        } catch (const winrt::hresult_error& error) {
+            (*results)[index] = std::unexpected(
+                std::make_exception_ptr(winrt_http_error(error)));
+        } catch (...) {
+            (*results)[index] = std::unexpected(std::current_exception());
+        }
+    }
+}
+
 }  // namespace
 
 void WinrtHttpTransfer::get_stream(std::wstring url, HttpChunkSink consume) {
-    WinrtApartment apartment;
+    run([&] { return get_stream_async(std::move(url), std::move(consume)); });
+}
+
+std::vector<HttpTextResult> WinrtHttpTransfer::get_texts(
+    std::vector<std::wstring> urls, std::size_t max_size) {
+    auto results = std::make_shared<std::vector<HttpTextResult>>(urls.size());
+    run([&] { return get_texts_async(std::move(urls), max_size, results); });
+    return std::move(*results);
+}
+
+void WinrtHttpTransfer::run(
+    const std::function<winrt::Windows::Foundation::IAsyncAction()>& start) {
     try {
-        auto action = get_stream_async(std::move(url), std::move(consume));
+        auto action = start();
         {
             std::lock_guard lock(mutex_);
             active_ = action;
@@ -86,7 +125,7 @@ void WinrtHttpTransfer::get_stream(std::wstring url, HttpChunkSink consume) {
         std::lock_guard lock(mutex_);
         active_ = nullptr;
         if (cancelled_) throw std::runtime_error("operation cancelled");
-        throw std::runtime_error("WinRT HTTP: " + winrt::to_string(error.message()));
+        throw winrt_http_error(error);
     }
 }
 

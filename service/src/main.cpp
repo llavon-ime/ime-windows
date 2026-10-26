@@ -10,6 +10,7 @@
 #include "service/debug/core_logger_adapter.hpp"
 #include "service/lora_training_manager.hpp"
 #include "service/major_update_notifier.hpp"
+#include "service/process_mta.hpp"
 #include "service/user_settings.hpp"
 #include "service/settings_ui_loader.hpp"
 #include "service/tray_icon.hpp"
@@ -226,6 +227,7 @@ int main(int argc, char* argv[]) {
         return *worker;
     }
     try {
+        const llavon::service::ProcessMta process_mta;
         if (argc == 2 && std::string(argv[1]) == "--help") {
             print_usage(argv[0]);
             return 0;
@@ -422,9 +424,8 @@ int main(int argc, char* argv[]) {
             [&lora_training] { return lora_training.status(); },
             [&lora_training](std::int32_t action) {
                 switch (action) {
-                case LLAVON_LORA_CHECK_MODEL: return lora_training.check_model_async();
+                case LLAVON_LORA_CHECK_UPDATES: return lora_training.check_updates_async();
                 case LLAVON_LORA_DOWNLOAD_MODEL: return lora_training.download_model_async();
-                case LLAVON_LORA_CHECK_TRAINER: return lora_training.check_trainer_async();
                 case LLAVON_LORA_INSTALL_TRAINER: return lora_training.install_trainer_async();
                 case LLAVON_LORA_INSTALL_CUDA_RUNTIME:
                     return lora_training.install_cuda_runtime_async();

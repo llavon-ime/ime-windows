@@ -18,11 +18,6 @@ namespace {
 constexpr wchar_t app_user_model_id[] = L"Llavon.IME.Windows";
 constexpr auto update_delay = std::chrono::minutes(10);
 
-struct WinrtApartment {
-    WinrtApartment() { winrt::init_apartment(winrt::apartment_type::multi_threaded); }
-    ~WinrtApartment() { winrt::uninit_apartment(); }
-};
-
 }  // namespace
 
 struct MajorUpdateNotifier::ActivationState {
@@ -65,7 +60,6 @@ void MajorUpdateNotifier::run(std::stop_token stop) noexcept {
             return;
         }
 
-        WinrtApartment apartment;
         using namespace winrt::Windows::UI::Notifications;
         auto xml = ToastNotificationManager::GetTemplateContent(ToastTemplateType::ToastText02);
         const auto text = xml.GetElementsByTagName(L"text");
