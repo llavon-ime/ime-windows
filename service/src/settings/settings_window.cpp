@@ -1128,7 +1128,8 @@ winrt::Windows::Foundation::IAsyncOperation<bool> SettingsWindow::run_in_backgro
 }
 
 void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
-                                         bool clean_datasets) {
+                                         bool clean_datasets,
+                                         std::function<void()> on_success) {
     ContentDialog dialog;
     dialog.XamlRoot(shell_.XamlRoot());
     dialog.RequestedTheme(shell_.ActualTheme());
@@ -1159,6 +1160,7 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
         bool confirming_reset = false;
         bool input_enabled = true;
         bool busy = false;
+        bool succeeded = false;
         winrt::hstring previous_status;
     };
     auto dialog_state = std::make_shared<PasswordDialogState>(PasswordDialogState{setup});
@@ -1313,12 +1315,16 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
                     password.IsEnabled(true);
                     reset.IsEnabled(true);
                     status.Text(L"");
-                    if (!ok) {
+                    if (ok) {
+                        dialog_state->succeeded = true;
+                    } else {
                         args.Cancel(true);
                         status.Text(L"密碼錯誤或資料處理失敗，請重試。");
                         password.Focus(FocusState::Programmatic);
                     }
                 }
+            } catch (...) {}
+            try {
                 deferral.Complete();
             } catch (...) {}
         }(args, sender.as<ContentDialog>(), dialog_state, std::move(operation),
@@ -1327,10 +1333,18 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
     dialog.Closing([dialog_state](const auto&, const ContentDialogClosingEventArgs& args) {
         if (dialog_state->busy) args.Cancel(true);
     });
-    dialog.Closed([this, password, confirmation](const auto&, const auto&) {
+    dialog.Closed([this, dialog_state, password, confirmation,
+                   on_success = std::move(on_success)](const auto&, const auto&) {
         password_dialog_open_ = false;
         password.Password(L"");
         confirmation.Password(L"");
+        if (dialog_state->succeeded && on_success) {
+            try {
+                on_success();
+            } catch (...) {
+                OutputDebugStringW(L"[settings-ui] password success action failed\n");
+            }
+        }
     });
     password_dialog_open_ = true;
     try {
@@ -1744,7 +1758,7 @@ void SettingsWindow::show_lora_training_dialog() {
             });
         (*render_page)();
         state->training_data_button.Click([this, state, render_page](const auto&, const auto&) {
-            show_password_dialog(false, [this, state, render_page](const char16_t* password)
+            show_password_dialog(false, [this, state](const char16_t* password)
                 -> winrt::Windows::Foundation::IAsyncOperation<bool> {
                 const auto base_index = state->training_base.SelectedIndex();
                 if (base_index < 0 || state->closed) co_return false;
@@ -1763,18 +1777,13 @@ void SettingsWindow::show_lora_training_dialog() {
                 if (!decrypted || !alive->load(std::memory_order_acquire) || state->closed) {
                     co_return false;
                 }
-                auto loaded = decrypted->begin();
-                for (std::size_t index = 0; index < state->items.size(); ++index) {
-                    if (state->deleted_items[index]) continue;
-                    auto& item = state->items[index];
-                    const auto found = std::find_if(loaded,
-                        decrypted->end(), [&](const auto& loaded) {
-                            return loaded.event_id == item.event_id;
-                    });
-                    if (found == decrypted->end()) co_return false;
-                    item = std::move(*found);
-                    loaded = std::next(found);
-                }
+                state->items = std::move(*decrypted);
+                state->deleted_items.assign(state->items.size(), false);
+                state->active_count = state->items.size();
+                state->current_page = 0;
+                co_return true;
+            }, false, [state, render_page] {
+                if (state->closed) return;
                 (*render_page)();
                 state->selecting_training_data = true;
                 state->content.Content(state->training_data_page);
@@ -1783,7 +1792,6 @@ void SettingsWindow::show_lora_training_dialog() {
                 Grid::SetColumnSpan(state->primary_button, 2);
                 state->secondary_button.Visibility(Visibility::Collapsed);
                 state->primary_button.IsEnabled(true);
-                co_return true;
             });
         });
     }

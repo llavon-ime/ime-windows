@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
         }
         const llavon_settings_inference_device cpu{
             LLAVON_SETTINGS_BACKEND_CPU, LLAVON_SETTINGS_DEVICE_CPU, u"cpu", u"CPU", u"CPU", 0};
-        require(llavon_settings_ui_configure_v5(
+        require(llavon_settings_ui_configure_v6(
                     &cpu, 1, LLAVON_SETTINGS_BACKEND_CPU, u"cpu", &cpu, 0, 0, save_inference, nullptr, u"", save_model,
                     nullptr, nullptr, 0, save_names, nullptr, 0, save_width, nullptr, nullptr, 0, refresh_training,
                     nullptr, delete_training, nullptr, get_history, nullptr, start_training, nullptr, get_status,

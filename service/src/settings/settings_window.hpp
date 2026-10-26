@@ -83,7 +83,8 @@ private:
     using PasswordAction =
         std::function<winrt::Windows::Foundation::IAsyncOperation<bool>(const char16_t*)>;
     void show_password_dialog(bool setup, PasswordAction action,
-                              bool clean_datasets = false);
+                              bool clean_datasets = false,
+                              std::function<void()> on_success = {});
     winrt::Windows::Foundation::IAsyncOperation<bool> run_in_background(
         std::function<bool()> work);
     bool updating_protection_ = false;
