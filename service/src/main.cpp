@@ -251,6 +251,8 @@ int main(int argc, char* argv[]) {
 
         auto config = parse_core_config(service_argc, argv);
         config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
+        config.sessions_per_context =
+            static_cast<std::uint32_t>(llavon::service::prediction_pipe::SessionLru::capacity);
         config.vulkan_pipeline_cache_dir = vulkan_pipeline_cache_directory();
         if (config.vulkan_pipeline_cache_dir.empty()) {
             std::clog << "[WARN] Vulkan pipeline cache disabled: no directory supplied\n";
