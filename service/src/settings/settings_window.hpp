@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <winrt/Microsoft.UI.Content.h>
 
+#include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
@@ -77,8 +78,12 @@ private:
     bool load_training_items(const char16_t* password = nullptr,
                              std::int64_t base_run_id = 0);
     void refresh_protection_controls();
-    void show_password_dialog(bool setup, std::function<bool(const char16_t*)> action,
+    using PasswordAction =
+        std::function<winrt::Windows::Foundation::IAsyncOperation<bool>(const char16_t*)>;
+    void show_password_dialog(bool setup, PasswordAction action,
                               bool clean_datasets = false);
+    winrt::Windows::Foundation::IAsyncOperation<bool> run_in_background(
+        std::function<bool()> work);
     bool updating_protection_ = false;
     bool password_dialog_open_ = false;
     std::function<void()> close_lora_dialog_;
@@ -125,6 +130,8 @@ private:
     std::jthread lora_restore_worker_;
     std::shared_ptr<std::atomic_bool> restore_ui_alive_ =
         std::make_shared<std::atomic_bool>(true);
+    std::shared_ptr<std::atomic_size_t> background_operations_ =
+        std::make_shared<std::atomic_size_t>(0);
     winrt::Microsoft::UI::Xaml::DispatcherTimer lora_dialog_timer_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock lora_note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBox model_path_{nullptr};

@@ -104,6 +104,30 @@ TextBlock make_text(const wchar_t* value, double size, FontWeight weight = FontW
     return block;
 }
 
+std::optional<std::vector<TrainingDataOption>> fetch_training_items(
+    llavon_settings_refresh_training_items_callback callback, void* context,
+    llavon_settings_protection_callback protection_callback, void* protection_context,
+    const char16_t* password, std::int64_t base_run_id) {
+    std::size_t count = 0;
+    if (!callback || callback(context, nullptr, 0, &count, password, base_run_id) !=
+            ERROR_SUCCESS) return std::nullopt;
+    std::vector<llavon_settings_training_item> items(count);
+    if (count != 0 && callback(context, items.data(), items.size(), &count, password,
+            base_run_id) != ERROR_SUCCESS) return std::nullopt;
+    std::vector<TrainingDataOption> result;
+    result.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& item = items[index];
+        result.push_back(TrainingDataOption{
+            .event_id = item.event_id, .context = item.context, .answer = item.answer,
+            .reading = item.reading, .revice = item.revice != 0,
+        });
+    }
+    if (protection_callback) protection_callback(
+        protection_context, LLAVON_PROTECTION_CLEAR_VIEW, nullptr, &count);
+    return result;
+}
+
 std::wstring utc8_timestamp(std::u16string_view value) {
     const std::string source = utf8::utf16to8(std::u16string(value));
     std::chrono::sys_time<std::chrono::milliseconds> utc;
@@ -659,6 +683,10 @@ void SettingsWindow::hide() const noexcept {
 void SettingsWindow::destroy() noexcept {
     restore_ui_alive_->store(false, std::memory_order_release);
     if (lora_restore_worker_.joinable()) lora_restore_worker_.join();
+    for (auto pending = background_operations_->load(std::memory_order_acquire);
+         pending != 0; pending = background_operations_->load(std::memory_order_acquire)) {
+        background_operations_->wait(pending, std::memory_order_acquire);
+    }
     deactivate_update_target();
     discard_pending_update_results();
     hide();
@@ -985,13 +1013,7 @@ void SettingsWindow::build_page() {
         }
         if ((status & 1) == 0) {
             refresh_protection_controls();
-            show_password_dialog(true, [this](const char16_t* password) {
-                std::size_t result = 0;
-                const bool ok = configuration_.protection_callback(configuration_.protection_context,
-                    LLAVON_PROTECTION_SETUP, password, &result) == ERROR_SUCCESS;
-                refresh_protection_controls();
-                return ok;
-            });
+            show_password_dialog(true, {});
         } else {
             callback(configuration_.protection_context, LLAVON_PROTECTION_ENABLE, nullptr, &status);
             refresh_protection_controls();
@@ -1086,7 +1108,21 @@ void SettingsWindow::refresh_protection_controls() {
     updating_protection_ = false;
 }
 
-void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const char16_t*)> action,
+winrt::Windows::Foundation::IAsyncOperation<bool> SettingsWindow::run_in_background(
+    std::function<bool()> work) {
+    const auto operations = background_operations_;
+    operations->fetch_add(1, std::memory_order_acq_rel);
+    co_await winrt::resume_background();
+    bool result = false;
+    try {
+        result = work();
+    } catch (...) {}
+    operations->fetch_sub(1, std::memory_order_acq_rel);
+    operations->notify_all();
+    co_return result;
+}
+
+void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
                                          bool clean_datasets) {
     ContentDialog dialog;
     dialog.XamlRoot(shell_.XamlRoot());
@@ -1117,6 +1153,7 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
         bool setup;
         bool confirming_reset = false;
         bool input_enabled = true;
+        bool busy = false;
         winrt::hstring previous_status;
     };
     auto dialog_state = std::make_shared<PasswordDialogState>(PasswordDialogState{setup});
@@ -1218,33 +1255,72 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
             password.Focus(FocusState::Programmatic);
             return;
         }
+        if (dialog_state->busy) {
+            args.Cancel(true);
+            return;
+        }
         auto secret = to_utf16(password.Password());
         auto repeated = to_utf16(confirmation.Password());
-        const bool valid = !dialog_state->confirming_reset && !secret.empty() &&
-            (!dialog_state->setup || secret == repeated);
-        bool ok = false;
-        if (valid) {
-            try {
-                if (dialog_state->setup) {
-                    std::size_t result = 0;
-                    ok = configuration_.protection_callback && configuration_.protection_callback(
-                        configuration_.protection_context, LLAVON_PROTECTION_SETUP,
-                        secret.c_str(), &result) == ERROR_SUCCESS;
-                    refresh_protection_controls();
-                } else {
-                    ok = action(secret.c_str());
-                }
-            } catch (...) {}
-        }
-        if (!secret.empty()) SecureZeroMemory(secret.data(), secret.size() * sizeof(char16_t));
+        const bool valid = !secret.empty() && (!dialog_state->setup || secret == repeated);
         if (!repeated.empty()) SecureZeroMemory(repeated.data(), repeated.size() * sizeof(char16_t));
         password.Password(L"");
         confirmation.Password(L"");
-        if (!ok) {
+        PasswordAction operation = dialog_state->setup
+            ? PasswordAction{[this](const char16_t* value)
+                  -> winrt::Windows::Foundation::IAsyncOperation<bool> {
+                  const auto callback = configuration_.protection_callback;
+                  const auto context = configuration_.protection_context;
+                  const auto alive = restore_ui_alive_;
+                  const bool ok = co_await run_in_background([callback, context, value] {
+                      std::size_t result = 0;
+                      return callback && callback(context, LLAVON_PROTECTION_SETUP,
+                          value, &result) == ERROR_SUCCESS;
+                  });
+                  if (alive->load(std::memory_order_acquire)) refresh_protection_controls();
+                  co_return ok;
+              }}
+            : action;
+        if (!valid || !operation) {
+            if (!secret.empty()) SecureZeroMemory(secret.data(), secret.size() * sizeof(char16_t));
             args.Cancel(true);
-            status.Text(!valid ? L"請輸入密碼，並確認兩次輸入相同。" :
-                L"密碼錯誤或資料處理失敗，請重試。");
+            status.Text(L"請輸入密碼，並確認兩次輸入相同。");
+            return;
         }
+        [](ContentDialogButtonClickEventArgs args, ContentDialog dialog,
+           std::shared_ptr<PasswordDialogState> dialog_state, PasswordAction operation,
+           std::u16string secret, PasswordBox password, Button reset, TextBlock status,
+           std::shared_ptr<std::atomic_bool> alive) -> winrt::fire_and_forget {
+            const auto deferral = args.GetDeferral();
+            dialog_state->busy = true;
+            dialog.IsPrimaryButtonEnabled(false);
+            password.IsEnabled(false);
+            reset.IsEnabled(false);
+            status.Text(dialog_state->setup ? L"正在設定密碼…" : L"正在解密對話資料…");
+            bool ok = false;
+            try {
+                ok = co_await operation(secret.c_str());
+            } catch (...) {}
+            SecureZeroMemory(secret.data(), secret.size() * sizeof(char16_t));
+            dialog_state->busy = false;
+            try {
+                if (alive->load(std::memory_order_acquire)) {
+                    dialog.IsPrimaryButtonEnabled(true);
+                    password.IsEnabled(true);
+                    reset.IsEnabled(true);
+                    status.Text(L"");
+                    if (!ok) {
+                        args.Cancel(true);
+                        status.Text(L"密碼錯誤或資料處理失敗，請重試。");
+                        password.Focus(FocusState::Programmatic);
+                    }
+                }
+                deferral.Complete();
+            } catch (...) {}
+        }(args, sender.as<ContentDialog>(), dialog_state, std::move(operation),
+          std::move(secret), password, reset, status, restore_ui_alive_);
+    });
+    dialog.Closing([dialog_state](const auto&, const ContentDialogClosingEventArgs& args) {
+        if (dialog_state->busy) args.Cancel(true);
     });
     dialog.Closed([this, password, confirmation](const auto&, const auto&) {
         password_dialog_open_ = false;
@@ -1263,22 +1339,13 @@ void SettingsWindow::show_password_dialog(bool setup, std::function<bool(const c
 bool SettingsWindow::load_training_items(
     const char16_t* password, std::int64_t base_run_id) {
     configuration_.training_items.clear();
-    const auto callback = configuration_.refresh_training_items_callback;
-    std::size_t count = 0;
-    if (!callback || callback(configuration_.refresh_training_items_context,
-            nullptr, 0, &count, password, base_run_id) != ERROR_SUCCESS) return false;
-    std::vector<llavon_settings_training_item> items(count);
-    if (count != 0 && callback(configuration_.refresh_training_items_context,
-            items.data(), items.size(), &count, password, base_run_id) != ERROR_SUCCESS) return false;
-    for (std::size_t index = 0; index < count; ++index) {
-        const auto& item = items[index];
-        configuration_.training_items.push_back(TrainingDataOption{
-            .event_id = item.event_id, .context = item.context, .answer = item.answer,
-            .reading = item.reading, .revice = item.revice != 0,
-        });
-    }
-    if (configuration_.protection_callback) configuration_.protection_callback(
-        configuration_.protection_context, LLAVON_PROTECTION_CLEAR_VIEW, nullptr, &count);
+    auto items = fetch_training_items(
+        configuration_.refresh_training_items_callback,
+        configuration_.refresh_training_items_context,
+        configuration_.protection_callback, configuration_.protection_context,
+        password, base_run_id);
+    if (!items) return false;
+    configuration_.training_items = std::move(*items);
     return true;
 }
 
@@ -1672,26 +1739,37 @@ void SettingsWindow::show_lora_training_dialog() {
             });
         (*render_page)();
         state->training_data_button.Click([this, state, render_page](const auto&, const auto&) {
-            show_password_dialog(false, [this, state, render_page](const char16_t* password) {
+            show_password_dialog(false, [this, state, render_page](const char16_t* password)
+                -> winrt::Windows::Foundation::IAsyncOperation<bool> {
                 const auto base_index = state->training_base.SelectedIndex();
-                const auto base_id = base_index < 0 ? 0 :
-                    state->base_run_ids[static_cast<std::size_t>(base_index)];
-                if (base_index < 0 || state->closed ||
-                    !load_training_items(password,
-                        base_id < 0 ? 0 : base_id)) return false;
-                auto loaded = configuration_.training_items.begin();
+                if (base_index < 0 || state->closed) co_return false;
+                const auto base_id = state->base_run_ids[static_cast<std::size_t>(base_index)];
+                const auto callback = configuration_.refresh_training_items_callback;
+                const auto context = configuration_.refresh_training_items_context;
+                const auto protection_callback = configuration_.protection_callback;
+                const auto protection_context = configuration_.protection_context;
+                const auto alive = restore_ui_alive_;
+                std::optional<std::vector<TrainingDataOption>> decrypted;
+                co_await run_in_background([&] {
+                    decrypted = fetch_training_items(callback, context, protection_callback,
+                        protection_context, password, base_id < 0 ? 0 : base_id);
+                    return decrypted.has_value();
+                });
+                if (!decrypted || !alive->load(std::memory_order_acquire) || state->closed) {
+                    co_return false;
+                }
+                auto loaded = decrypted->begin();
                 for (std::size_t index = 0; index < state->items.size(); ++index) {
                     if (state->deleted_items[index]) continue;
                     auto& item = state->items[index];
                     const auto found = std::find_if(loaded,
-                        configuration_.training_items.end(), [&](const auto& loaded) {
+                        decrypted->end(), [&](const auto& loaded) {
                             return loaded.event_id == item.event_id;
                     });
-                    if (found == configuration_.training_items.end()) return false;
+                    if (found == decrypted->end()) co_return false;
                     item = std::move(*found);
                     loaded = std::next(found);
                 }
-                configuration_.training_items.clear();
                 (*render_page)();
                 state->selecting_training_data = true;
                 state->content.Content(state->training_data_page);
@@ -1700,7 +1778,7 @@ void SettingsWindow::show_lora_training_dialog() {
                 Grid::SetColumnSpan(state->primary_button, 2);
                 state->secondary_button.Visibility(Visibility::Collapsed);
                 state->primary_button.IsEnabled(true);
-                return true;
+                co_return true;
             });
         });
     }
@@ -2507,8 +2585,9 @@ void SettingsWindow::show_lora_training_dialog() {
                 }
                 show_password_dialog(false, [this, state, options, dtype, target_modules,
                                              selected, refresh_apply_state, refresh_training_selection](
-                    const char16_t* password) mutable {
-                    if (state->closed) return false;
+                    const char16_t* password) mutable
+                    -> winrt::Windows::Foundation::IAsyncOperation<bool> {
+                    if (state->closed) co_return false;
                     options.dtype = dtype.c_str();
                     options.target_modules = target_modules.c_str();
                     std::vector<const char16_t*> selected_pointers;
@@ -2516,11 +2595,16 @@ void SettingsWindow::show_lora_training_dialog() {
                     state->progress.IsIndeterminate(true);
                     state->progress.Visibility(Visibility::Visible);
                     state->status.Text(L"正在由 service 儲存資料選擇…");
-                    const std::int32_t result = configuration_.start_lora_training_callback
-                        ? configuration_.start_lora_training_callback(
-                              configuration_.start_lora_training_context,
-                              selected_pointers.data(), selected_pointers.size(), &options, password)
-                        : ERROR_INVALID_FUNCTION;
+                    const auto callback = configuration_.start_lora_training_callback;
+                    const auto context = configuration_.start_lora_training_context;
+                    const auto alive = restore_ui_alive_;
+                    std::int32_t result = ERROR_INVALID_FUNCTION;
+                    co_await run_in_background([&] {
+                        if (callback) result = callback(context, selected_pointers.data(),
+                            selected_pointers.size(), &options, password);
+                        return result == ERROR_SUCCESS;
+                    });
+                    if (!alive->load(std::memory_order_acquire)) co_return false;
                     if (result == ERROR_SUCCESS) {
                         state->training_observed = true;
                         state->busy = true;
@@ -2535,7 +2619,7 @@ void SettingsWindow::show_lora_training_dialog() {
                         state->progress.Visibility(Visibility::Collapsed);
                         state->status.Text(L"無法儲存訓練資料選擇，請稍後再試。");
                     }
-                    return result == ERROR_SUCCESS;
+                    co_return result == ERROR_SUCCESS;
                 }, true);
             } catch (...) {
                 state->progress.Visibility(Visibility::Collapsed);
