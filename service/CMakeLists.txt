@@ -68,6 +68,8 @@ add_executable(llavon-ime-service
 # Embedded only in the web setup. The MSI never carries the GGUF payload.
 add_executable(llavon-ime-model-installer
     src/model_installer_main.cpp
+    src/service/model_revision_cleanup.cpp
+    src/service/model_revision_cleanup.hpp
     src/service/winrt_http.cpp
     src/service/winrt_http.hpp
     src/service/process_mta.hpp
@@ -309,6 +311,20 @@ if(BUILD_TESTING)
     target_include_directories(lora-process-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     add_test(NAME lora-process COMMAND lora-process-tests)
     set_tests_properties(lora-process PROPERTIES TIMEOUT 30)
+
+    add_executable(model-revision-cleanup-tests
+        tests/model_revision_cleanup_tests.cpp
+        src/service/model_revision_cleanup.cpp
+        src/service/model_revision_cleanup.hpp
+    )
+    target_compile_features(model-revision-cleanup-tests PRIVATE cxx_std_23)
+    target_compile_definitions(model-revision-cleanup-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(model-revision-cleanup-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(model-revision-cleanup-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME model-revision-cleanup COMMAND model-revision-cleanup-tests)
+    set_tests_properties(model-revision-cleanup PROPERTIES TIMEOUT 30)
 
     add_executable(lora-history-lca-tests
         tests/lora_history_lca_tests.cpp

@@ -1,3 +1,4 @@
+#include "service/model_revision_cleanup.hpp"
 #include "service/process_mta.hpp"
 #include "service/winrt_http.hpp"
 
@@ -116,6 +117,7 @@ void install_model(std::wstring_view revision, std::wstring_view expected_sha,
         std::filesystem::file_size(destination, error) == expected_size && !error &&
         sha256_file(destination) == expected) {
         publish_revision(root, revision);
+        llavon::service::remove_stale_model_revisions(root, revision);
         std::wcout << L"Model already verified; download skipped.\n";
         return;
     }
@@ -147,6 +149,7 @@ void install_model(std::wstring_view revision, std::wstring_view expected_sha,
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
         throw std::runtime_error("unable to publish verified model");
     publish_revision(root, revision);
+    llavon::service::remove_stale_model_revisions(root, revision);
     std::wcout << L"Model download complete.\n";
 }
 
