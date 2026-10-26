@@ -10,13 +10,19 @@ add_executable(llavon-ime-lifecycle WIN32
     tools/tsf_lifecycle.cpp
     src/system/serviceLauncher.cpp
 )
+add_executable(llavon-ime-uninstaller WIN32
+    tools/uninstaller.cpp
+    tools/uninstall_purge.cpp
+    tools/uninstall_purge.hpp
+)
 target_compile_features(llavon-ime PRIVATE cxx_std_23)
 target_compile_features(llavon-ime-lifecycle PRIVATE cxx_std_23)
+target_compile_features(llavon-ime-uninstaller PRIVATE cxx_std_23)
 set_target_properties(llavon-ime PROPERTIES
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO
 )
-set_target_properties(llavon-ime-lifecycle PROPERTIES
+set_target_properties(llavon-ime-lifecycle llavon-ime-uninstaller PROPERTIES
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
@@ -38,6 +44,14 @@ target_compile_definitions(llavon-ime-lifecycle PRIVATE
     WINVER=0x0A00
     _WIN32_WINNT=0x0A00
 )
+target_compile_definitions(llavon-ime-uninstaller PRIVATE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    UNICODE
+    _UNICODE
+    WINVER=0x0A00
+    _WIN32_WINNT=0x0A00
+)
 
 target_compile_options(llavon-ime PRIVATE
     /W4         # 高警告等級
@@ -45,6 +59,12 @@ target_compile_options(llavon-ime PRIVATE
     /utf-8      # 原始碼 UTF-8 編碼
 )
 target_compile_options(llavon-ime-lifecycle PRIVATE
+    /W4
+    /WX
+    /utf-8
+    /permissive-
+)
+target_compile_options(llavon-ime-uninstaller PRIVATE
     /W4
     /WX
     /utf-8
@@ -83,6 +103,11 @@ target_link_libraries(llavon-ime-lifecycle PRIVATE
     ole32
     shell32
     uuid
+)
+target_link_libraries(llavon-ime-uninstaller PRIVATE
+    advapi32
+    ole32
+    shell32
 )
 
 
@@ -123,4 +148,23 @@ if(BUILD_TESTING)
     add_dependencies(frontend-dll-load-tests llavon-ime)
     add_test(NAME frontend-dll-load
         COMMAND frontend-dll-load-tests "$<TARGET_FILE:llavon-ime>")
+
+    add_executable(uninstall-purge-tests
+        tests/uninstall_purge_tests.cpp
+        tools/uninstall_purge.cpp
+        tools/uninstall_purge.hpp
+    )
+    target_compile_features(uninstall-purge-tests PRIVATE cxx_std_23)
+    target_compile_definitions(uninstall-purge-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(uninstall-purge-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(uninstall-purge-tests PRIVATE tools)
+    set_target_properties(uninstall-purge-tests PROPERTIES
+        CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+    target_link_libraries(uninstall-purge-tests PRIVATE advapi32)
+    add_dependencies(uninstall-purge-tests llavon-ime-uninstaller)
+    add_test(NAME uninstall-purge
+        COMMAND uninstall-purge-tests "$<TARGET_FILE:llavon-ime-uninstaller>")
+    set_tests_properties(uninstall-purge PROPERTIES TIMEOUT 60)
 endif()

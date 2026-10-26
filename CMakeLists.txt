@@ -173,6 +173,7 @@ add_custom_target(llavon-ime-artifacts
     DEPENDS
         llavon-ime
         llavon-ime-lifecycle
+        llavon-ime-uninstaller
         llavon-ime-service
         llavon-ime-settings-ui
         llavon-ime-candidate-ui
@@ -361,6 +362,10 @@ set(CPACK_WIX_PROGRAM_MENU_FOLDER "Llavon IME")
 file(TO_CMAKE_PATH
     "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/llavon-ime-lifecycle.exe"
     LLAVON_IME_LIFECYCLE_HELPER_WIX_PATH
+)
+file(TO_CMAKE_PATH
+    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/llavon-ime-uninstaller.exe"
+    LLAVON_IME_UNINSTALLER_WIX_PATH
 )
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wix/RegisterIme.wxs.in"

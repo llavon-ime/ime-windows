@@ -9,6 +9,23 @@
     <Binary
       Id="LlavonImeLifecycleHelper"
       SourceFile="@LLAVON_IME_LIFECYCLE_HELPER_WIX_PATH@" />
+    <Binary
+      Id="LlavonImeUninstaller"
+      SourceFile="@LLAVON_IME_UNINSTALLER_WIX_PATH@" />
+    <CustomAction
+      Id="RemoveLlavonImeUserInputProfile"
+      BinaryRef="LlavonImeUninstaller"
+      ExeCommand="remove-user-input-profile"
+      Execute="immediate"
+      Impersonate="yes"
+      Return="ignore" />
+    <CustomAction
+      Id="PurgeLlavonImeData"
+      BinaryRef="LlavonImeUninstaller"
+      ExeCommand="purge"
+      Execute="commit"
+      Impersonate="no"
+      Return="ignore" />
     <CustomAction
       Id="ReleaseLlavonImeForUpgrade"
       BinaryRef="LlavonImeLifecycleHelper"
@@ -59,6 +76,10 @@
       <Custom Action="ClearLlavonImeUpdateGateOnRollback" After="InstallInitialize"
               Condition="WIX_UPGRADE_DETECTED" />
       <Custom Action="ReleaseLlavonImeForUninstall" After="ReleaseLlavonImeForUpgrade"
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="RemoveLlavonImeUserInputProfile" After="ReleaseLlavonImeForUninstall"
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="PurgeLlavonImeData" After="RemoveFiles"
               Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="RegisterLlavonIme" After="InstallFiles" Condition="NOT REMOVE" />
       <Custom Action="UnregisterLlavonIme" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot;" />
