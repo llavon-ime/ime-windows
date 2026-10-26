@@ -8,30 +8,30 @@
         HorizontalAlignment="Center"
         Padding="28,24,28,40"
         Spacing="0">
-      <Grid MaxWidth="600"
-          HorizontalAlignment="Stretch"
-          Margin="0,6,0,18">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="*"/>
-          <ColumnDefinition Width="Auto"/>
-        </Grid.ColumnDefinitions>
-        <TextBlock Grid.Column="0"
-            Text="模型檔案"
-            FontSize="20"
-            FontWeight="SemiBold"
-            VerticalAlignment="Center"/>
-        <Button x:Name="DefaultModelButton"
-            Grid.Column="1"
-            Content="切換到預設"
-            MinHeight="32"
-            FontSize="14"
-            VerticalAlignment="Center"/>
-      </Grid>
+      <TextBlock Text="模型檔案"
+          FontSize="20"
+          FontWeight="SemiBold"
+          Margin="0,6,0,18"/>
       <StackPanel Spacing="8"
           Margin="0,0,0,24">
-        <TextBlock Text="指定要載入的 GGUF 模型檔案。"
-            FontSize="14"
-            TextWrapping="Wrap"/>
+        <Grid MaxWidth="600"
+            HorizontalAlignment="Stretch">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <TextBlock Grid.Column="0"
+              Text="指定要載入的 GGUF 模型檔案。"
+              FontSize="14"
+              TextWrapping="Wrap"
+              VerticalAlignment="Center"/>
+          <Button x:Name="DefaultModelButton"
+              Grid.Column="1"
+              Content="切換到預設"
+              MinHeight="32"
+              FontSize="14"
+              VerticalAlignment="Center"/>
+        </Grid>
         <Grid MaxWidth="600"
             HorizontalAlignment="Stretch">
           <Grid.ColumnDefinitions>
