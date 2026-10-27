@@ -46,6 +46,7 @@ enum class PipeCommand : uint8_t {
     Ready = 4,
     RecordCommit = 5,
     DiscardLastCommit = 6,
+    Prefill = 7,
 };
 
 enum class InputMode : uint8_t {
@@ -471,6 +472,20 @@ inline asio::awaitable<void> handle_client(
                 std::cerr << "[ERR] ready: " << e.what() << std::endl;
             }
             co_await write_val(pipe, ok);
+            continue;
+        }
+
+        if (command == PipeCommand::Prefill) {
+            std::u16string context;
+            if (!co_await read_utf16_string(pipe, context, maximum_context_length)) break;
+            try {
+                co_await client_session.run(
+                    [context = std::move(context)](llavon::ime::core::Session& session) {
+                        session.prefill(context);
+                    });
+            } catch (const std::exception& e) {
+                std::cerr << "[ERR] prefill: " << e.what() << std::endl;
+            }
             continue;
         }
 

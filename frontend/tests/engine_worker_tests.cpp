@@ -29,6 +29,7 @@ struct State {
     Event complete;
     std::mutex mutex;
     std::vector<std::u16string> predictions;
+    std::vector<std::u16string> prefills;
     std::vector<std::uint64_t> discarded;
     std::thread::id worker;
     std::atomic<int> ready_calls = 0;
@@ -40,6 +41,10 @@ class FakeEngine : public tsf::IEngine {
 public:
     explicit FakeEngine(std::shared_ptr<State> state) : state_(std::move(state)) {}
     void ready() override { ++state_->ready_calls; }
+    void prefill(const std::u16string& context) override {
+        std::lock_guard lock(state_->mutex);
+        state_->prefills.push_back(context);
+    }
     void predict(const std::u16string& context, std::span<tsf::BopomofoPos> padding) override {
         {
             std::lock_guard lock(state_->mutex);
@@ -88,6 +93,8 @@ void queue_and_snapshot_test() {
     padding[0].candidates = {U'舊'};
     worker.predict(1, u"blocked", padding);
     state->entered.wait();
+    worker.prefill(u"superseded prefill");
+    worker.prefill(u"latest prefill");
     worker.predict(2, u"superseded", padding);
     worker.predict(3, u"latest", padding);
     worker.ready();
@@ -111,6 +118,8 @@ void queue_and_snapshot_test() {
         require(state->worker != std::this_thread::get_id(), "transport ran on caller thread");
         require(state->predictions == std::vector<std::u16string>{u"blocked", u"latest"},
                 "superseded queued prediction was executed");
+        require(state->prefills == std::vector<std::u16string>{u"latest prefill"},
+                "superseded queued prefill was executed");
         require(state->discarded == std::vector<std::uint64_t>{101}, "commit/discard order lost");
     }
 

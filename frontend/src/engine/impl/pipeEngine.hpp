@@ -24,6 +24,7 @@ enum class PipeCommand : uint8_t {
     Ready = 4,
     RecordCommit = 5,
     DiscardLastCommit = 6,
+    Prefill = 7,
 };
 
 class PipeEngine : public IEngine {
@@ -146,6 +147,16 @@ public:
 
         uint8_t ok = 0;
         if (!read_exact(ok)) { disconnect(); return; }
+    }
+
+    void prefill(const std::u16string& context) override {
+        if (!ensure_pipe()) return;
+
+        if (!write_command(PipeCommand::Prefill)) { disconnect(); return; }
+
+        const uint32_t ctx_len = static_cast<uint32_t>(context.size());
+        if (!write_exact(ctx_len)) { disconnect(); return; }
+        if (ctx_len > 0 && !write_exact(context.data(), ctx_len * sizeof(char16_t))) { disconnect(); return; }
     }
 
     void predict(const std::u16string& context, std::span<BopomofoPos> padding) override {

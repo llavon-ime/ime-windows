@@ -100,6 +100,15 @@ public:
         });
     }
 
+    void prefill(std::u16string context) {
+        std::lock_guard lock(mutex_);
+        if (stopping_) return;
+        std::erase_if(jobs_, [](const Job& job) { return job.kind == Kind::Prefill; });
+        enqueue_locked(Kind::Prefill, [context = std::move(context)](IEngine& engine) {
+            try { engine.prefill(context); } catch (...) {}
+        });
+    }
+
     void predict(std::uint64_t sequence, std::u16string context,
                  std::vector<BopomofoPos> padding) {
         std::lock_guard lock(mutex_);
@@ -153,7 +162,7 @@ public:
     }
 
 private:
-    enum class Kind { Other, Predict };
+    enum class Kind { Other, Prefill, Predict };
     struct Job {
         Kind kind;
         std::function<void(IEngine&)> execute;

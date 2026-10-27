@@ -1437,6 +1437,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     // if (!itfComposition) {
     //     start_composition(pContext);
     // }
+    const bool composition_starting = compositionBuffer.empty();
     compositionBuffer.add(cur_char.value());
     const auto invalid_span = compositionBuffer.current_invalid_span();
     if (!invalid_span) {
@@ -1444,6 +1445,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         auto pre_context = get_pre_composit_context(pContext);
         collection_context_ = pre_context;
         e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
+        if (composition_starting && engine_worker_) engine_worker_->prefill(pre_context);
         queue_prediction(pContext, std::move(pre_context), e2e_trace);
     }
     if (invalid_span) {
@@ -1999,7 +2001,7 @@ void TextService::show_candidate_list(BopomofoPos& bopomofoPos, ITfContext* pCon
     });
 }
 
-inline constexpr LONG kMaxPreCompositionContextChars = 256;
+inline constexpr LONG kMaxPreCompositionContextChars = 384;
 inline constexpr ULONG kRangeReadChunkChars = 128;
 
 bool append_range_text(TfEditCookie ec, ITfRange* range, std::u16string& context) {
