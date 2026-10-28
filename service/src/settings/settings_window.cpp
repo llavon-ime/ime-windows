@@ -18,6 +18,7 @@
 #include <cmath>
 #include <chrono>
 #include <cstddef>
+#include <coroutine>
 #include <cstdint>
 #include <cwctype>
 #include <filesystem>
@@ -75,6 +76,27 @@ constexpr UINT history_preview_message = WM_APP + 12;
 constexpr double body_text_size = 14;
 constexpr double caption_text_size = 12;
 constexpr std::size_t training_page_size = 100;
+
+// The pinned C++/WinRT version has no resume_foreground overload for WinUI's
+// DispatcherQueue. Always enqueue so XAML event dispatch can unwind first.
+struct ResumeOnDispatcher {
+    winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher;
+    bool queued = false;
+
+    bool await_ready() const noexcept { return false; }
+    bool await_resume() const noexcept { return queued; }
+    bool await_suspend(std::coroutine_handle<> continuation) noexcept {
+        try {
+            const auto queue = dispatcher;
+            return queue.TryEnqueue([this, continuation] {
+                queued = true;
+                continuation.resume();
+            });
+        } catch (...) {
+            return false;
+        }
+    }
+};
 
 std::wstring training_count_label(std::size_t count) {
     return L"共 " + std::to_wstring(count) + L" 筆";
@@ -1116,20 +1138,24 @@ void SettingsWindow::refresh_protection_controls() {
 winrt::Windows::Foundation::IAsyncOperation<bool> SettingsWindow::run_in_background(
     std::function<bool()> work) {
     const auto operations = background_operations_;
+    const auto dispatcher = shell_.DispatcherQueue();
     operations->fetch_add(1, std::memory_order_acq_rel);
-    co_await winrt::resume_background();
     bool result = false;
     try {
+        co_await winrt::resume_background();
         result = work();
     } catch (...) {}
     operations->fetch_sub(1, std::memory_order_acq_rel);
     operations->notify_all();
+    // Complete on the dispatcher, outside a synchronous COM continuation.
+    if (!co_await ResumeOnDispatcher{dispatcher}) co_return false;
     co_return result;
 }
 
 void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
                                          bool clean_datasets,
                                          std::function<void()> on_success) {
+    if (password_dialog_open_) return;
     ContentDialog dialog;
     dialog.XamlRoot(shell_.XamlRoot());
     dialog.RequestedTheme(shell_.ActualTheme());
@@ -1149,6 +1175,7 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
     note.Visibility(setup ? Visibility::Visible : Visibility::Collapsed);
     content.Children().Append(note);
     PasswordBox password;
+    Automation::AutomationProperties::SetAutomationId(password, L"PasswordInput");
     password.PlaceholderText(L"密碼");
     content.Children().Append(password);
     PasswordBox confirmation;
@@ -1293,11 +1320,14 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
             status.Text(L"請輸入密碼，並確認兩次輸入相同。");
             return;
         }
-        [](ContentDialogButtonClickEventArgs args, ContentDialog dialog,
+        // Keep the dialog open without holding a button deferral across the
+        // background operation. A pending deferral also blocks the Close button.
+        args.Cancel(true);
+        [](ContentDialog dialog,
            std::shared_ptr<PasswordDialogState> dialog_state, PasswordAction operation,
            std::u16string secret, PasswordBox password, Button reset, TextBlock status,
            std::shared_ptr<std::atomic_bool> alive) -> winrt::fire_and_forget {
-            const auto deferral = args.GetDeferral();
+            const auto dispatcher = dialog.DispatcherQueue();
             dialog_state->busy = true;
             dialog.IsPrimaryButtonEnabled(false);
             password.IsEnabled(false);
@@ -1308,6 +1338,7 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
                 ok = co_await operation(secret.c_str());
             } catch (...) {}
             SecureZeroMemory(secret.data(), secret.size() * sizeof(char16_t));
+            if (!co_await ResumeOnDispatcher{dispatcher}) co_return;
             dialog_state->busy = false;
             try {
                 if (alive->load(std::memory_order_acquire)) {
@@ -1317,42 +1348,51 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
                     status.Text(L"");
                     if (ok) {
                         dialog_state->succeeded = true;
+                        dialog.Hide();
                     } else {
-                        args.Cancel(true);
                         status.Text(L"密碼錯誤或資料處理失敗，請重試。");
                         password.Focus(FocusState::Programmatic);
                     }
                 }
-            } catch (...) {}
-            try {
-                deferral.Complete();
-            } catch (...) {}
-        }(args, sender.as<ContentDialog>(), dialog_state, std::move(operation),
+            } catch (...) {
+                OutputDebugStringW(L"[settings-ui] unable to finish password operation\n");
+            }
+        }(sender.as<ContentDialog>(), dialog_state, std::move(operation),
           std::move(secret), password, reset, status, restore_ui_alive_);
     });
     dialog.Closing([dialog_state](const auto&, const ContentDialogClosingEventArgs& args) {
         if (dialog_state->busy) args.Cancel(true);
     });
-    dialog.Closed([this, dialog_state, password, confirmation,
-                   on_success = std::move(on_success)](const auto&, const auto&) {
-        password_dialog_open_ = false;
+    password_dialog_open_ = true;
+    [](SettingsWindow* self, ContentDialog dialog,
+       std::shared_ptr<PasswordDialogState> dialog_state, PasswordBox password,
+       PasswordBox confirmation, std::function<void()> on_success,
+       std::shared_ptr<std::atomic_bool> alive) -> winrt::fire_and_forget {
+        const auto dispatcher = dialog.DispatcherQueue();
+        bool closed = false;
+        try {
+            co_await dialog.ShowAsync();
+            closed = true;
+        } catch (const winrt::hresult_error& error) {
+            OutputDebugStringW((L"[settings-ui] unable to show password dialog: " +
+                                std::wstring(error.message()) + L"\n").c_str());
+        } catch (...) {
+            OutputDebugStringW(L"[settings-ui] unable to show password dialog\n");
+        }
+        if (!co_await ResumeOnDispatcher{dispatcher}) co_return;
+        if (!alive->load(std::memory_order_acquire)) co_return;
+        self->password_dialog_open_ = false;
         password.Password(L"");
         confirmation.Password(L"");
-        if (dialog_state->succeeded && on_success) {
+        if (closed && dialog_state->succeeded && on_success) {
             try {
                 on_success();
             } catch (...) {
                 OutputDebugStringW(L"[settings-ui] password success action failed\n");
             }
         }
-    });
-    password_dialog_open_ = true;
-    try {
-        (void)dialog.ShowAsync();
-    } catch (...) {
-        password_dialog_open_ = false;
-        throw;
-    }
+    }(this, dialog, dialog_state, password, confirmation, std::move(on_success),
+      restore_ui_alive_);
 }
 
 bool SettingsWindow::load_training_items(

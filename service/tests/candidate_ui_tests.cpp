@@ -3,6 +3,7 @@
 #include "ui/ui_thread.hpp"
 
 #include <chrono>
+#include <atomic>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -13,6 +14,8 @@
 #include <windows.h>
 #include <objidl.h>
 #include <gdiplus.h>
+#include <UIAutomation.h>
+#include <wrl/client.h>
 
 namespace {
 using namespace std::chrono_literals;
@@ -34,7 +37,28 @@ int32_t save_inference(void*, int32_t, const char16_t*) { return 0; }
 int32_t save_model(void*, const char16_t*) { return 0; }
 int32_t save_names(void*, const llavon_settings_custom_name*, size_t) { return 0; }
 int32_t save_width(void*, int32_t) { return 0; }
-int32_t refresh_training(void*, llavon_settings_training_item*, size_t, size_t* count, const char16_t*, int64_t) {
+struct PasswordTestState {
+    std::atomic_int delay_ms{0};
+    std::atomic<DWORD> worker_thread{0};
+};
+int32_t refresh_training(void* context, llavon_settings_training_item* items, size_t capacity,
+                         size_t* count, const char16_t* password, int64_t) {
+    if (auto* state = static_cast<PasswordTestState*>(context)) {
+        if (password && *password && !items) {
+            state->worker_thread.store(GetCurrentThreadId());
+            std::this_thread::sleep_for(std::chrono::milliseconds(state->delay_ms.load()));
+            if (std::u16string_view(password) != u"test") return ERROR_ACCESS_DENIED;
+        }
+        *count = 1;
+        if (items && capacity != 0) {
+            const bool decrypted = password && *password;
+            items[0] = {u"test-1",
+                decrypted ? u"這是一段解密後才顯示的較長對話內容" : u"",
+                decrypted ? u"這是用來驗證解密後才建立提示元件的測試資料" : u"",
+                decrypted ? u"ㄘㄜˋ ㄕˋ" : u"", 0};
+        }
+        return 0;
+    }
     *count = 0;
     return 0;
 }
@@ -43,16 +67,27 @@ int32_t get_history(void*, llavon_settings_lora_history_item*, size_t, size_t* c
     *count = 0;
     return 0;
 }
+int32_t get_base_models(void*, llavon_settings_lora_base_model*, size_t, size_t* count) {
+    *count = 0;
+    return 0;
+}
 int32_t start_training(void*, const char16_t* const*, size_t, const llavon_settings_lora_options*, const char16_t*) {
     return 0;
 }
-int32_t get_status(void*, llavon_settings_lora_status* status) {
+int32_t get_status(void* context, llavon_settings_lora_status* status) {
     *status = {};
+    if (context) {
+        status->model_available = 1;
+        status->trainer_available = 1;
+    }
     return 0;
 }
 int32_t model_action(void*, int32_t) { return 0; }
 void cancel_training(void*) {}
-int32_t protection(void*, int32_t, const char16_t*, size_t*) { return 0; }
+int32_t protection(void* context, int32_t action, const char16_t*, size_t* result) {
+    *result = context && action == LLAVON_PROTECTION_STATUS ? 3 : 0;
+    return 0;
+}
 
 RECT window_rect(HWND window) {
     RECT rect{};
@@ -77,6 +112,108 @@ struct UiLifetime final {
         llavon_ui_thread_shutdown();
     }
 };
+
+void test_password_dialog(PasswordTestState& state) {
+    // UI Automation marshals the caller's activation context to the UI thread.
+    // This test host must use the same self-contained WinUI manifest as the UI.
+    ACTCTXW context{sizeof(context)};
+    context.dwFlags = ACTCTX_FLAG_HMODULE_VALID | ACTCTX_FLAG_RESOURCE_NAME_VALID;
+    context.hModule = GetModuleHandleW(L"llavon-ime-ui-runtime.dll");
+    context.lpResourceName = MAKEINTRESOURCEW(2);
+    const auto activation = CreateActCtxW(&context);
+    require(activation != INVALID_HANDLE_VALUE, "Cannot load UI activation context");
+    ULONG_PTR cookie = 0;
+    require(ActivateActCtx(activation, &cookie) != FALSE, "Cannot activate UI context");
+    require(SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)), "Cannot initialize UI automation");
+    Microsoft::WRL::ComPtr<IUIAutomation> automation;
+    require(SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(&automation))), "Cannot create UI automation");
+    require(llavon_settings_ui_start() == 0, "Settings startup failed");
+    llavon_settings_ui_show();
+    HWND window = nullptr;
+    await_ui([&] {
+        window = find_window(L"LlavonImeSettingsWindow");
+        return window && IsWindowVisible(window);
+    }, "Settings window did not open");
+    const auto find = [&](const wchar_t* value, bool by_name = false) {
+        Microsoft::WRL::ComPtr<IUIAutomationElement> root;
+        Microsoft::WRL::ComPtr<IUIAutomationElement> element;
+        if (FAILED(automation->ElementFromHandle(window, &root))) return element;
+        VARIANT property{};
+        property.vt = VT_BSTR;
+        property.bstrVal = SysAllocString(value);
+        Microsoft::WRL::ComPtr<IUIAutomationCondition> condition;
+        const auto result = automation->CreatePropertyCondition(
+            by_name ? UIA_NamePropertyId : UIA_AutomationIdPropertyId, property, &condition);
+        VariantClear(&property);
+        if (SUCCEEDED(result)) root->FindFirst(TreeScope_Descendants, condition.Get(), &element);
+        return element;
+    };
+    int invocation = 0;
+    const auto invoke = [&](const wchar_t* value, bool by_name = false) {
+        std::cout << "Invoke #" << ++invocation << '\n' << std::flush;
+        Microsoft::WRL::ComPtr<IUIAutomationElement> element;
+        await_ui([&] {
+            element = find(value, by_name);
+            if (!element) element = find(value, true);
+            BOOL enabled = FALSE;
+            return element && SUCCEEDED(element->get_CurrentIsEnabled(&enabled)) && enabled;
+        }, "Dialog button did not become available");
+        Microsoft::WRL::ComPtr<IUIAutomationInvokePattern> pattern;
+        require(SUCCEEDED(element->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&pattern))),
+                "Dialog button cannot be invoked");
+        const auto result = pattern->Invoke();
+        if (FAILED(result)) std::cout << "Invoke HRESULT: " << std::hex << result << '\n';
+        require(SUCCEEDED(result), "Dialog button invocation failed");
+    };
+    const auto fill = [&](const wchar_t* value) {
+        Microsoft::WRL::ComPtr<IUIAutomationElement> field;
+        await_ui([&] {
+            field = find(L"PasswordInput");
+            BOOL enabled = FALSE;
+            return field && SUCCEEDED(field->get_CurrentIsEnabled(&enabled)) && enabled;
+        }, "Password input did not become available");
+        Microsoft::WRL::ComPtr<IUIAutomationValuePattern> pattern;
+        require(SUCCEEDED(field->GetCurrentPatternAs(UIA_ValuePatternId, IID_PPV_ARGS(&pattern))),
+                "Password input cannot be filled");
+        BSTR text = SysAllocString(value);
+        const auto result = pattern->SetValue(text);
+        SysFreeString(text);
+        require(SUCCEEDED(result), "Cannot fill password input");
+    };
+    const auto wait_closed = [&] {
+        await_ui([&] { return !find(L"PasswordInput"); }, "Password dialog did not close");
+    };
+    invoke(L"LoraButton");
+    for (const int delay : {0, 1, 50, 250, 0}) {
+        std::cout << "Password dialog delay=" << delay << '\n' << std::flush;
+        state.delay_ms.store(delay);
+        invoke(L"TrainingDataButton");
+        fill(L"wrong");
+        invoke(L"繼續", true);
+        await_ui([&] { return static_cast<bool>(find(L"密碼錯誤或資料處理失敗，請重試。", true)); },
+                 "Wrong password did not finish");
+        // A failed operation must release the button event so Cancel works.
+        invoke(L"取消", true);
+        wait_closed();
+        invoke(L"TrainingDataButton");
+        fill(L"test");
+        invoke(L"繼續", true);
+        DWORD_PTR response = 0;
+        require(SendMessageTimeoutW(window, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 1000, &response) != 0,
+                "UI message loop blocked during decryption");
+        wait_closed();
+        require(state.worker_thread.load() != GetWindowThreadProcessId(window, nullptr),
+                "Decryption ran on the UI thread");
+        invoke(L"DialogPrimaryButton");
+    }
+    require(llavon_settings_ui_stop() == 0, "Password dialog shutdown failed");
+    automation.Reset();
+    CoUninitialize();
+    DeactivateActCtx(0, cookie);
+    ReleaseActCtx(activation);
+    std::cout << "PASS: password failure, cancel, reopen, background decryption and success\n";
+}
 
 void test_hidden_startup(std::wstring_view scenario) {
     std::wstring executable(32768, L'\0');
@@ -148,14 +285,24 @@ int main(int argc, char** argv) {
             std::cout << "PASS: settings menu first show with hidden process startup\n";
             return 0;
         }
+        const bool password_test = argc > 1 && std::string_view(argv[1]) == "settings-password";
+        PasswordTestState password_state;
         const llavon_settings_inference_device cpu{
             LLAVON_SETTINGS_BACKEND_CPU, LLAVON_SETTINGS_DEVICE_CPU, u"cpu", u"CPU", u"CPU", 0};
         require(llavon_settings_ui_configure_v6(
                     &cpu, 1, LLAVON_SETTINGS_BACKEND_CPU, u"cpu", &cpu, 0, 0, save_inference, nullptr, u"", save_model,
                     nullptr, nullptr, 0, save_names, nullptr, 0, save_width, nullptr, nullptr, 0, refresh_training,
-                    nullptr, delete_training, nullptr, get_history, nullptr, start_training, nullptr, get_status,
-                    nullptr, model_action, nullptr, cancel_training, nullptr, protection, nullptr) == 0,
+                    password_test ? &password_state : nullptr, delete_training, nullptr, get_history, nullptr, start_training, nullptr, get_status,
+                    password_test ? &password_state : nullptr, model_action, nullptr, cancel_training, nullptr,
+                    protection, password_test ? &password_state : nullptr) == 0,
                 "Settings configuration failed");
+
+        if (password_test) {
+            require(llavon_settings_ui_configure_lora_base_models_v1(get_base_models, nullptr) == 0,
+                    "Cannot configure base model catalog");
+            test_password_dialog(password_state);
+            return 0;
+        }
 
         const bool settings_first = argc > 1 && std::string_view(argv[1]) == "settings-first";
         const bool menu_first = argc > 1 && std::string_view(argv[1]) == "settings-menu-first";
