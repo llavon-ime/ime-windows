@@ -147,20 +147,21 @@ void queue_and_snapshot_test() {
 
 void prediction_display_test() {
     tsf::CompositionBuffer buffer;
+    buffer.set_immediate_conversion(true);
     buffer.add(u'ㄋ');
     buffer.add(u'ㄧ');
     require(buffer.to_string() == u"ㄋㄧ", "incomplete reading was converted");
     buffer.add(u'ˇ');
     const auto local = buffer.to_string();
-    require(local.size() == 1, "default display did not use the local candidate");
-    require(!buffer.waiting_for_prediction(), "default mode blocked local conversion");
-    buffer.set_wait_for_prediction(true);
-    require(buffer.waiting_for_prediction(), "enabling waiting accepted an unpredicted candidate");
+    require(local.size() == 1, "immediate display did not use the local candidate");
+    require(!buffer.waiting_for_prediction(), "immediate mode blocked local conversion");
+    buffer.set_immediate_conversion(false);
+    require(buffer.waiting_for_prediction(), "disabling immediate conversion accepted an unpredicted candidate");
     buffer.clear();
     buffer.add(u'ㄋ');
     buffer.add(u'ㄧ');
     buffer.add(u'ˇ');
-    require(buffer.to_string() == u"ㄋㄧˇ" && buffer.caret_offset() == 3,
+    require(buffer.to_string() == u"ㄋㄧ" && buffer.caret_offset() == 2,
             "waiting display or caret did not retain the reading");
     require(buffer.waiting_for_prediction(), "unpredicted syllable allowed commit");
     require(!buffer.current_has_candidate_list(), "local candidates could bypass prediction waiting");
@@ -176,7 +177,7 @@ void prediction_display_test() {
     require(snapshot.has_value(), "waiting display prevented prediction");
     worker.predict(1, u"blocked", *snapshot);
     state->entered.wait();
-    require(buffer.to_string() == u"ㄋㄧˇ", "blocked prediction changed the display");
+    require(buffer.to_string() == u"ㄋㄧ", "blocked prediction changed the display");
     require(buffer.waiting_for_prediction(), "in-flight prediction allowed commit");
     state->release.signal();
     notified.wait();
@@ -193,12 +194,12 @@ void prediction_display_test() {
     buffer.add(u'ㄋ');
     buffer.add(u'ㄧ');
     buffer.add(u'ˇ');
-    require(buffer.to_string() == u"新ㄋㄧˇ" && buffer.caret_offset() == 4,
+    require(buffer.to_string() == u"新ㄋㄧ" && buffer.caret_offset() == 3,
             "typing another syllable changed existing Hanzi");
     const auto second = buffer.prediction_snapshot();
     buffer.add(u'ㄅ');
     require(!buffer.apply_prediction(*second, *second), "stale result changed the waiting display");
-    require(buffer.to_string() == u"新ㄋㄧˇㄅ", "typing during prediction was blocked");
+    require(buffer.to_string() == u"新ㄋㄧㄅ", "typing during prediction was blocked");
     require(buffer.waiting_for_prediction(), "stale result released commit waiting");
     buffer.remove_last();
     const auto failed = buffer.prediction_snapshot();
@@ -209,7 +210,7 @@ void prediction_display_test() {
     require(failure && !failure->succeeded, "fake failure was accepted as success");
     require(!buffer.apply_prediction(*failed, std::move(failure->padding)),
             "failed prediction was applied as a local fallback");
-    require(buffer.to_string() == u"新ㄋㄧˇ" && buffer.waiting_for_prediction(),
+    require(buffer.to_string() == u"新ㄋㄧ" && buffer.waiting_for_prediction(),
             "failed prediction released the reading or allowed commit");
     require(!buffer.current_has_candidate_list(), "failure exposed local candidates");
     ResetEvent(notified.handle);

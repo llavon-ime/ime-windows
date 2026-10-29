@@ -107,8 +107,8 @@ void SettingsUiLoader::configure(
     SaveCustomNames save_custom_names,
     bool shift_space_width_toggle_enabled,
     SaveWidthToggleSetting save_width_toggle,
-    bool wait_for_prediction_enabled,
-    SaveWaitForPrediction save_wait_for_prediction,
+    bool immediate_conversion_enabled,
+    SaveImmediateConversion save_immediate_conversion,
     bool gpu_boost_enabled,
     SaveGpuBoost save_gpu_boost,
     bool major_update_notifications_enabled,
@@ -164,8 +164,8 @@ void SettingsUiLoader::configure(
     save_custom_names_ = std::move(save_custom_names);
     shift_space_width_toggle_enabled_ = shift_space_width_toggle_enabled;
     save_width_toggle_ = std::move(save_width_toggle);
-    wait_for_prediction_enabled_ = wait_for_prediction_enabled;
-    save_wait_for_prediction_ = std::move(save_wait_for_prediction);
+    immediate_conversion_enabled_ = immediate_conversion_enabled;
+    save_immediate_conversion_ = std::move(save_immediate_conversion);
     gpu_boost_enabled_ = gpu_boost_enabled;
     save_gpu_boost_ = std::move(save_gpu_boost);
     major_update_notifications_enabled_ = major_update_notifications_enabled;
@@ -262,8 +262,8 @@ bool SettingsUiLoader::load() {
         module_, "llavon_settings_ui_configure_update_notifications");
     configure_gpu_boost_ = resolve<ConfigureGpuBoostFunction>(
         module_, "llavon_settings_ui_configure_gpu_boost");
-    configure_wait_for_prediction_ = resolve<ConfigureWaitForPredictionFunction>(
-        module_, "llavon_settings_ui_configure_wait_for_prediction");
+    configure_immediate_conversion_ = resolve<ConfigureImmediateConversionFunction>(
+        module_, "llavon_settings_ui_configure_immediate_conversion");
     configure_model_preparation_ = resolve<ConfigureModelPreparationFunction>(
         module_, "llavon_settings_ui_configure_model_preparation_v2");
     configure_lora_base_models_ = resolve<ConfigureLoraBaseModelsFunction>(
@@ -275,7 +275,7 @@ bool SettingsUiLoader::load() {
     const auto set_pending_count = resolve<SetPendingCountFunction>(
         module_, "llavon_settings_ui_set_pending_count");
     if (!configure_ || !configure_update_notifications_ || !configure_gpu_boost_ ||
-        !configure_wait_for_prediction_ ||
+        !configure_immediate_conversion_ ||
         !configure_model_preparation_ || !configure_lora_base_models_ || !start_ || !show_ ||
         !show_context_menu_ || !stop_ ||
         !set_pending_count ||
@@ -285,7 +285,7 @@ bool SettingsUiLoader::load() {
         configure_ = nullptr;
         configure_update_notifications_ = nullptr;
         configure_gpu_boost_ = nullptr;
-        configure_wait_for_prediction_ = nullptr;
+        configure_immediate_conversion_ = nullptr;
         configure_model_preparation_ = nullptr;
         configure_lora_base_models_ = nullptr;
         start_ = nullptr;
@@ -378,9 +378,9 @@ bool SettingsUiLoader::configure_module() {
            configure_gpu_boost_(
                gpu_boost_enabled_ ? 1 : 0,
                save_gpu_boost_trampoline, this) == 0 &&
-           configure_wait_for_prediction_(
-               wait_for_prediction_enabled_ ? 1 : 0,
-               save_wait_for_prediction_trampoline, this) == 0 &&
+           configure_immediate_conversion_(
+               immediate_conversion_enabled_ ? 1 : 0,
+               save_immediate_conversion_trampoline, this) == 0 &&
            configure_update_notifications_(
                major_update_notifications_enabled_ ? 1 : 0,
                save_update_notifications_trampoline, this) == 0;
@@ -688,14 +688,14 @@ std::int32_t SettingsUiLoader::save_width_toggle_trampoline(
     }
 }
 
-std::int32_t SettingsUiLoader::save_wait_for_prediction_trampoline(
+std::int32_t SettingsUiLoader::save_immediate_conversion_trampoline(
     void* context, std::int32_t enabled) noexcept {
     auto* self = static_cast<SettingsUiLoader*>(context);
-    if (!self || !self->save_wait_for_prediction_) return ERROR_INVALID_FUNCTION;
+    if (!self || !self->save_immediate_conversion_) return ERROR_INVALID_FUNCTION;
     try {
         const bool value = enabled != 0;
-        if (!self->save_wait_for_prediction_(value)) return ERROR_WRITE_FAULT;
-        self->wait_for_prediction_enabled_ = value;
+        if (!self->save_immediate_conversion_(value)) return ERROR_WRITE_FAULT;
+        self->immediate_conversion_enabled_ = value;
         return ERROR_SUCCESS;
     } catch (...) {
         return ERROR_WRITE_FAULT;

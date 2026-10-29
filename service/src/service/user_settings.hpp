@@ -19,7 +19,7 @@ struct UserSettings {
     std::string model_path;
     std::vector<CustomNameSetting> custom_names;
     bool shift_space_width_toggle_enabled = false;
-    bool wait_for_prediction_enabled = false;
+    bool immediate_conversion_enabled = false;
     bool gpu_boost_enabled = true;
     bool major_update_notifications_enabled = true;
 };
@@ -32,7 +32,7 @@ bool save_model_path(std::string model_path) noexcept;
 bool save_custom_names(
     const std::vector<CustomNameSetting>& custom_names) noexcept;
 bool save_shift_space_width_toggle_setting(bool enabled) noexcept;
-bool save_wait_for_prediction_setting(bool enabled) noexcept;
+bool save_immediate_conversion_setting(bool enabled) noexcept;
 bool save_gpu_boost_setting(bool enabled) noexcept;
 bool save_major_update_notifications_setting(bool enabled) noexcept;
 

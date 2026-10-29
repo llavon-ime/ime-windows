@@ -56,9 +56,9 @@ struct SettingsConfiguration {
     llavon_settings_save_custom_names_callback save_custom_names_callback = nullptr;
     void* save_custom_names_context = nullptr;
     bool shift_space_width_toggle_enabled = false;
-    bool wait_for_prediction_enabled = false;
-    llavon_settings_save_wait_for_prediction_callback save_wait_for_prediction_callback = nullptr;
-    void* save_wait_for_prediction_context = nullptr;
+    bool immediate_conversion_enabled = false;
+    llavon_settings_save_immediate_conversion_callback save_immediate_conversion_callback = nullptr;
+    void* save_immediate_conversion_context = nullptr;
     bool gpu_boost_enabled = true;
     llavon_settings_save_gpu_boost_callback save_gpu_boost_callback = nullptr;
     void* save_gpu_boost_context = nullptr;

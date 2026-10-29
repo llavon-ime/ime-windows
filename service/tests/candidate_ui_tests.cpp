@@ -296,7 +296,7 @@ int main(int argc, char** argv) {
                     password_test ? &password_state : nullptr, model_action, nullptr, cancel_training, nullptr,
                     protection, password_test ? &password_state : nullptr) == 0,
                 "Settings configuration failed");
-        require(llavon_settings_ui_configure_wait_for_prediction(0, save_width, nullptr) == 0,
+        require(llavon_settings_ui_configure_immediate_conversion(0, save_width, nullptr) == 0,
                 "Prediction display configuration failed");
 
         if (password_test) {

@@ -83,15 +83,15 @@ public:
         return ERROR_SUCCESS;
     }
 
-    int32_t configure_wait_for_prediction(
-        bool enabled, llavon_settings_save_wait_for_prediction_callback save_callback,
+    int32_t configure_immediate_conversion(
+        bool enabled, llavon_settings_save_immediate_conversion_callback save_callback,
         void* save_context) {
         std::lock_guard lock(mutex_);
         if (settings_client_.connected) return ERROR_BUSY;
         if (!save_callback) return ERROR_INVALID_PARAMETER;
-        configuration_.wait_for_prediction_enabled = enabled;
-        configuration_.save_wait_for_prediction_callback = save_callback;
-        configuration_.save_wait_for_prediction_context = save_context;
+        configuration_.immediate_conversion_enabled = enabled;
+        configuration_.save_immediate_conversion_callback = save_callback;
+        configuration_.save_immediate_conversion_context = save_context;
         return ERROR_SUCCESS;
     }
 
@@ -551,11 +551,11 @@ extern "C" int32_t llavon_settings_ui_configure_gpu_boost(
         enabled != 0, save_callback, save_context);
 }
 
-extern "C" int32_t llavon_settings_ui_configure_wait_for_prediction(
+extern "C" int32_t llavon_settings_ui_configure_immediate_conversion(
     int32_t enabled,
-    llavon_settings_save_wait_for_prediction_callback save_callback,
+    llavon_settings_save_immediate_conversion_callback save_callback,
     void* save_context) {
-    return llavon::settings::runtime().configure_wait_for_prediction(
+    return llavon::settings::runtime().configure_immediate_conversion(
         enabled != 0, save_callback, save_context);
 }
 

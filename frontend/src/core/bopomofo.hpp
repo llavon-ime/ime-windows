@@ -307,12 +307,6 @@ struct BopomofoPos {
         utf8::append16(c, s);
         return s;
     }
-    std::u16string display(bool wait_for_prediction) const {
-        if (wait_for_prediction && conversion_pending && !chosen) {
-            return to_bopomofo_string();
-        }
-        return current();
-    }
     char32_t current32() const {
         if (!is_compositable()) {
             throw std::logic_error("not compositable");
@@ -322,11 +316,15 @@ struct BopomofoPos {
     }
 
 public:
-    std::u16string to_bopomofo_string() const {
+    std::u16string to_toneless_bopomofo_string() const {
         std::u16string res;
         if (initial) res.push_back(initial);
         if (medial) res.push_back(medial);
         if (final) res.push_back(final);
+        return res;
+    }
+    std::u16string to_bopomofo_string() const {
+        auto res = to_toneless_bopomofo_string();
         if (tone) res.push_back(tone);
         return res;
     }

@@ -364,9 +364,9 @@ int main(int argc, char* argv[]) {
             [](bool enabled) {
                 return llavon::service::save_shift_space_width_toggle_setting(enabled);
             },
-            user_settings.wait_for_prediction_enabled,
+            user_settings.immediate_conversion_enabled,
             [](bool enabled) {
-                return llavon::service::save_wait_for_prediction_setting(enabled);
+                return llavon::service::save_immediate_conversion_setting(enabled);
             },
             user_settings.gpu_boost_enabled,
             [&server](bool enabled) {

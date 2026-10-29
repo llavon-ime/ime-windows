@@ -35,7 +35,14 @@ class CompositionBuffer {
     std::vector<BopomofoPos> buffer;
     std::mutex mutex;
     int idx = -1;
-    bool wait_for_prediction_enabled_ = false;
+    bool immediate_conversion_enabled_ = false;
+
+    std::u16string display(const BopomofoPos& item) const {
+        if (!immediate_conversion_enabled_ && item.conversion_pending && !item.chosen) {
+            return item.to_toneless_bopomofo_string();
+        }
+        return item.current();
+    }
 
     int candidate_target_index() const {
         if (buffer.empty()) return -1;
@@ -54,11 +61,11 @@ class CompositionBuffer {
     }
 
 public:
-    void set_wait_for_prediction(bool enabled) noexcept {
-        wait_for_prediction_enabled_ = enabled;
+    void set_immediate_conversion(bool enabled) noexcept {
+        immediate_conversion_enabled_ = enabled;
     }
     bool waiting_for_prediction() const noexcept {
-        return wait_for_prediction_enabled_ && std::ranges::any_of(buffer, [](const auto& item) {
+        return !immediate_conversion_enabled_ && std::ranges::any_of(buffer, [](const auto& item) {
             return item.conversion_pending;
         });
     }
@@ -131,7 +138,7 @@ public:
     size_t caret_offset() const {
         size_t offset = 0;
         for (int i = 0; i <= idx && i < static_cast<int>(buffer.size()); i++) {
-            offset += buffer[i].display(wait_for_prediction_enabled_).size();
+            offset += display(buffer[i]).size();
         }
         return offset;
     }
@@ -142,9 +149,9 @@ public:
 
         size_t start = 0;
         for (int i = 0; i < idx; i++) {
-            start += buffer[i].display(wait_for_prediction_enabled_).size();
+            start += display(buffer[i]).size();
         }
-        return std::pair{start, buffer[idx].display(wait_for_prediction_enabled_).size()};
+        return std::pair{start, display(buffer[idx]).size()};
     }
     void add(char16_t ch) {
         std::lock_guard lock(mutex);
@@ -219,7 +226,7 @@ public:
     std::u16string to_string() const {
         std::u16string res;
         for (const auto& item : buffer) {
-            res += item.display(wait_for_prediction_enabled_);
+            res += display(item);
         }
         return res;
     }
@@ -228,7 +235,7 @@ public:
         sample.context = std::move(context);
         sample.input.reserve(buffer.size());
         for (const auto& item : buffer) {
-            const auto output = item.display(wait_for_prediction_enabled_);
+            const auto output = display(item);
             sample.answer += output;
             sample.input.push_back(CommitInputEntry{
                 .reading = item.to_bopomofo_string(),

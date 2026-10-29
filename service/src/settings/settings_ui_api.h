@@ -185,7 +185,7 @@ typedef int32_t (*llavon_settings_save_width_toggle_callback)(
 typedef int32_t (*llavon_settings_save_gpu_boost_callback)(
     void* context, int32_t enabled);
 
-typedef int32_t (*llavon_settings_save_wait_for_prediction_callback)(
+typedef int32_t (*llavon_settings_save_immediate_conversion_callback)(
     void* context, int32_t enabled);
 typedef int32_t (*llavon_settings_save_update_notifications_callback)(
     void* context, int32_t enabled);
@@ -276,9 +276,9 @@ LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_lora_base_models_v1(
     llavon_settings_get_lora_base_models_callback callback, void* context);
 
 // Configures prediction display before the settings UI starts.
-LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_wait_for_prediction(
+LLAVON_SETTINGS_UI_API int32_t llavon_settings_ui_configure_immediate_conversion(
     int32_t enabled,
-    llavon_settings_save_wait_for_prediction_callback save_callback,
+    llavon_settings_save_immediate_conversion_callback save_callback,
     void* save_context);
 
 // Configures the major update notification setting before the settings UI starts.

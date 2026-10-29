@@ -1003,11 +1003,11 @@ void SettingsWindow::build_page() {
             full_width_note.Visibility(Visibility::Visible);
         });
 
-    const auto prediction_toggle = named<ToggleSwitch>(shell_, L"WaitForPredictionToggle");
-    auto saved_prediction = std::make_shared<bool>(configuration_.wait_for_prediction_enabled);
+    const auto prediction_toggle = named<ToggleSwitch>(shell_, L"ImmediateConversionToggle");
+    auto saved_prediction = std::make_shared<bool>(configuration_.immediate_conversion_enabled);
     auto updating_prediction = std::make_shared<bool>(false);
     prediction_toggle.IsOn(*saved_prediction);
-    const auto prediction_note = named<TextBlock>(shell_, L"WaitForPredictionNote");
+    const auto prediction_note = named<TextBlock>(shell_, L"ImmediateConversionNote");
     prediction_toggle.Toggled(
         [this, prediction_note, saved_prediction, updating_prediction](
             const auto& sender, const auto&) {
@@ -1015,9 +1015,9 @@ void SettingsWindow::build_page() {
             const auto toggle = sender.template as<ToggleSwitch>();
             const bool enabled = toggle.IsOn();
             if (enabled == *saved_prediction) return;
-            const auto result = configuration_.save_wait_for_prediction_callback
-                ? configuration_.save_wait_for_prediction_callback(
-                      configuration_.save_wait_for_prediction_context, enabled ? 1 : 0)
+            const auto result = configuration_.save_immediate_conversion_callback
+                ? configuration_.save_immediate_conversion_callback(
+                      configuration_.save_immediate_conversion_context, enabled ? 1 : 0)
                 : ERROR_INVALID_FUNCTION;
             if (result == ERROR_SUCCESS) {
                 *saved_prediction = enabled;

@@ -69,7 +69,7 @@ bool has_private_input_scope(ITfContext* context, TfEditCookie cookie,
 
 struct InputSettings {
     bool shift_space_width_toggle_enabled = false;
-    bool wait_for_prediction_enabled = false;
+    bool immediate_conversion_enabled = false;
 };
 
 InputSettings load_input_settings() noexcept {
@@ -897,7 +897,7 @@ void TextService::sync_input_mode_compartments(InputMode mode) {
 
 void TextService::refresh_input_settings() {
     const auto settings = load_input_settings();
-    compositionBuffer.set_wait_for_prediction(settings.wait_for_prediction_enabled);
+    compositionBuffer.set_immediate_conversion(settings.immediate_conversion_enabled);
     const bool enabled = settings.shift_space_width_toggle_enabled;
     if (!enabled && shift_space_width_toggle_enabled_ && full_width_mode_) {
         full_width_mode_ = false;
