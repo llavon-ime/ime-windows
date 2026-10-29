@@ -75,7 +75,7 @@
 
 ## 隱私
 
-所有推論都在本機執行。本軟體沒有自己的伺服器、資料庫或遙測，不會上傳任何輸入內容；唯一的對外連線是下載模型、LoRA Trainer 與檢查更新。
+所有推論都在本機執行。本軟體沒有自己的伺服器、資料庫或遙測，不會上傳任何輸入內容；唯一的對外連線是下載模型、LoRA Trainer 與其 CUDA 加速元件，以及檢查更新。
 
 ### 輸入紀錄與加密
 
@@ -152,7 +152,7 @@
 
 - 首次打包需要網路，以取得 vcpkg 相依套件與 WiX 工具。
 - `setup.exe` 不包含模型檔，只記錄 Hugging Face 模型的 revision、大小與 SHA-256；安裝時才下載至 `%ProgramData%\Llavon IME\models`，若既有檔案驗證相符則略過下載。
-- LoRA Trainer 同樣不打包，可在訓練視窗選擇 CPU、CUDA 或 ROCm 版本下載。
+- LoRA Trainer 同樣不打包。開啟訓練視窗時只會檢查版本，使用者按下安裝後才下載 CPU 版訓練器；要用 NVIDIA 顯示卡訓練，可再另外安裝 CUDA 加速元件（約 3 GB）。Windows 版不提供 ROCm；如果你需要 ROCm 支援，請[開一個 issue](https://github.com/llavon-ime/ime-windows/issues) 讓我知道，我再來補上。
 - 安裝器與 MSI 的內部版號固定為 `1.0.0`，CalVer 只用於 GitHub 發布 tag 與 `latest.json`，因此改版不需要重新 configure。
 
 ## 授權

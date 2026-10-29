@@ -73,7 +73,7 @@ WiX Burn bundle，內含上述 MSI 與一個小型模型下載輔助程式：
 
 模型放在安裝目錄之外，所以升級或重裝 MSI 不會刪除模型。
 
-LoRA Trainer 不打包進安裝檔。CMake 只記錄 LoRA Trainer 子模組的 commit；使用者開啟訓練視窗時，才從對應的 `commit-<SHA>` Release 下載 CPU 版 ZIP，需要 GPU 加速時可再另外下載 CUDA 元件。
+LoRA Trainer 不打包進安裝檔。CMake 只記錄 LoRA Trainer 子模組的 commit。使用者開啟訓練視窗時，背景服務只讀取對應 `commit-<SHA>` Release 的 manifest 來檢查版本；按下安裝後，才下載並驗證 CPU 版 ZIP（`win-x64-cpu`）。需要 NVIDIA GPU 加速時，可再另外安裝 CUDA 加速元件，由訓練器從 NuGet 下載。Windows 版不提供 ROCm。
 
 ## 發布與自動更新
 
