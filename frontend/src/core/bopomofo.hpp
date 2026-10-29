@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
-#include <source_location>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -210,7 +209,7 @@ private:
         return std::nullopt;
     }
 
-    static std::filesystem::path resolve_mapping_file(std::source_location loc = std::source_location::current()) {
+    static std::filesystem::path resolve_mapping_file() {
         std::vector<std::filesystem::path> candidates;
 
         if (auto tables_dir = env_path(L"LLAVON_IME_TABLES_DIR")) {
@@ -220,15 +219,6 @@ private:
         if (auto module_dir = dll_dir()) {
             candidates.push_back(module_dir->parent_path() / "tables" / "bopomofo_char.json");
         }
-
-        std::filesystem::path this_file = std::filesystem::path(loc.file_name()).lexically_normal();
-        if (this_file.is_relative()) {
-            this_file = std::filesystem::absolute(this_file).lexically_normal();
-        }
-
-        const std::filesystem::path project_root = this_file.parent_path().parent_path().parent_path().parent_path();
-        candidates.push_back(project_root / "ime-core" / "table" / "bopomofo_char.json");
-        candidates.push_back(project_root / "tables" / "bopomofo_char.json");
 
         if (const auto mapping_file = first_existing_file(candidates)) {
             return *mapping_file;

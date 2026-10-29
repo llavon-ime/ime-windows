@@ -131,14 +131,6 @@ if(LLAVON_LORA_SUBMODULE_COMMIT STREQUAL "unknown")
     message(FATAL_ERROR "Unable to identify the pinned LoRA Trainer submodule commit")
 endif()
 
-set(LLAVON_IME_SERVICE_STARTUP_LAUNCHER
-    "${CMAKE_CURRENT_BINARY_DIR}/start-llavon-ime-service.vbs"
-)
-file(GENERATE
-    OUTPUT "${LLAVON_IME_SERVICE_STARTUP_LAUNCHER}"
-    CONTENT "Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\nSet shell = CreateObject(\"WScript.Shell\")\r\nbinDir = fso.GetParentFolderName(WScript.ScriptFullName)\r\nexePath = fso.BuildPath(binDir, \"llavon-ime-service.exe\")\r\nshell.Run Chr(34) & exePath & Chr(34), 0, False\r\n"
-)
-
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
     "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt"
@@ -302,10 +294,6 @@ install(DIRECTORY
 )
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/ime-core/table/"
     DESTINATION tables
-    COMPONENT Runtime
-)
-install(PROGRAMS "${LLAVON_IME_SERVICE_STARTUP_LAUNCHER}"
-    DESTINATION bin
     COMPONENT Runtime
 )
 install(FILES

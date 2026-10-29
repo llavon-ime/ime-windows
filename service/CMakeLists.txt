@@ -123,6 +123,8 @@ target_link_libraries(llavon-ime-service PRIVATE
     reflectcpp::reflectcpp utf8cpp::utf8cpp unofficial-sodium::sodium
     unofficial::sqlite3::sqlite3 advapi32 bcrypt comctl32 d3d11 dwmapi dxgi
     gdi32 ole32 oleaut32 runtimeobject shell32 ws2_32)
+set_target_properties(llavon-ime-service PROPERTIES WIN32_EXECUTABLE YES)
+target_link_options(llavon-ime-service PRIVATE /ENTRY:mainCRTStartup)
 
 if(BUILD_TESTING)
     add_executable(prediction-display-settings-tests

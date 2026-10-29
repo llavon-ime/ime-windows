@@ -9,7 +9,7 @@
           Key="Software\Microsoft\Windows\CurrentVersion\Run"
           Name="Llavon IME Backend"
           Type="string"
-          Value="&quot;[SystemFolder]wscript.exe&quot; &quot;[INSTALL_ROOT]bin\start-llavon-ime-service.vbs&quot;"
+          Value="&quot;[INSTALL_ROOT]bin\llavon-ime-service.exe&quot;"
           KeyPath="yes" />
       </Component>
     </DirectoryRef>

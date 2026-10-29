@@ -116,7 +116,6 @@ Toast 需要安裝程式建立的開始功能表捷徑，直接執行建置目�
     llavon-ime.dll                 TSF 前端
     llavon-ime-service.exe         背景服務（含設定與候選字視窗）
     llavon-ime-debugger.exe        診斷工具
-    start-llavon-ime-service.vbs   開機啟動用
     （Windows App SDK 執行階段 DLL 與資源）
   tables/
     bopomofo_char.json
@@ -141,7 +140,6 @@ Windows App SDK 以自含方式部署在 `bin/` 中，使用者不需要另外�
 
 1. 環境變數 `LLAVON_IME_TABLES_DIR`
 2. `bin/../tables`
-3. 開發版會退回原始碼目錄
 
 前端與服務透過 `\\.\pipe\llavon-ime` 溝通。連不上時，前端會自行啟動服務（優先使用 `LLAVON_IME_SERVICE_PATH`，否則找 DLL 旁的 `llavon-ime-service.exe`）再重試。候選字視窗使用另一條 `\\.\pipe\llavon-ime-candidate-ui`。
 

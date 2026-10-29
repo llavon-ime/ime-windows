@@ -75,12 +75,6 @@ private:
     HANDLE handle_ = nullptr;
 };
 
-void print_usage(const char* executable) {
-    std::cerr << "Usage: " << executable << " [<model-path> <tables-dir>]\n";
-    std::cerr << "When no arguments are provided, paths are resolved from "
-                 "LLAVON_IME_MODEL_PATH/LLAVON_IME_TABLES_DIR or the installed layout.\n";
-}
-
 std::optional<std::filesystem::path> environment_path(const wchar_t* name) {
     const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
     if (required == 0) {
@@ -202,7 +196,6 @@ llavon::ime::core::CoreConfig parse_core_config(int argc, char* argv[]) {
         return config;
     }
 
-    print_usage(argv[0]);
     throw std::invalid_argument("invalid command line");
 }
 
@@ -225,11 +218,6 @@ int main(int argc, char* argv[]) {
     }
     try {
         const llavon::service::ProcessMta process_mta;
-        if (argc == 2 && std::string(argv[1]) == "--help") {
-            print_usage(argv[0]);
-            return 0;
-        }
-
         const bool show_settings = argc == 2 && std::string(argv[1]) == "--settings";
         const int service_argc = show_settings ? 1 : argc;
 
@@ -563,11 +551,6 @@ int main(int argc, char* argv[]) {
         return server_result;
     } catch (const winrt::hresult_error& error) {
         std::cerr << "[ERR] WinUI startup failed: " << winrt::to_string(error.message()) << '\n';
-        return 1;
-    } catch (const std::invalid_argument& error) {
-        if (std::string(error.what()) != "invalid command line") {
-            std::cerr << "[ERR] fatal: " << error.what() << '\n';
-        }
         return 1;
     } catch (const std::exception& error) {
         std::cerr << "[ERR] fatal: " << error.what() << '\n';
