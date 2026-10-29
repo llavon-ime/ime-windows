@@ -95,6 +95,7 @@ private:
     void begin_update_check();
     void apply_update_result(UpdateCheckResult result);
     void begin_update_install();
+    void start_update_download();
     void apply_update_install_event(UpdateInstallEvent event);
     void deactivate_update_target() noexcept;
     void discard_pending_update_results() noexcept;
@@ -184,6 +185,7 @@ private:
     UpdateChecker update_checker_;
     UpdateInstaller update_installer_;
     std::optional<SetupAsset> available_setup_;
+    bool install_after_check_ = false;
 };
 
 }  // namespace llavon::settings

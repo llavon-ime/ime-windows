@@ -3384,7 +3384,9 @@ void SettingsWindow::begin_update_check() {
 }
 
 void SettingsWindow::apply_update_result(UpdateCheckResult result) {
-    if (!update_button_ || !update_status_ || !update_install_) {
+    const bool install_after_check = std::exchange(install_after_check_, false);
+    if (!update_button_ || !update_status_ || !update_install_ ||
+        update_installer_.installing()) {
         return;
     }
 
@@ -3452,9 +3454,20 @@ void SettingsWindow::apply_update_result(UpdateCheckResult result) {
             update_install_.Visibility(Visibility::Collapsed);
             break;
     }
+
+    if (install_after_check && available_setup_) {
+        start_update_download();
+    }
 }
 
 void SettingsWindow::begin_update_install() {
+    if (!available_setup_ || !update_target_ || update_installer_.installing()) return;
+
+    install_after_check_ = true;
+    begin_update_check();
+}
+
+void SettingsWindow::start_update_download() {
     if (!available_setup_ || !update_target_) return;
 
     update_button_.IsEnabled(false);
