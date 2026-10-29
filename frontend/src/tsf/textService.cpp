@@ -1268,8 +1268,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     e2e_trace.mode_started = std::chrono::steady_clock::now();
     // Keep this in sync with OnTestKeyDown: temporary Shift-English input must
     // take exactly the same handling path as the regular English mode.
-    const bool english_mode =
-        read_backend_input_mode() == InputMode::English || key_down(VK_SHIFT);
+    const auto input_mode = read_backend_input_mode();
+    const bool temporary_english = input_mode == InputMode::Chinese && key_down(VK_SHIFT);
+    const bool english_mode = input_mode == InputMode::English || temporary_english;
     e2e_trace.mode_finished = std::chrono::steady_clock::now();
     if (!english_mode && backtick_shortcut_key(wParam) && !backtick_used_as_modifier_) {
         backtick_used_as_modifier_ = true;
@@ -1288,14 +1289,25 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         return S_OK;
     }
 
-    if (english_mode && compositionBuffer.empty()) {
+    if (english_mode) {
         if (const auto text = printable_key_text(wParam, lParam)) {
-            insert_text(pContext, full_width_mode_ ? to_full_width_ascii(*text) : *text);
+            candidate_ui_->hide();
+            const bool discarded_reading = temporary_english && compositionBuffer.discard_current_reading();
+            const auto output = full_width_mode_ ? to_full_width_ascii(*text) : *text;
+            if (compositionBuffer.empty()) {
+                if (discarded_reading && itfComposition) discard_composition(pContext);
+                insert_text(pContext, output);
+            } else {
+                for (const char16_t ch : output) {
+                    compositionBuffer.add_chosen_candidate(ch);
+                }
+                set_composition_text(pContext, compositionBuffer.to_string());
+            }
             *pfEaten = TRUE;
             return S_OK;
         }
 
-        return S_OK;
+        if (compositionBuffer.empty()) return S_OK;
     }
 
     auto symbol = shifted_printable_symbol_text(wParam, lParam);
@@ -1317,19 +1329,6 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         set_composition_text(pContext, compositionBuffer.to_string());
         *pfEaten = TRUE;
         return S_OK;
-    }
-
-    if (english_mode) {
-        if (const auto text = printable_key_text(wParam, lParam)) {
-            candidate_ui_->hide();
-            const auto output = full_width_mode_ ? to_full_width_ascii(*text) : *text;
-            for (const char16_t ch : output) {
-                compositionBuffer.add_chosen_candidate(ch);
-            }
-            set_composition_text(pContext, compositionBuffer.to_string());
-            *pfEaten = TRUE;
-            return S_OK;
-        }
     }
 
     if (full_width_mode_ && compositionBuffer.empty() && !english_mode) {
@@ -1499,8 +1498,8 @@ STDMETHODIMP TextService::OnKeyUp(ITfContext* pContext, WPARAM wParam, LPARAM /*
                 engine_worker_->cached_input_mode() == InputMode::Chinese;
             if (engine_worker_) engine_worker_->toggle_input_mode();
             const auto mode = refresh_input_mode_indicator();
-            // Only an explicit Shift switch drops the unfinished reading. Keep
-            // converted text and syllables waiting for the backend intact.
+            // A Shift switch drops the unfinished reading, just like temporary
+            // Shift-English input. Keep converted text and pending syllables.
             if (was_chinese && mode == InputMode::English &&
                 composition_belongs_to(pContext) && compositionBuffer.discard_current_reading()) {
                 candidate_ui_->hide();
