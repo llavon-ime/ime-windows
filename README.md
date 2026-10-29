@@ -78,19 +78,19 @@
 
 ## 開發者資訊
 
-專案主要分為以下元件：
+### 專案結構
 
-- `frontend`：Windows TSF 輸入法前端，負責組字、選字狀態與輸入法註冊。
-- `service`：本機背景服務，負責模型推論、設定視窗、候選字視窗與程序生命週期。
-- `ime-core`：跨平台 C++ 推論函式庫，負責模型載入、tokenization 與 llama.cpp 推論。
-- `debugger`：供開發與診斷使用的多程序記錄檢視器。
-- `cmake`：模型下載、WiX 安裝檔與第三方授權檔案的建置腳本。
+| 目錄 | 說明 |
+| --- | --- |
+| `frontend` | Windows TSF 輸入法前端，負責組字、選字狀態與輸入法註冊 |
+| `service` | 本機背景服務，負責模型推論、設定視窗、候選字視窗與程序生命週期 |
+| `ime-core` | 跨平台 C++ 推論函式庫，負責模型載入、tokenization 與 llama.cpp 推論 |
+| `debugger` | 開發與診斷用的多程序記錄檢視器 |
+| `cmake` | 模型下載、WiX 安裝檔與第三方授權檔案的建置腳本 |
 
-前端與背景服務透過 Windows Named Pipe 通訊，Windows targets 則由頂層 CMake 統一建置。更完整的打包與執行路徑說明請參考 [PACKAGING.md](PACKAGING.md)。
+前端與背景服務透過 Windows Named Pipe 通訊，所有 Windows targets 由頂層 CMake 統一建置。打包與執行路徑的詳細說明請見 [PACKAGING.md](PACKAGING.md)。
 
-### 從原始碼建置
-
-建置環境需要：
+### 建置環境
 
 - Windows 10 或更新版本（x64）
 - Visual Studio 2022 Build Tools，並安裝「使用 C++ 的桌面開發」工作負載
@@ -98,37 +98,40 @@
 - .NET 8 SDK
 - Git
 
-先取得原始碼與子模組：
+### 從原始碼建置
 
-```powershell
-git clone --recurse-submodules https://github.com/llavon-ime/ime-windows.git
-cd ime-windows
-./vcpkg/bootstrap-vcpkg.bat -disableMetrics
-```
+1. 取得原始碼與子模組，並初始化 vcpkg：
 
-建置各元件，產物會輸出至 `build/windows/bin`：
+   ```powershell
+   git clone --recurse-submodules https://github.com/llavon-ime/ime-windows.git
+   cd ime-windows
+   ./vcpkg/bootstrap-vcpkg.bat -disableMetrics
+   ```
 
-```powershell
-cmake --preset windows
-cmake --build --preset windows --parallel
-```
+2. Configure（只需執行一次）：
 
-產生 MSI 安裝檔：
+   ```powershell
+   cmake --preset windows -DLLAVON_IME_WIX_ACCEPT_EULA=ON
+   ```
 
-```powershell
-cmake --build --preset package --parallel
-```
+   打包需要接受 WiX 7 的 [EULA 與維護費條款](https://docs.firegiant.com/wix/osmf/)；只建置程式時可省略 `-DLLAVON_IME_WIX_ACCEPT_EULA=ON`。
 
-完成後，安裝檔位於：
+3. 依需求選擇建置目標：
 
-```text
-build/windows/llavon-ime-1.0.0-windows.msi
-build/windows/llavon-ime-1.0.0-setup.exe
-```
+   | 目的 | 指令 | 產物 |
+   | --- | --- | --- |
+   | 只建置程式 | `cmake --build --preset windows --parallel` | `build/windows/bin/` |
+   | MSI 安裝檔 | `cmake --build --preset package --parallel` | `build/windows/llavon-ime-1.0.0-windows.msi` |
+   | Web installer（`setup.exe`） | `cmake --build build/windows --config Release --target llavon-ime-setup --parallel` | `build/windows/llavon-ime-1.0.0-setup.exe` |
 
-安裝器與 MSI 的內部版號固定為 `1.0.0`；CalVer 只用於 GitHub 發布 tag 與其 `latest.json` 發布資訊。從舊的 CalVer 安裝器轉換時，須先從 Windows「已安裝的應用程式」解除安裝舊的安裝套件一次（選顯示 CalVer 的項目，不是舊版另外顯示的 MSI）；否則 WiX 會把 `1.0.0` 視為降版。新安裝套件只會顯示一個解除安裝項目。本機之後只需執行 `cmake --build build/windows --config Release --target llavon-ime-setup --parallel`，不必為版號重新 configure。
+   `llavon-ime-setup` 會一併建置 MSI，因此要發布時直接建置這個 target 即可。
 
-建置 `*-setup.exe` 時會記錄 Hugging Face 模型 revision、大小及 SHA-256，模型檔不會打包進安裝檔。安裝時會下載至 `%ProgramData%\Llavon IME\models`；同一模型更新時會驗證既有檔案並略過下載。LoRA Trainer 可在訓練視窗選擇 CPU、CUDA 或 ROCm 版本下載。首次打包仍需從網路取得 vcpkg 相依套件及 WiX 工具。
+### 打包注意事項
+
+- 首次打包需要網路，以取得 vcpkg 相依套件與 WiX 工具。
+- `setup.exe` 不包含模型檔，只記錄 Hugging Face 模型的 revision、大小與 SHA-256；安裝時才下載至 `%ProgramData%\Llavon IME\models`，若既有檔案驗證相符則略過下載。
+- LoRA Trainer 同樣不打包，可在訓練視窗選擇 CPU、CUDA 或 ROCm 版本下載。
+- 安裝器與 MSI 的內部版號固定為 `1.0.0`，CalVer 只用於 GitHub 發布 tag 與 `latest.json`，因此改版不需要重新 configure。
 
 ## 授權
 

@@ -1,107 +1,98 @@
-# 打包
+# 打包與發布
 
-頂層 CMake 專案在同一份建置設定中編譯所有 Windows 執行檔與 DLL，再透過 CPack 和 WiX 產生 MSI。CI 另外將 MSI 與小型模型下載輔助程式封裝成 WiX Burn 網路安裝程式。跨平台的 `ime-core` 儲存庫仍是子模組，但會以一般靜態函式庫目標參與建置。
+這份文件說明如何從原始碼產生安裝檔、安裝檔做了哪些事，以及 CI 發布與自動更新的運作方式。一般開發只需看「快速開始」。
 
-## 前置需求
+## 產物總覽
 
-- CMake 3.31 或更新版本。
-- 已安裝 C++ 工作負載的 Visual Studio Build Tools。
-- 已安裝 .NET SDK，且可從 `PATH` 執行 `dotnet`。
+| 產物 | 建置 target | 說明 |
+| --- | --- | --- |
+| 程式本體 | `llavon-ime-artifacts`（preset `windows`） | 輸出至 `build/windows/bin/`，可直接用於開發測試 |
+| `llavon-ime-1.0.0-windows.msi` | `llavon-ime-msi`（preset `package`） | 獨立 MSI，**不含模型**，適合系統管理部署 |
+| `llavon-ime-1.0.0-setup.exe` | `llavon-ime-setup` | Web installer，內含 MSI 與模型下載輔助程式，一般使用者用這個 |
 
-打包前，CMake 會從 NuGet 還原 WiX 至 `build/windows/.wix-tools`，並將 WiX UI 擴充套件安裝至建置目錄內的快取，因此不需要安裝全域的 WiX。
+所有產物都在 `build/windows/` 下。`llavon-ime-setup` 會先建置 MSI，因此要發布只需建置它即可。
 
-本專案使用 WiX 7 建置安裝檔。WiX 7 要求建置者明確接受其 [EULA 與維護費條款](https://docs.firegiant.com/wix/osmf/)；確認條款後，打包時在 CMake 設定指令加入 `-DLLAVON_IME_WIX_ACCEPT_EULA=ON`。此設定會在還原 WiX 時執行 `wix eula accept wix7`。專案的 GitHub Actions 已設定接受條款。
+## 快速開始
 
-設定介面與系統匣設定選單使用原生 WinUI 3 XAML Islands。候選字視窗繼續使用作業系統提供的 UWP XAML Islands。`cmake/WinUI3.cmake` 使用 Microsoft 實驗性 Windows App SDK CMake 目標與固定版本的 NuGetCMakePackage 輔助程式；套件版本和內容雜湊記錄於 `cmake/winui3.packages.lock.json`。專案不需要手寫 Visual Studio 方案或專案檔，也不需要自行維護 PowerShell 建置指令碼。Microsoft 的套件輔助程式可能會在內部呼叫 PowerShell 轉換資訊清單。
+需要的工具：Visual Studio 2022 Build Tools（C++ 桌面開發）、CMake 3.31+、.NET 8 SDK（`dotnet` 需在 `PATH` 中）。WiX 會在建置時自動從 NuGet 下載到建置目錄，不需全域安裝。
 
-第一次執行 CMake 設定時會還原 NuGet 套件。WinUI 產生 C++ 投影程式碼時需要 WebView2 中繼資料，但這些介面只使用原生 XAML 控制項，不會建立或部署 WebView2 瀏覽器執行階段。設定介面的 DLL 會在自己的 STA 啟用內嵌資訊清單，並明確解析原生控制項的 PRI。CMake 會將可獨立部署的 Windows App SDK DLL、PRI 檔案、資產及語言資源複製並安裝在後端程式旁邊，使用者不必另外安裝 Windows App Runtime。
+```powershell
+# 第一次：初始化 vcpkg 並 configure
+./vcpkg/bootstrap-vcpkg.bat -disableMetrics
+cmake --preset windows -DLLAVON_IME_WIX_ACCEPT_EULA=ON
 
-XAML 原始檔位於 `service/src/settings/ui/`，並以資源形式嵌入設定介面的 DLL。執行時 API 與設定回呼維持不變。只建置這些 UI 目標時，執行：
+# 只建置程式
+cmake --build --preset windows --parallel
+
+# 建置 MSI
+cmake --build --preset package --parallel
+
+# 建置 setup.exe（含 MSI）
+cmake --build build/windows --config Release --target llavon-ime-setup --parallel
+```
+
+只改 UI 時，可以只建置 UI DLL：
 
 ```powershell
 cmake --build build/windows --config Release --target llavon-ime-settings-ui llavon-ime-candidate-ui --parallel
 ```
 
-## 選擇正確的建置指令
-
-Windows preset 透過 `VCPKG_INSTALL_OPTIONS=--x-abi-tools-use-exact-versions`，讓 vcpkg 使用子模組 `scripts/vcpkg-tools.json` 指定的 CMake 與 PowerShell 版本。baseline 固定依賴版本，但預設工具選擇仍可能採用 runner 上較新的 PowerShell；該版本也參與每個套件的 ABI hash，會造成整批快取失效。固定工具版本可避免這類無關程式碼的重編，首次切換仍可能需要建立新的套件快取。
-
-這個選項不會固定 MSVC，也不會關閉編譯器 ABI 檢查；編譯器或依賴真正變更時仍會重編。CI 保留映像版本作為快取儲存 key，並允許從舊映像還原相容套件。每次 Configure 後會上傳 `llavon-ime-vcpkg-abi` artifact；若再次發生非預期重編，先比較前後的 `vcpkg_abi_info.txt` 與 `detect_compiler` 紀錄，確認變動的是 `powershell`、`cmake`、`triplet_abi` 或其他輸入，而非直接修改 cache key。
-
-不同目標會產生不同成品。特別注意，`package` 預設組態只會重新建置獨立 MSI，**不會**重新建置留在建置目錄中的 `*-setup.exe`。
-
-只建置程式、不打包：
-
-```powershell
-cmake --preset windows
-cmake --build --preset windows --parallel
-```
-
-如果先前設定 `build/windows` 時未明確指定 Visual Studio 平台，請先執行一次 `cmake --fresh --preset windows`。Windows App SDK 的 CMake 目標需要 `CMAKE_GENERATOR_PLATFORM=x64` 才能找到匯入函式庫。
-
-建置獨立 MSI：
-
-```powershell
-cmake --preset windows -DLLAVON_IME_WIX_ACCEPT_EULA=ON
-cmake --build --preset package --parallel
-```
-
-建置內含 MSI、並可下載預設模型的網路安裝程式：
-
-```powershell
-cmake --preset windows -DLLAVON_IME_WIX_ACCEPT_EULA=ON
-cmake --build build/windows --config Release --target llavon-ime-setup --parallel
-```
-
-CI 會將固定的模型修訂版本、SHA-256 和檔案大小提供給安裝程式建置流程。本機建置安裝程式時，會從 Hugging Face 取得相同的中繼資料。
-
 > [!WARNING]
-> 如果安裝程式建置失敗，CMake 可能會在 `build/windows` 留下先前產生的 `*-setup.exe`。不要假設該檔案已更新；安裝前請檢查修改時間。
+> `package` preset 只會重建 MSI，**不會**更新 `build/windows` 裡既有的 `setup.exe`。另外，`setup.exe` 建置失敗時舊檔會留在原地，安裝前請先確認檔案修改時間。
 
-## 建置 MSI
+## 建置選項
 
-獨立 MSI 包含應用程式與授權文件，但不含 GGUF 模型。一般安裝請使用網路安裝程式。若以受管理方式部署 MSI，必須另外提供 GGUF 模型，或在設定中指定模型路徑。
+| CMake 選項 | 預設 | 說明 |
+| --- | --- | --- |
+| `LLAVON_IME_WIX_ACCEPT_EULA` | `OFF` | 打包必須開啟。WiX 7 要求建置者接受其 [EULA 與維護費條款](https://docs.firegiant.com/wix/osmf/)；開啟後會自動執行 `wix eula accept wix7`。CI 已開啟。 |
+| `LLAVON_IME_ENABLE_CUDA` | `OFF` | 額外加入 CUDA 後端。需安裝 CUDA Toolkit，且 vcpkg 要能找到 `nvcc`。 |
+| `LLAVON_IME_MODEL_SHA256` / `LLAVON_IME_MODEL_SIZE` | 空 | `setup.exe` 要下載的模型雜湊與大小。CI 會傳入固定值；本機留空時會從 Hugging Face 取得。 |
 
-```powershell
-cmake --preset windows -DLLAVON_IME_WIX_ACCEPT_EULA=ON
-cmake --build --preset package
-```
+預設建置包含 CPU 與 Vulkan 後端（`vcpkg.json` 的預設 feature `llama-vulkan`），使用者可在設定中選擇推論裝置。CPU 後端會將各指令集版本都編成可載入模組，執行時才挑選最快且相容的版本，所以 AVX2 與 AVX-512 電腦共用同一份安裝檔。
 
-標準建置預設停用 CUDA，因此不需要 CUDA Toolkit。若要讓 `ime-core` 使用 CUDA 後端，請在建置前啟用 CUDA 設定：
+## 安裝檔做了什麼
 
-```powershell
-cmake --preset windows -DLLAVON_IME_ENABLE_CUDA=ON -DLLAVON_IME_WIX_ACCEPT_EULA=ON
-cmake --build --preset package
-```
+### MSI
 
-啟用 CUDA 時，必須安裝 CUDA Toolkit，並讓 vcpkg 可以找到 `nvcc`。
+- 安裝至整台電腦（x64），內容為 `bin/`、`tables/`、`licenses/`。
+- 以 `regsvr32` 註冊 `llavon-ime.dll`，解除安裝時取消註冊。
+- 新增後端服務的開機自動啟動項目。
+- 新增開始功能表的解除安裝捷徑（同時帶有 Toast 通知需要的 AppUserModelID）。
+- 授權協議包含本專案、`ime-core`、vcpkg 套件授權，以及模型的 CC BY-NC 4.0 條款。
+- 解除安裝時清除安裝目錄內殘留的檔案與空目錄。
 
-`package` 目標會執行下列工作：
+安裝前會先停止後端服務。MSI 設定 `MSIRESTARTMANAGERCONTROL=DisableShutdown`：會偵測檔案占用，但不會強制關閉仍載入 DLL 的應用程式，被占用的檔案會在重新開機後替換。
 
-- 從同一份 CMake 設定建置前端 DLL、後端執行檔、UI DLL 與除錯工具執行檔。
-- 將後端程式直接連結至 `ime-core` 靜態函式庫目標。
-- 從 NuGet 將 WiX `4.0.4` 還原至建置目錄。
-- 將 `WixToolset.UI.wixext` 安裝至建置目錄內的 WiX 擴充套件快取。
-- 收集統一 manifest 安裝項目中的 vcpkg 套件授權文件。
-- 將模型來源聲明與 CC BY-NC 4.0 條款納入 MSI 授權協議，並另行安裝為授權文件。
-- 將 `bin`、`tables` 與 `licenses` 打包為適用於整台電腦的 x64 MSI。
-- 安裝時以 `regsvr32` 註冊 `llavon-ime.dll`，解除安裝時取消註冊。
-- 新增適用於整台電腦的後端開機啟動項目，並在解除安裝時移除。
-- 新增開始功能表解除安裝捷徑，透過 Windows Installer 移除已安裝的產品。其提權後執行的 TSF 取消註冊與檔案移除流程，和從 Windows 設定或維護模式解除安裝時相同。
-- 解除安裝時，清除舊版建置或執行時診斷在已知安裝目錄留下的檔案，再移除空的安裝目錄。
-- 如果具名管道無法使用，前端也會視需要啟動後端。
+### setup.exe
 
-MSI 輸出路徑：
+WiX Burn bundle，內含上述 MSI 與一個小型模型下載輔助程式：
 
-```text
-build/windows/llavon-ime-1.0.0-windows.msi
-```
+1. 下載建置時指定的 GGUF 模型，驗證大小與 SHA-256。
+2. 存放至 `%ProgramData%\Llavon IME\models\<revision>`；若已有相同且完整的檔案則略過下載。
+3. 安裝 MSI。
 
-GitHub Actions 會以亞洲／台北時區的 `YYYY.MM.DD.<1000+GITHUB_RUN_NUMBER>` CalVer 格式發布版本，寫入版本化的 `v<CalVer>` GitHub Release 與 `latest.json`。MSI 和安裝程式的內部版本固定為 `1.0.0`。
+模型放在安裝目錄之外，所以升級或重裝 MSI 不會刪除模型。
 
-設定頁面開啟時會檢查 `latest.json`，但只有使用者點擊「立即更新」才會開始安裝。第 1 版資訊清單也記錄安裝程式資產在版本化發行版中的網址、位元組大小及 SHA-256。網址取自實際發布的資產名稱，因此更改安裝程式執行檔名稱不需要修改更新程式。設定介面的 DLL 會將安裝程式下載至使用者的 LocalAppData，驗證大小與 SHA-256，再以 `runas` 啟動 WiX Burn 安裝套件，並傳入 `-quiet -norestart`。Windows 可能顯示 UAC 提示；WiX 不會顯示安裝介面。
+LoRA Trainer 不打包進安裝檔。CMake 只記錄 LoRA Trainer 子模組的 commit；使用者開啟訓練視窗時，才從對應的 `commit-<SHA>` Release 下載 CPU 版 ZIP，需要 GPU 加速時可再另外下載 CUDA 元件。
 
-要將某次主分支發布標為重大更新，在**該次發布的最後一筆提交**訊息末尾加上 Git trailer，例如：
+## 發布與自動更新
+
+### 版本號
+
+- CI 以台北時區產生 CalVer：`YYYY.MM.DD.<1000 + GITHUB_RUN_NUMBER>`，用於 GitHub Release tag（`v<CalVer>`）與 `latest.json`。
+- MSI 與 setup.exe 的內部版本固定為 `1.0.0`，本機改版不需要重新 configure。
+
+### 更新流程
+
+1. 設定頁面開啟時讀取 `latest.json`，其中記錄最新版 setup.exe 的網址、大小與 SHA-256。
+2. 使用者按下「立即更新」後，下載至 LocalAppData 並驗證大小與 SHA-256；不符則中止。
+3. 以 `runas` 啟動 setup.exe，帶入 `-quiet -norestart`。Windows 會跳出 UAC，但不會顯示安裝介面。
+
+更新資訊透過 HTTPS 從 GitHub Release 取得，`latest.json` 本身沒有另外簽章。
+
+### 重大更新通知
+
+要把某次發布標為重大更新，在主分支**該次發布的最後一筆 commit** 訊息末尾加上 trailer：
 
 ```text
 改善輸入法候選字與設定體驗
@@ -109,64 +100,67 @@ GitHub Actions 會以亞洲／台北時區的 `YYYY.MM.DD.<1000+GITHUB_RUN_NUMBE
 Major-Update: 候選字選取與自訂詞庫已全面更新，請開啟設定頁安裝新版。
 ```
 
-CI 會將這一行（最多 200 個字元）放入 `latest.json` 的 `major_update`，並加到該版 Release 說明。一般提交不加此行即可；不必手動編輯 Release。後續一般發布會在資訊清單保留最近一次重大更新，讓未及時檢查的舊版仍能收到通知。已安裝重大更新或更晚版本的使用者不會收到這則通知。常駐程式每次啟動後會在背景等待約 10 分鐘，接著檢查一次更新；這段等待與檢查不依賴視窗訊息迴圈。若仍有待安裝的重大更新且設定中的「更新通知」已開啟，便顯示通知；此開關預設開啟，關閉後不影響設定頁面的手動檢查更新。重新開機後會再次檢查。通知不會自動安裝更新。合併或 squash 時，請確認 `Major-Update:` 留在主分支最後一筆提交的訊息末尾。
+- 訊息最多 200 字元，且每次發布只能有一行，CI 會將它寫入 `latest.json` 的 `major_update` 與 Release 說明。
+- 之後的一般發布會保留最近一次重大更新，讓較晚檢查的舊版仍會收到通知；已經是該版或更新版本的使用者不會收到。
+- squash 或 merge 時，記得確認 trailer 仍在最後一筆 commit 的結尾。
 
-通知採用 Windows Toast 彈出介面，安裝器會建立帶有 AppUserModelID 的開始功能表捷徑；直接執行建置目錄中的服務程式沒有這個捷徑，無法顯示 Toast。目前未註冊通知中心歷史記錄所需的 COM 啟用程式，因此不保證通知在彈出視窗消失後仍保留於通知中心。
+後端啟動約 10 分鐘後會在背景檢查一次，若有尚未安裝的重大更新且使用者開啟「更新通知」（預設開啟），就顯示 Windows Toast 通知。通知不會自動安裝。
 
-在 MSI 開始計算檔案占用狀態前，生命週期輔助程式會停止後端，並要求 TSF 釋放輸入處理器。MSI 和 Burn 安裝套件都設定 `MSIRESTARTMANAGERCONTROL=DisableShutdown`，讓 Restart Manager 偵測檔案占用，但不要求它關閉仍載入 TSF DLL 的其他應用程式。先前使用 `Disable` 時，Windows Installer 會改用較慢的內建 FilesInUse 掃描；一次更新的紀錄顯示 `InstallValidate` 兩次各停留約 99 秒。如果應用程式仍持有舊 DLL，Windows Installer 可能將檔案替換延後至下次重新啟動 Windows。MSI 停止正在執行的後端後，已下載的安裝程式仍會繼續執行。
+Toast 需要安裝程式建立的開始功能表捷徑，直接執行建置目錄裡的服務程式不會顯示通知。目前沒有註冊通知中心需要的 COM 啟用程式，所以通知消失後不一定會留在通知中心。
 
-設定頁面的靜默更新不顯示安裝介面。以互動模式直接執行 `*-setup.exe` 時，Burn 也會略過「檔案使用中」對話框；被占用的檔案可能等到重新啟動 Windows 後才替換。直接執行獨立 MSI 時仍可能看到該對話框。下載中斷或檔案不符時，不會啟動安裝程式。更新資訊經 HTTPS 取自專案的 GitHub Release，並信任該來源；資訊清單沒有另外簽章。
-
-`*-setup.exe` bundle 內含核心 MSI 與小型模型下載輔助程式。輔助程式會下載建置時指定的 GGUF，驗證大小與 SHA-256，然後儲存至 `%ProgramData%\Llavon IME\models\<revision>`。後續安裝或更新時，會驗證並重複使用現有檔案。模型位於 MSI 安裝目錄之外，因此 MSI 升級不會移除模型。
-
-CMake 只嵌入固定的 LoRA Trainer 子模組提交版本，不會呼叫 LoRA 發行版 API。需要使用時，訓練對話框會從 `commit-<SHA>` 發行版取得資訊清單、驗證其提交版本，並安裝對應的 LoRA Trainer ZIP（CPU 版）。需要 NVIDIA GPU 訓練時，使用者可在對話框另外下載 CUDA 加速元件，由訓練器自行從 NuGet 取得。
-
-CI 會建置一份使用可載入 ggml CPU 後端的 CPU 安裝包。執行時 ggml 會選擇最快且相容的 CPU 版本，因此 AVX2 與 AVX-512 系統使用同一份 MSI。
-
-## 執行時路徑
-
-安裝後的目錄結構：
+## 安裝後的目錄結構
 
 ```text
 <install-root>/
   bin/
-    llavon-ime.dll
-    llavon-ime-service.exe
-    llavon-ime-debugger.exe
-    llavon-ime-candidate-ui.dll
-    llavon-ime-settings-ui.dll
-    start-llavon-ime-service.vbs
-  licenses/
-    LICENSE.txt
-    MODEL-LICENSE.txt
-    ime-core-LICENSE.txt
-    THIRD-PARTY-vcpkg-LICENSES.txt
-    vcpkg/
-      <package>.txt
+    llavon-ime.dll                 TSF 前端
+    llavon-ime-service.exe         背景服務
+    llavon-ime-settings-ui.dll     設定視窗
+    llavon-ime-candidate-ui.dll    候選字視窗
+    llavon-ime-debugger.exe        診斷工具
+    start-llavon-ime-service.vbs   開機啟動用
+    （Windows App SDK 執行階段 DLL 與資源）
   tables/
     bopomofo_char.json
     tokens/
-      bpmf.json
-      chars.json
-      latin.json
-      special_tokens.json
+  licenses/
 ```
 
-後端依下列順序決定路徑：
+Windows App SDK 以自含方式部署在 `bin/` 中，使用者不需要另外安裝 Windows App Runtime。
 
-- 命令列明確指定：`llavon-ime-service.exe <model-path> <tables-dir>`。
-- 環境變數：`LLAVON_IME_MODEL_PATH` 與 `LLAVON_IME_TABLES_DIR`。
-- 由 `%ProgramData%\Llavon IME\models\current.revision` 選出的已驗證模型；資料表位於 `bin/../tables`。
-- 如果 ProgramData 標記檔不存在，使用 `bin/../models` 中的舊版模型。
+### 路徑解析順序
 
-前端 DLL 依下列順序尋找 `bopomofo_char.json`：
+程式不依賴目前工作目錄，開發版與安裝版使用相同邏輯。
 
-- 環境變數：`LLAVON_IME_TABLES_DIR`。
-- 相對於已安裝 DLL 的 `bin/../tables`。
-- 開發版使用原始碼位置作為備援。
+**背景服務**找模型與字表：
 
-前端若無法連線至 `\\.\pipe\llavon-ime`，會嘗試以不帶參數的方式啟動後端，然後短暫重試連線。尋找後端執行檔時，會先檢查 `LLAVON_IME_SERVICE_PATH`，再使用前端 DLL 旁邊的 `llavon-ime-service.exe`。
+1. 命令列參數：`llavon-ime-service.exe <model-path> <tables-dir>`
+2. 環境變數：`LLAVON_IME_MODEL_PATH`、`LLAVON_IME_TABLES_DIR`
+3. `%ProgramData%\Llavon IME\models\current.revision` 指向的已驗證模型；字表為 `bin/../tables`
+4. 舊版位置 `bin/../models`
 
-因此，開發版與 MSI 安裝版都不依賴目前的工作目錄。
+**前端 DLL** 找 `bopomofo_char.json`：
 
-候選字顯示使用獨立的 `\\.\pipe\llavon-ime-candidate-ui` 傳輸管道。後端會在需要時載入 `llavon-ime-candidate-ui.dll`；該 DLL 管理安裝包唯一的候選字 HWND 與專用 STA 執行緒。
+1. 環境變數 `LLAVON_IME_TABLES_DIR`
+2. `bin/../tables`
+3. 開發版會退回原始碼目錄
+
+前端與服務透過 `\\.\pipe\llavon-ime` 溝通。連不上時，前端會自行啟動服務（優先使用 `LLAVON_IME_SERVICE_PATH`，否則找 DLL 旁的 `llavon-ime-service.exe`）再重試。候選字視窗使用另一條 `\\.\pipe\llavon-ime-candidate-ui`。
+
+## 疑難排解
+
+**Configure 時找不到 Windows App SDK 的匯入函式庫**
+舊的 `build/windows` 可能沒有指定平台。執行一次 `cmake --fresh --preset windows -DLLAVON_IME_WIX_ACCEPT_EULA=ON`。
+
+**vcpkg 每次都整批重編**
+preset 已設定 `--x-abi-tools-use-exact-versions`，讓 vcpkg 使用固定版本的 CMake 與 PowerShell，避免 runner 上工具升級改變 ABI hash。若仍發生非預期重編，下載 CI 的 `llavon-ime-vcpkg-abi` artifact，比較前後的 `vcpkg_abi_info.txt`，找出是哪個輸入變了（`powershell`、`cmake`、`triplet_abi` 等），不要直接改 cache key。
+
+**更新後輸入法還是舊版**
+被應用程式占用的 DLL 會在重新開機後才替換，請重新啟動 Windows。
+
+## 附錄：UI 技術說明
+
+- 設定視窗、系統匣選單與候選字視窗都使用 Windows App SDK（WinUI 3）XAML Islands。
+- XAML 原始檔位於 `service/src/settings/ui/`，以資源嵌入設定 UI DLL。
+- `cmake/WinUI3.cmake` 使用 Microsoft 實驗性的 Windows App SDK CMake 整合，套件版本與雜湊鎖定在 `cmake/winui3.packages.lock.json`。不需要 Visual Studio 方案檔。
+- 產生 C++/WinRT 投影時需要 WebView2 中繼資料，但程式本身不使用也不部署 WebView2。
