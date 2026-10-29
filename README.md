@@ -4,6 +4,8 @@
 
 所有輸入內容與模型推論都在電腦本機完成，不需要連線至雲端，也不會為了選字而上傳正在輸入的文字。
 
+本儲存庫為 Windows 版；Linux 與 macOS 版在 [ime-unix](https://github.com/llavon-ime/ime-unix)。
+
 > [!IMPORTANT]
 > 本專案仍在早期開發階段，功能、操作方式及安裝流程都可能變動。目前僅支援 x64 版本的 Windows 10 或更新版本。
 
@@ -156,3 +158,11 @@
 ## 授權
 
 本專案依 [BSD 2-Clause License](LICENSE) 授權。安裝檔也會一併收錄所使用之第三方套件授權資訊。
+
+## 社群
+
+官方網站：[llavon.org](https://www.llavon.org/)
+
+歡迎加入 Discord 與我們交流、回報問題或參與開發：
+
+**[加入 Llavon IME Discord](https://discord.gg/ShMtdZGcmZ)**
