@@ -83,6 +83,18 @@ public:
         return ERROR_SUCCESS;
     }
 
+    int32_t configure_wait_for_prediction(
+        bool enabled, llavon_settings_save_wait_for_prediction_callback save_callback,
+        void* save_context) {
+        std::lock_guard lock(mutex_);
+        if (settings_client_.connected) return ERROR_BUSY;
+        if (!save_callback) return ERROR_INVALID_PARAMETER;
+        configuration_.wait_for_prediction_enabled = enabled;
+        configuration_.save_wait_for_prediction_callback = save_callback;
+        configuration_.save_wait_for_prediction_context = save_context;
+        return ERROR_SUCCESS;
+    }
+
     int32_t configure_model_preparation(
         llavon_settings_prepare_model_callback callback, void* context,
         const char16_t* base_model_path) {
@@ -536,6 +548,14 @@ extern "C" int32_t llavon_settings_ui_configure_gpu_boost(
     llavon_settings_save_gpu_boost_callback save_callback,
     void* save_context) {
     return llavon::settings::runtime().configure_gpu_boost(
+        enabled != 0, save_callback, save_context);
+}
+
+extern "C" int32_t llavon_settings_ui_configure_wait_for_prediction(
+    int32_t enabled,
+    llavon_settings_save_wait_for_prediction_callback save_callback,
+    void* save_context) {
+    return llavon::settings::runtime().configure_wait_for_prediction(
         enabled != 0, save_callback, save_context);
 }
 

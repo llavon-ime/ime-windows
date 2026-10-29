@@ -141,7 +141,7 @@ private:
     InputMode read_backend_input_mode();
     InputMode refresh_input_mode_indicator(bool query_backend = true);
     void sync_input_mode_compartments(InputMode mode);
-    void refresh_width_toggle_setting();
+    void refresh_input_settings();
     bool context_accepts_input(ITfContext* context) const;
     bool composition_belongs_to(ITfContext* context) const;
     bool has_composition_state() const;

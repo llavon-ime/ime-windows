@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -34,6 +35,7 @@ class CompositionBuffer {
     std::vector<BopomofoPos> buffer;
     std::mutex mutex;
     int idx = -1;
+    bool wait_for_prediction_enabled_ = false;
 
     int candidate_target_index() const {
         if (buffer.empty()) return -1;
@@ -52,6 +54,14 @@ class CompositionBuffer {
     }
 
 public:
+    void set_wait_for_prediction(bool enabled) noexcept {
+        wait_for_prediction_enabled_ = enabled;
+    }
+    bool waiting_for_prediction() const noexcept {
+        return wait_for_prediction_enabled_ && std::ranges::any_of(buffer, [](const auto& item) {
+            return item.conversion_pending;
+        });
+    }
     bool pre() {
         if (idx < 0) return false;
         idx--;
@@ -109,6 +119,7 @@ public:
         return idx >= 0 && idx < static_cast<int>(buffer.size()) && buffer[idx].is_compositable();
     }
     bool current_has_candidate_list() const {
+        if (waiting_for_prediction()) return false;
         const int target = candidate_target_index();
         return target >= 0 && buffer[target].is_compositable() && buffer[target].get_candidates().size() > 1;
     }
@@ -120,7 +131,7 @@ public:
     size_t caret_offset() const {
         size_t offset = 0;
         for (int i = 0; i <= idx && i < static_cast<int>(buffer.size()); i++) {
-            offset += buffer[i].current().size();
+            offset += buffer[i].display(wait_for_prediction_enabled_).size();
         }
         return offset;
     }
@@ -131,9 +142,9 @@ public:
 
         size_t start = 0;
         for (int i = 0; i < idx; i++) {
-            start += buffer[i].current().size();
+            start += buffer[i].display(wait_for_prediction_enabled_).size();
         }
-        return std::pair{start, buffer[idx].current().size()};
+        return std::pair{start, buffer[idx].display(wait_for_prediction_enabled_).size()};
     }
     void add(char16_t ch) {
         std::lock_guard lock(mutex);
@@ -185,6 +196,10 @@ public:
     bool apply_prediction(const std::vector<BopomofoPos>& snapshot,
                           std::vector<BopomofoPos> result) {
         if (result.size() != buffer.size() || !matches_prediction(snapshot)) return false;
+        if (!std::ranges::all_of(result, [](const auto& item) {
+                return item.predicted && (item.chosen || !item.candidates.empty());
+            })) return false;
+        for (auto& item : result) item.conversion_pending = false;
         buffer = std::move(result);
         return true;
     }
@@ -204,7 +219,7 @@ public:
     std::u16string to_string() const {
         std::u16string res;
         for (const auto& item : buffer) {
-            res += item.current();
+            res += item.display(wait_for_prediction_enabled_);
         }
         return res;
     }
@@ -213,7 +228,7 @@ public:
         sample.context = std::move(context);
         sample.input.reserve(buffer.size());
         for (const auto& item : buffer) {
-            const auto output = item.current();
+            const auto output = item.display(wait_for_prediction_enabled_);
             sample.answer += output;
             sample.input.push_back(CommitInputEntry{
                 .reading = item.to_bopomofo_string(),

@@ -164,6 +164,22 @@ bool save_shift_space_width_toggle_setting(bool enabled) noexcept {
     }
 }
 
+bool save_wait_for_prediction_setting(bool enabled) noexcept {
+    try {
+        std::lock_guard lock(settings_mutex);
+        auto settings = load_settings_unlocked();
+        settings.wait_for_prediction_enabled = enabled;
+        return save_settings_unlocked(settings);
+    } catch (const std::exception& error) {
+        std::clog << "[SRV] unable to save prediction display setting: "
+                  << error.what() << '\n';
+        return false;
+    } catch (...) {
+        std::clog << "[SRV] unable to save prediction display setting\n";
+        return false;
+    }
+}
+
 bool save_gpu_boost_setting(bool enabled) noexcept {
     try {
         std::lock_guard lock(settings_mutex);

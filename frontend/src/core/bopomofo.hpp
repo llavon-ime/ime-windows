@@ -265,6 +265,8 @@ struct BopomofoPos {
     int choose_index = 0;
     bool chosen = false;     // fixed output supplied to subsequent predictions
     bool predicted = false;  // engine 預測
+    // Independent of prediction invalidation: already displayed Hanzi stay visible.
+    bool conversion_pending = false;
     bool manually_selected = false;
     bool compositable = false;
     bool invalid = false;
@@ -292,6 +294,7 @@ struct BopomofoPos {
             }
             compositable = true;
             candidates = *candi;
+            conversion_pending = true;
         }
         return true;
     }
@@ -303,6 +306,12 @@ struct BopomofoPos {
         std::u16string s;
         utf8::append16(c, s);
         return s;
+    }
+    std::u16string display(bool wait_for_prediction) const {
+        if (wait_for_prediction && conversion_pending && !chosen) {
+            return to_bopomofo_string();
+        }
+        return current();
     }
     char32_t current32() const {
         if (!is_compositable()) {
@@ -341,6 +350,7 @@ public:
         choose_index = 0;
         chosen = true;
         predicted = true;
+        conversion_pending = false;
         manually_selected = false;
         compositable = true;
         invalid = false;
@@ -351,6 +361,7 @@ public:
         choose_index = idx;
         chosen = true;
         predicted = true;
+        conversion_pending = false;
         manually_selected = true;
     }
     void choose_candidate(char32_t ch) {
@@ -363,6 +374,7 @@ public:
         }
         chosen = true;
         predicted = true;
+        conversion_pending = false;
     }
     const std::vector<char32_t>& get_candidates() const {
         if (!is_compositable()) {
@@ -382,6 +394,7 @@ public:
         invalid = false;
         chosen = false;
         predicted = false;
+        conversion_pending = false;
         manually_selected = false;
         predicted_candidate.reset();
         candidates.clear();

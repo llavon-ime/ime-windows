@@ -1003,6 +1003,34 @@ void SettingsWindow::build_page() {
             full_width_note.Visibility(Visibility::Visible);
         });
 
+    const auto prediction_toggle = named<ToggleSwitch>(shell_, L"WaitForPredictionToggle");
+    auto saved_prediction = std::make_shared<bool>(configuration_.wait_for_prediction_enabled);
+    auto updating_prediction = std::make_shared<bool>(false);
+    prediction_toggle.IsOn(*saved_prediction);
+    const auto prediction_note = named<TextBlock>(shell_, L"WaitForPredictionNote");
+    prediction_toggle.Toggled(
+        [this, prediction_note, saved_prediction, updating_prediction](
+            const auto& sender, const auto&) {
+            if (*updating_prediction) return;
+            const auto toggle = sender.template as<ToggleSwitch>();
+            const bool enabled = toggle.IsOn();
+            if (enabled == *saved_prediction) return;
+            const auto result = configuration_.save_wait_for_prediction_callback
+                ? configuration_.save_wait_for_prediction_callback(
+                      configuration_.save_wait_for_prediction_context, enabled ? 1 : 0)
+                : ERROR_INVALID_FUNCTION;
+            if (result == ERROR_SUCCESS) {
+                *saved_prediction = enabled;
+                prediction_note.Text(L"已儲存；切回輸入中的應用程式後套用。");
+            } else {
+                *updating_prediction = true;
+                toggle.IsOn(*saved_prediction);
+                *updating_prediction = false;
+                prediction_note.Text(L"無法儲存轉換顯示設定，請稍後再試。");
+            }
+            prediction_note.Visibility(Visibility::Visible);
+        });
+
     custom_names_panel_ = named<StackPanel>(shell_, L"CustomNamesPanel");
     add_custom_name_button_ = named<Button>(shell_, L"AddCustomNameButton");
     add_custom_name_button_.Click([this](const auto&, const auto&) { add_custom_name_row(); });

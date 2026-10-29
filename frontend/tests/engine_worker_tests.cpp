@@ -55,6 +55,10 @@ public:
             state_->entered.signal();
             state_->release.wait();
         }
+        if (context == u"failed") {
+            padding.front().candidates = {U'錯'};
+            throw std::runtime_error("fake transport failure");
+        }
         for (auto& entry : padding) {
             entry.candidates = {U'新', U'舊'};
             entry.predicted = true;
@@ -141,6 +145,93 @@ void queue_and_snapshot_test() {
     require(!buffer.prediction_snapshot(), "applied prediction remained dirty");
 }
 
+void prediction_display_test() {
+    tsf::CompositionBuffer buffer;
+    buffer.add(u'ㄋ');
+    buffer.add(u'ㄧ');
+    require(buffer.to_string() == u"ㄋㄧ", "incomplete reading was converted");
+    buffer.add(u'ˇ');
+    const auto local = buffer.to_string();
+    require(local.size() == 1, "default display did not use the local candidate");
+    require(!buffer.waiting_for_prediction(), "default mode blocked local conversion");
+    buffer.set_wait_for_prediction(true);
+    require(buffer.waiting_for_prediction(), "enabling waiting accepted an unpredicted candidate");
+    buffer.clear();
+    buffer.add(u'ㄋ');
+    buffer.add(u'ㄧ');
+    buffer.add(u'ˇ');
+    require(buffer.to_string() == u"ㄋㄧˇ" && buffer.caret_offset() == 3,
+            "waiting display or caret did not retain the reading");
+    require(buffer.waiting_for_prediction(), "unpredicted syllable allowed commit");
+    require(!buffer.current_has_candidate_list(), "local candidates could bypass prediction waiting");
+    require(buffer.commit_sample(u"").answer == buffer.to_string(),
+            "external commit sample did not match the visible reading");
+
+    auto state = std::make_shared<State>();
+    Event notified;
+    tsf::EngineWorker worker([state] { return std::make_unique<FakeEngine>(state); },
+                             [&] { notified.signal(); });
+    struct Release { State& state; ~Release() { state.release.signal(); } } release{*state};
+    const auto snapshot = buffer.prediction_snapshot();
+    require(snapshot.has_value(), "waiting display prevented prediction");
+    worker.predict(1, u"blocked", *snapshot);
+    state->entered.wait();
+    require(buffer.to_string() == u"ㄋㄧˇ", "blocked prediction changed the display");
+    require(buffer.waiting_for_prediction(), "in-flight prediction allowed commit");
+    state->release.signal();
+    notified.wait();
+    auto result = worker.take_prediction();
+    require(result && result->succeeded, "prediction failed");
+    require(buffer.apply_prediction(*snapshot, std::move(result->padding)), "prediction rejected");
+    require(buffer.to_string() == u"新" && buffer.caret_offset() == 1,
+            "completed prediction did not convert the reading and caret together");
+    require(!buffer.waiting_for_prediction() && buffer.current_has_candidate_list(),
+            "successful prediction did not allow commit and candidate selection");
+    buffer.invalidate_all_predictions();
+    require(buffer.to_string() == u"新", "invalidation reverted an existing Hanzi to reading");
+
+    buffer.add(u'ㄋ');
+    buffer.add(u'ㄧ');
+    buffer.add(u'ˇ');
+    require(buffer.to_string() == u"新ㄋㄧˇ" && buffer.caret_offset() == 4,
+            "typing another syllable changed existing Hanzi");
+    const auto second = buffer.prediction_snapshot();
+    buffer.add(u'ㄅ');
+    require(!buffer.apply_prediction(*second, *second), "stale result changed the waiting display");
+    require(buffer.to_string() == u"新ㄋㄧˇㄅ", "typing during prediction was blocked");
+    require(buffer.waiting_for_prediction(), "stale result released commit waiting");
+    buffer.remove_last();
+    const auto failed = buffer.prediction_snapshot();
+    ResetEvent(notified.handle);
+    worker.predict(2, u"failed", *failed);
+    notified.wait();
+    auto failure = worker.take_prediction();
+    require(failure && !failure->succeeded, "fake failure was accepted as success");
+    require(!buffer.apply_prediction(*failed, std::move(failure->padding)),
+            "failed prediction was applied as a local fallback");
+    require(buffer.to_string() == u"新ㄋㄧˇ" && buffer.waiting_for_prediction(),
+            "failed prediction released the reading or allowed commit");
+    require(!buffer.current_has_candidate_list(), "failure exposed local candidates");
+    ResetEvent(notified.handle);
+    worker.predict(3, u"retry", *failed);
+    notified.wait();
+    auto retry = worker.take_prediction();
+    require(retry && retry->succeeded && buffer.apply_prediction(*failed, std::move(retry->padding)),
+            "retry did not apply a successful prediction");
+    require(!buffer.waiting_for_prediction() && buffer.to_string() == u"新新",
+            "successful retry did not release commit waiting");
+    buffer.cur().set_choose_index(1);
+    require(buffer.to_string() == u"新舊", "predicted candidate could not be manually selected");
+    require(buffer.commit_sample(u"").answer == buffer.to_string(), "commit and sample disagree");
+
+    buffer.add(u'ㄋ');
+    buffer.add(u'ㄧ');
+    buffer.add(u'ˇ');
+    require(buffer.waiting_for_prediction(), "new syllable did not block commit again");
+    buffer.clear();
+    require(!buffer.waiting_for_prediction(), "cancelled composition remained blocked");
+}
+
 // A real synchronous ReadFile that never receives a reply verifies that
 // deactivation cancels outstanding I/O instead of hanging in thread::join().
 class SilentPipeEngine final : public FakeEngine {
@@ -185,6 +276,7 @@ void cancellation_test() {
 int main() {
     try {
         queue_and_snapshot_test();
+        prediction_display_test();
         cancellation_test();
         return 0;
     } catch (const std::exception& error) {

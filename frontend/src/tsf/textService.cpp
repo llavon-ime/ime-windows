@@ -67,31 +67,32 @@ bool has_private_input_scope(ITfContext* context, TfEditCookie cookie,
     return is_private;
 }
 
-struct WidthToggleSettings {
+struct InputSettings {
     bool shift_space_width_toggle_enabled = false;
+    bool wait_for_prediction_enabled = false;
 };
 
-bool load_width_toggle_setting() noexcept {
+InputSettings load_input_settings() noexcept {
     try {
         const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
-        if (required == 0) return false;
+        if (required == 0) return {};
 
         std::wstring local_app_data(required, L'\0');
         const DWORD copied = GetEnvironmentVariableW(
             L"LOCALAPPDATA", local_app_data.data(), required);
-        if (copied == 0 || copied >= required) return false;
+        if (copied == 0 || copied >= required) return {};
         local_app_data.resize(copied);
 
         const auto path = std::filesystem::path(local_app_data) /
                           L"Llavon IME" / L"settings.json";
         std::ifstream input(path, std::ios::binary);
-        if (!input) return false;
+        if (!input) return {};
 
         const auto settings = rfl::json::read<
-            WidthToggleSettings, rfl::DefaultIfMissing>(input);
-        return settings && settings->shift_space_width_toggle_enabled;
+            InputSettings, rfl::DefaultIfMissing>(input);
+        return settings ? settings.value() : InputSettings{};
     } catch (...) {
-        return false;
+        return {};
     }
 }
 
@@ -621,6 +622,7 @@ void TextService::queue_prediction(ITfContext* context, std::u16string preceding
     if (!engine_worker_ || !context) return;
     auto snapshot = compositionBuffer.prediction_snapshot();
     if (!snapshot) return;
+    if (compositionBuffer.waiting_for_prediction()) candidate_ui_->hide();
     trace.predict_started = std::chrono::steady_clock::now();
     PendingPrediction request{.sequence = ++prediction_sequence_,
                               .snapshot = std::move(*snapshot), .trace = trace};
@@ -757,7 +759,7 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
     start_engine_worker();
     threadMgr.copy_from(pThreadMgr);
     _tfClientId = tfClientId;
-    refresh_width_toggle_setting();
+    refresh_input_settings();
     candidate_ui_->attach(pThreadMgr, tfClientId);
 
     input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>(
@@ -812,8 +814,13 @@ void TextService::deactivate() {
     candidate_ui_->hide();
 
     if (itfComposition) {
-        itfComposition->EndComposition(TF_INVALID_COOKIE);
-        itfComposition = nullptr;
+        if (compositionBuffer.waiting_for_prediction() && composition_context_) {
+            const auto context = composition_context_;
+            discard_composition(context.get()) | win::check();
+        } else {
+            itfComposition->EndComposition(TF_INVALID_COOKIE);
+            itfComposition = nullptr;
+        }
     }
     clear_composition_state();
 
@@ -888,8 +895,10 @@ void TextService::sync_input_mode_compartments(InputMode mode) {
     set_compartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION, conversion_mode);
 }
 
-void TextService::refresh_width_toggle_setting() {
-    const bool enabled = load_width_toggle_setting();
+void TextService::refresh_input_settings() {
+    const auto settings = load_input_settings();
+    compositionBuffer.set_wait_for_prediction(settings.wait_for_prediction_enabled);
+    const bool enabled = settings.shift_space_width_toggle_enabled;
     if (!enabled && shift_space_width_toggle_enabled_ && full_width_mode_) {
         full_width_mode_ = false;
         if (threadMgr && _tfClientId != TF_CLIENTID_NULL) {
@@ -1005,7 +1014,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* /*pDocMgr*/) try {
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocumentMgr* /*pDocMgrPrevFocus*/) try {
     invalidate_prediction();
     forget_recent_commit();
-    refresh_width_toggle_setting();
+    refresh_input_settings();
     refresh_input_mode_indicator();
     return S_OK;
 } catch (...) {
@@ -1049,7 +1058,7 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pContext) try {
  */
 STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
     if (fForeground) {
-        refresh_width_toggle_setting();
+        refresh_input_settings();
         refresh_input_mode_indicator();
     } else {
         invalidate_prediction();
@@ -1211,9 +1220,15 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         return S_OK;
     }
 
+    if (compositionBuffer.waiting_for_prediction()) candidate_ui_->hide();
+
     if (has_composition_state() && !composition_belongs_to(pContext)) {
         if (itfComposition && composition_context_) {
             const HRESULT hr = end_composition(composition_context_.get());
+            if (hr == S_FALSE) {
+                *pfEaten = TRUE;
+                return S_OK;
+            }
             if (FAILED(hr)) {
                 clear_composition_state();
             }
@@ -1361,6 +1376,18 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     }
 
     if (wParam == VK_RETURN && !compositionBuffer.empty()) {
+        if (compositionBuffer.waiting_for_prediction()) {
+            // Retry a failed or superseded request without committing local candidates.
+            if (!pending_prediction_ || !prediction_is_current(*pending_prediction_)) {
+                e2e_trace.pre_context_started = std::chrono::steady_clock::now();
+                auto pre_context = get_pre_composit_context(pContext);
+                collection_context_ = pre_context;
+                e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
+                queue_prediction(pContext, std::move(pre_context), e2e_trace);
+            }
+            *pfEaten = TRUE;
+            return S_OK;
+        }
         end_composition(pContext);
         *pfEaten = TRUE;
         return S_OK;
@@ -1504,6 +1531,17 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext* /*pContext*/, REFGUID /*rgu
  */
 STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfComposition* pComposition) try {
     if (itfComposition && pComposition && !same_com_object(itfComposition.get(), pComposition)) {
+        return S_OK;
+    }
+    if (compositionBuffer.waiting_for_prediction()) {
+        // The host has already terminated composition; erase it instead of
+        // accepting unpredicted text or recording it as a training sample.
+        before_return cleanup([this]() { clear_composition_state(); });
+        if (pComposition) {
+            winrt::com_ptr<ITfRange> range;
+            pComposition->GetRange(range.put()) | win::check();
+            range->SetText(ecWrite, 0, L"", 0) | win::check();
+        }
         return S_OK;
     }
     if (!commit_reported_ && !compositionBuffer.empty()) {
@@ -1689,8 +1727,9 @@ HRESULT TextService::start_composition(ITfContext* pContext) {
  * Clears the current composition object and buffered text.
  */
 HRESULT TextService::end_composition(ITfContext* pContext) {
-    candidate_ui_->hide();
     if (!pContext) return E_INVALIDARG;
+    if (compositionBuffer.waiting_for_prediction()) return S_FALSE;
+    candidate_ui_->hide();
     if (!itfComposition) {
         clear_composition_state();
         return S_OK;

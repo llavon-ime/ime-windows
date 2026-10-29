@@ -155,6 +155,19 @@
             FontSize="12"
             TextWrapping="Wrap"
             Visibility="Collapsed"/>
+        <ToggleSwitch x:Name="WaitForPredictionToggle"
+            Header="等待預測後轉換"
+            OnContent="開啟"
+            OffContent="關閉"/>
+        <TextBlock Text="開啟後，完成音節先保留注音，預測完成後再顯示漢字；等待時仍可繼續輸入，但無法確認上屏。關閉時會先顯示字表預設字。"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            FontSize="12"
+            TextWrapping="Wrap"/>
+        <TextBlock x:Name="WaitForPredictionNote"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            FontSize="12"
+            TextWrapping="Wrap"
+            Visibility="Collapsed"/>
       </StackPanel>
 
       <TextBlock Text="自訂名字"

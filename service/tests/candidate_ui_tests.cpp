@@ -296,6 +296,8 @@ int main(int argc, char** argv) {
                     password_test ? &password_state : nullptr, model_action, nullptr, cancel_training, nullptr,
                     protection, password_test ? &password_state : nullptr) == 0,
                 "Settings configuration failed");
+        require(llavon_settings_ui_configure_wait_for_prediction(0, save_width, nullptr) == 0,
+                "Prediction display configuration failed");
 
         if (password_test) {
             require(llavon_settings_ui_configure_lora_base_models_v1(get_base_models, nullptr) == 0,

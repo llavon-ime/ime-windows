@@ -279,6 +279,19 @@ target_link_libraries(llavon-ime-candidate-ui PRIVATE
 )
 
 if(BUILD_TESTING)
+    add_executable(prediction-display-settings-tests
+        tests/prediction_display_settings_tests.cpp
+        src/service/user_settings_codec.cpp)
+    target_compile_features(prediction-display-settings-tests PRIVATE cxx_std_23)
+    target_compile_options(prediction-display-settings-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    set_target_properties(prediction-display-settings-tests PROPERTIES
+        CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+    target_include_directories(prediction-display-settings-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/ime-core/include")
+    target_link_libraries(prediction-display-settings-tests PRIVATE
+        reflectcpp::reflectcpp utf8cpp::utf8cpp)
+    add_test(NAME prediction-display-settings COMMAND prediction-display-settings-tests)
+
     option(LLAVON_IME_ENABLE_UI_TESTS "Run WinUI integration tests on an interactive Windows desktop" OFF)
     if(LLAVON_IME_ENABLE_UI_TESTS)
         add_executable(candidate-ui-tests tests/candidate_ui_tests.cpp tests/candidate_ui_tests.rc)

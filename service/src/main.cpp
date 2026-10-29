@@ -364,6 +364,10 @@ int main(int argc, char* argv[]) {
             [](bool enabled) {
                 return llavon::service::save_shift_space_width_toggle_setting(enabled);
             },
+            user_settings.wait_for_prediction_enabled,
+            [](bool enabled) {
+                return llavon::service::save_wait_for_prediction_setting(enabled);
+            },
             user_settings.gpu_boost_enabled,
             [&server](bool enabled) {
                 if (!llavon::service::save_gpu_boost_setting(enabled)) return false;
