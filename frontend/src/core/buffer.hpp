@@ -112,6 +112,16 @@ public:
 
         return removed;
     }
+    bool discard_current_reading() {
+        std::lock_guard lock(mutex);
+        if (idx < 0 || idx >= static_cast<int>(buffer.size()) || buffer[idx].is_compositable()) {
+            return false;
+        }
+
+        buffer.erase(buffer.begin() + idx);
+        --idx;
+        return true;
+    }
     void clear() {
         buffer.clear();
         idx = -1;

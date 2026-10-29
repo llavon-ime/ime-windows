@@ -1491,12 +1491,25 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
  *
  * Leaves key-up events unconsumed after key-down handling.
  */
-STDMETHODIMP TextService::OnKeyUp(ITfContext* /*pContext*/, WPARAM wParam, LPARAM /*lParam*/, BOOL* pfEaten) try {
+STDMETHODIMP TextService::OnKeyUp(ITfContext* pContext, WPARAM wParam, LPARAM /*lParam*/, BOOL* pfEaten) try {
     if (!pfEaten) return E_INVALIDARG;
     if (shift_key(wParam) && shift_toggle_pending_) {
         if (!shift_used_as_modifier_) {
+            const bool was_chinese = engine_worker_ &&
+                engine_worker_->cached_input_mode() == InputMode::Chinese;
             if (engine_worker_) engine_worker_->toggle_input_mode();
-            refresh_input_mode_indicator();
+            const auto mode = refresh_input_mode_indicator();
+            // Only an explicit Shift switch drops the unfinished reading. Keep
+            // converted text and syllables waiting for the backend intact.
+            if (was_chinese && mode == InputMode::English &&
+                composition_belongs_to(pContext) && compositionBuffer.discard_current_reading()) {
+                candidate_ui_->hide();
+                if (compositionBuffer.empty()) {
+                    discard_composition(pContext);
+                } else {
+                    set_composition_text(pContext, compositionBuffer.to_string());
+                }
+            }
         }
 
         shift_toggle_pending_ = false;

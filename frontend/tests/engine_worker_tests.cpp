@@ -145,6 +145,48 @@ void queue_and_snapshot_test() {
     require(!buffer.prediction_snapshot(), "applied prediction remained dirty");
 }
 
+void discard_reading_test() {
+    tsf::CompositionBuffer buffer;
+    require(!buffer.discard_current_reading(), "empty composition discarded a reading");
+    buffer.add(u'ㄋ');
+    buffer.add(u'ㄧ');
+    require(buffer.discard_current_reading() && buffer.empty() && buffer.caret_offset() == 0,
+            "unfinished syllable was not discarded as a whole");
+
+    buffer.add_chosen_candidate(U'你');
+    buffer.add(u'ㄏ');
+    buffer.add(u'ㄠ');
+    require(buffer.discard_current_reading() && buffer.to_string() == u"你" && buffer.caret_offset() == 1,
+            "discarding a reading changed the preceding converted text");
+    require(!buffer.discard_current_reading() && buffer.to_string() == u"你",
+            "converted text was discarded");
+
+    buffer.add(u'ㄋ');
+    buffer.add(u'ㄧ');
+    buffer.add(u'ˇ');
+    const auto pending = buffer.prediction_snapshot();
+    require(pending.has_value(), "completed syllable has no prediction snapshot");
+    require(!buffer.discard_current_reading() && buffer.matches_prediction(*pending) &&
+                buffer.waiting_for_prediction(),
+            "completed syllable waiting for the backend was discarded");
+    buffer.add(u'ㄏ');
+    buffer.add(u'ㄠ');
+    require(buffer.discard_current_reading() && buffer.matches_prediction(*pending),
+            "discarding the unfinished syllable changed a pending prediction");
+
+    buffer.clear();
+    buffer.add_chosen_candidate(U'你');
+    buffer.add(u'ㄏ');
+    buffer.add(u'ㄠ');
+    buffer.add_chosen_candidate(U'！');
+    buffer.pre();
+    require(buffer.discard_current_reading() && buffer.to_string() == u"你！" && buffer.caret_offset() == 1,
+            "discarding a reading inside composition changed surrounding text or caret");
+    buffer.pre();
+    require(!buffer.discard_current_reading() && buffer.to_string() == u"你！",
+            "discarding at the start of composition changed the text");
+}
+
 void prediction_display_test() {
     tsf::CompositionBuffer buffer;
     buffer.set_immediate_conversion(true);
@@ -277,6 +319,7 @@ void cancellation_test() {
 int main() {
     try {
         queue_and_snapshot_test();
+        discard_reading_test();
         prediction_display_test();
         cancellation_test();
         return 0;
