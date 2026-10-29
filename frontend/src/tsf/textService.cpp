@@ -616,6 +616,7 @@ LRESULT CALLBACK TextService::engine_window_proc(HWND window, UINT message, WPAR
 void TextService::invalidate_prediction() {
     ++prediction_sequence_;
     pending_prediction_.reset();
+    pending_commit_sequence_.reset();
 }
 
 void TextService::queue_prediction(ITfContext* context, std::u16string preceding, E2eTrace trace) {
@@ -667,6 +668,13 @@ void TextService::on_engine_result() {
                 self->write_composition_text(request.context.get(), cookie,
                     self->compositionBuffer.to_string(), std::u16string::npos, 0,
                     request.trace, requested);
+                if (self->pending_commit_sequence_ == request.sequence) {
+                    auto sample = self->compositionBuffer.commit_sample(self->collection_context_);
+                    bool private_input_scope = self->private_input_scope_;
+                    self->commit_reported_ = true;
+                    self->finish_composition(request.context.get(), cookie, private_input_scope);
+                    self->record_commit(std::move(sample), private_input_scope, request.context.get());
+                }
             } catch (...) {
                 self->handle_com_exception();
                 throw;
@@ -1220,6 +1228,9 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
         return S_OK;
     }
 
+    // Further input cancels the deferred Enter, so it cannot commit later edits.
+    if (wParam != VK_RETURN) pending_commit_sequence_.reset();
+
     if (compositionBuffer.waiting_for_prediction()) candidate_ui_->hide();
 
     if (has_composition_state() && !composition_belongs_to(pContext)) {
@@ -1375,14 +1386,18 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     }
 
     if (wParam == VK_RETURN && !compositionBuffer.empty()) {
-        if (compositionBuffer.waiting_for_prediction()) {
-            // Retry a failed or superseded request without committing local candidates.
+        if (compositionBuffer.commit_requires_prediction()) {
+            candidate_ui_->hide();
+            // Reuse current work, or retry a failed/superseded prediction.
             if (!pending_prediction_ || !prediction_is_current(*pending_prediction_)) {
                 e2e_trace.pre_context_started = std::chrono::steady_clock::now();
                 auto pre_context = get_pre_composit_context(pContext);
                 collection_context_ = pre_context;
                 e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
                 queue_prediction(pContext, std::move(pre_context), e2e_trace);
+            }
+            if (pending_prediction_ && prediction_is_current(*pending_prediction_)) {
+                pending_commit_sequence_ = pending_prediction_->sequence;
             }
             *pfEaten = TRUE;
             return S_OK;
@@ -1753,36 +1768,7 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
 
     winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
     editSession->set_operation([this, pContext, &private_input_scope](TfEditCookie ec) {
-        before_return cleanup([this]() { clear_composition_state(); });
-        if (itfComposition) {
-            // The composition range already contains the final text. Rewriting it
-            // here makes Chromium treat the commit as a replacement operation,
-            // which can delete adjacent text around contenteditable boundaries.
-            winrt::com_ptr<ITfRange> range;
-            itfComposition->GetRange(range.put()) | win::check();
-            private_input_scope |= has_private_input_scope(pContext, ec, range.get());
-
-            winrt::com_ptr<ITfRange> caret_range;
-            range->Clone(caret_range.put()) | win::check();
-            caret_range->Collapse(ec, TF_ANCHOR_END) | win::check();
-
-            TF_SELECTION selection = {};
-            selection.range = caret_range.get();
-            selection.style.ase = TF_AE_END;
-            selection.style.fInterimChar = FALSE;
-            pContext->SetSelection(ec, 1, &selection) | win::check();
-
-            // EndComposition only clears GUID_PROP_COMPOSING. The display
-            // attribute is owned by this text service and must be removed here.
-            winrt::com_ptr<ITfProperty> attribute_property;
-            if (SUCCEEDED(pContext->GetProperty(GUID_PROP_ATTRIBUTE, attribute_property.put()))) {
-                attribute_property->Clear(ec, range.get());
-            }
-
-            auto composition = itfComposition;
-            composition->EndComposition(ec) | win::check();
-            itfComposition = nullptr;
-        }
+        finish_composition(pContext, ec, private_input_scope);
     });
 
     HRESULT session_hr = E_FAIL;
@@ -1795,6 +1781,40 @@ HRESULT TextService::end_composition(ITfContext* pContext) {
         commit_reported_ = false;
     }
     return result;
+}
+
+void TextService::finish_composition(ITfContext* pContext, TfEditCookie ec,
+                                     bool& private_input_scope) {
+    before_return cleanup([this]() { clear_composition_state(); });
+    if (itfComposition) {
+        // The composition range already contains the final text. Rewriting it
+        // here makes Chromium treat the commit as a replacement operation,
+        // which can delete adjacent text around contenteditable boundaries.
+        winrt::com_ptr<ITfRange> range;
+        itfComposition->GetRange(range.put()) | win::check();
+        private_input_scope |= has_private_input_scope(pContext, ec, range.get());
+
+        winrt::com_ptr<ITfRange> caret_range;
+        range->Clone(caret_range.put()) | win::check();
+        caret_range->Collapse(ec, TF_ANCHOR_END) | win::check();
+
+        TF_SELECTION selection = {};
+        selection.range = caret_range.get();
+        selection.style.ase = TF_AE_END;
+        selection.style.fInterimChar = FALSE;
+        pContext->SetSelection(ec, 1, &selection) | win::check();
+
+        // EndComposition only clears GUID_PROP_COMPOSING. The display
+        // attribute is owned by this text service and must be removed here.
+        winrt::com_ptr<ITfProperty> attribute_property;
+        if (SUCCEEDED(pContext->GetProperty(GUID_PROP_ATTRIBUTE, attribute_property.put()))) {
+            attribute_property->Clear(ec, range.get());
+        }
+
+        auto composition = itfComposition;
+        composition->EndComposition(ec) | win::check();
+        itfComposition = nullptr;
+    }
 }
 
 HRESULT TextService::discard_composition(ITfContext* pContext) {

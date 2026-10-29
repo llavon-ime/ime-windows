@@ -121,6 +121,7 @@ private:
 
     HRESULT start_composition(ITfContext* pContext);
     HRESULT end_composition(ITfContext* pContext);
+    void finish_composition(ITfContext* context, TfEditCookie cookie, bool& private_input_scope);
     HRESULT discard_composition(ITfContext* pContext);
     HRESULT insert_text(ITfContext* pContext, const std::u16string& text);
     HRESULT set_composition_text(ITfContext* pContext, const std::u16string& text,
@@ -167,6 +168,7 @@ private:
     std::wstring engine_window_class_;
     std::uint64_t prediction_sequence_ = 0;
     std::optional<PendingPrediction> pending_prediction_;
+    std::optional<std::uint64_t> pending_commit_sequence_;
     bool shift_toggle_pending_ = false;
     bool shift_used_as_modifier_ = false;
     bool full_width_mode_ = false;

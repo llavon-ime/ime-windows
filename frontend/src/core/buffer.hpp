@@ -69,6 +69,11 @@ public:
             return item.conversion_pending;
         });
     }
+    bool commit_requires_prediction() const noexcept {
+        return std::ranges::any_of(buffer, [](const auto& item) {
+            return item.conversion_pending || (item.is_predictable_by_engine() && !item.predicted);
+        });
+    }
     bool pre() {
         if (idx < 0) return false;
         idx--;

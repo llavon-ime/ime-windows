@@ -197,6 +197,7 @@ void prediction_display_test() {
     const auto local = buffer.to_string();
     require(local.size() == 1, "immediate display did not use the local candidate");
     require(!buffer.waiting_for_prediction(), "immediate mode blocked local conversion");
+    require(buffer.commit_requires_prediction(), "immediate mode allowed Enter to bypass the model");
     buffer.set_immediate_conversion(false);
     require(buffer.waiting_for_prediction(), "disabling immediate conversion accepted an unpredicted candidate");
     buffer.clear();
@@ -221,6 +222,7 @@ void prediction_display_test() {
     state->entered.wait();
     require(buffer.to_string() == u"ㄋㄧ", "blocked prediction changed the display");
     require(buffer.waiting_for_prediction(), "in-flight prediction allowed commit");
+    require(buffer.commit_requires_prediction(), "in-flight prediction released Enter waiting");
     state->release.signal();
     notified.wait();
     auto result = worker.take_prediction();
@@ -230,7 +232,9 @@ void prediction_display_test() {
             "completed prediction did not convert the reading and caret together");
     require(!buffer.waiting_for_prediction() && buffer.current_has_candidate_list(),
             "successful prediction did not allow commit and candidate selection");
+    require(!buffer.commit_requires_prediction(), "successful prediction did not release Enter waiting");
     buffer.invalidate_all_predictions();
+    require(buffer.commit_requires_prediction(), "invalidated prediction allowed Enter to commit stale output");
     require(buffer.to_string() == u"新", "invalidation reverted an existing Hanzi to reading");
 
     buffer.add(u'ㄋ');
@@ -255,6 +259,7 @@ void prediction_display_test() {
     require(buffer.to_string() == u"新ㄋㄧ" && buffer.waiting_for_prediction(),
             "failed prediction released the reading or allowed commit");
     require(!buffer.current_has_candidate_list(), "failure exposed local candidates");
+    require(buffer.commit_requires_prediction(), "failed prediction released Enter waiting");
     ResetEvent(notified.handle);
     worker.predict(3, u"retry", *failed);
     notified.wait();
@@ -263,6 +268,7 @@ void prediction_display_test() {
             "retry did not apply a successful prediction");
     require(!buffer.waiting_for_prediction() && buffer.to_string() == u"新新",
             "successful retry did not release commit waiting");
+    require(!buffer.commit_requires_prediction(), "successful retry did not release Enter waiting");
     buffer.cur().set_choose_index(1);
     require(buffer.to_string() == u"新舊", "predicted candidate could not be manually selected");
     require(buffer.commit_sample(u"").answer == buffer.to_string(), "commit and sample disagree");
@@ -273,6 +279,7 @@ void prediction_display_test() {
     require(buffer.waiting_for_prediction(), "new syllable did not block commit again");
     buffer.clear();
     require(!buffer.waiting_for_prediction(), "cancelled composition remained blocked");
+    require(!buffer.commit_requires_prediction(), "cancelled composition retained Enter waiting");
 }
 
 // A real synchronous ReadFile that never receives a reply verifies that
