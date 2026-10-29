@@ -6,7 +6,9 @@
 #include <microsoft.ui.dispatching.interop.h>
 #include <winrt/base.h>
 #include <atomic>
-#include <mutex>
+#include <cstdint>
+#include <exception>
+#include <utility>
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -17,36 +19,22 @@ constexpr UINT invoke_message = WM_APP + 100;
 constexpr UINT stop_message = WM_APP + 101;
 
 struct Invocation {
-    void (*callback)(void*);
-    void* context;
+    std::function<void()> work;
+    std::exception_ptr error;
 };
 
-std::int32_t invoke_callback(const Invocation& invocation) noexcept {
+LRESULT invoke_callback(Invocation& invocation) noexcept {
     try {
-        invocation.callback(invocation.context);
-        return 0;
-    } catch (const winrt::hresult_error& error) {
-        OutputDebugStringW(error.message().c_str());
-        return error.code().value;
+        invocation.work();
     } catch (...) {
-        return E_FAIL;
+        invocation.error = std::current_exception();
     }
+    return 0;
 }
+} // namespace
 
-class UiThread final {
-public:
-    std::int32_t acquire() {
-        std::lock_guard lock(mutex_);
-        if (terminal_)
-            return ERROR_SHUTDOWN_IN_PROGRESS;
-        if (thread_) {
-            ++clients_;
-            return 0;
-        }
-        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(&thread_entry),
-                                &module_reference_)) {
-            return static_cast<std::int32_t>(GetLastError());
-        }
+struct UiThread::State {
+    std::int32_t start() {
         if (!mta_cookie_) {
             const HRESULT apartment_result = CoIncrementMTAUsage(&mta_cookie_);
             if (FAILED(apartment_result)) {
@@ -77,38 +65,23 @@ public:
             CloseHandle(thread_);
             thread_ = nullptr;
             release_process_resources();
-        } else {
-            clients_ = 1;
         }
         return result;
     }
 
-    std::int32_t invoke(void (*callback)(void*), void* context) const {
-        if (!callback)
-            return ERROR_INVALID_PARAMETER;
+    void invoke(std::function<void()> work) const {
         const HWND window = command_.load(std::memory_order_acquire);
-        if (!window)
-            return ERROR_INVALID_STATE;
-        const Invocation invocation{callback, context};
-        if (GetCurrentThreadId() == GetWindowThreadProcessId(window, nullptr)) {
-            return invoke_callback(invocation);
+        if (!window) winrt::throw_hresult(HRESULT_FROM_WIN32(ERROR_INVALID_STATE));
+        Invocation invocation{std::move(work), {}};
+        if (GetCurrentThreadId() == thread_id_) {
+            invoke_callback(invocation);
+        } else {
+            SendMessageW(window, invoke_message, 0, reinterpret_cast<LPARAM>(&invocation));
         }
-        // The acquired client keeps this thread alive until the callback returns.
-        return static_cast<std::int32_t>(
-            SendMessageW(window, invoke_message, 0, reinterpret_cast<LPARAM>(&invocation)));
-    }
-
-    std::int32_t release() {
-        std::lock_guard lock(mutex_);
-        if (clients_ != 0)
-            --clients_;
-        return 0;
+        if (invocation.error) std::rethrow_exception(invocation.error);
     }
 
     std::int32_t shutdown() {
-        std::lock_guard lock(mutex_);
-        if (clients_ != 0)
-            return ERROR_BUSY;
         if (!thread_)
             return 0;
         if (GetCurrentThreadId() == thread_id_)
@@ -123,8 +96,6 @@ public:
         CloseHandle(thread_);
         thread_ = nullptr;
         thread_id_ = 0;
-        clients_ = 0;
-        terminal_ = true;
         release_process_resources();
         return 0;
     }
@@ -135,13 +106,11 @@ private:
             CoDecrementMTAUsage(mta_cookie_);
             mta_cookie_ = nullptr;
         }
-        if (module_reference_) {
-            FreeLibrary(module_reference_);
-            module_reference_ = nullptr;
-        }
     }
 
-    static DWORD WINAPI thread_entry(void* context) noexcept { return static_cast<UiThread*>(context)->run(); }
+    static DWORD WINAPI thread_entry(void* context) noexcept {
+        return static_cast<State*>(context)->run();
+    }
 
     DWORD run() noexcept {
         bool apartment = false;
@@ -199,7 +168,7 @@ private:
 
     static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
         if (message == invoke_message) {
-            return invoke_callback(*reinterpret_cast<const Invocation*>(lparam));
+            return invoke_callback(*reinterpret_cast<Invocation*>(lparam));
         }
         if (message == stop_message) {
             PostQuitMessage(0);
@@ -208,28 +177,30 @@ private:
         return DefWindowProcW(window, message, wparam, lparam);
     }
 
-    std::mutex mutex_;
-    std::size_t clients_ = 0;
     HANDLE thread_ = nullptr;
     HANDLE ready_ = nullptr;
     DWORD thread_id_ = 0;
     CO_MTA_USAGE_COOKIE mta_cookie_ = nullptr;
-    HMODULE module_reference_ = nullptr;
-    bool terminal_ = false;
     std::atomic<HWND> command_{nullptr};
     std::atomic<std::int32_t> start_result_{E_FAIL};
 };
 
-UiThread& ui_thread() {
-    static UiThread instance;
-    return instance;
+UiThread::UiThread() : state_(std::make_unique<State>()) {
+    const auto result = state_->start();
+    if (result != 0) winrt::throw_hresult(result < 0 ? result : HRESULT_FROM_WIN32(result));
 }
-} // namespace
-} // namespace llavon::ui
 
-extern "C" std::int32_t llavon_ui_thread_acquire() { return llavon::ui::ui_thread().acquire(); }
-extern "C" std::int32_t llavon_ui_thread_invoke(void (*callback)(void*), void* context) {
-    return llavon::ui::ui_thread().invoke(callback, context);
+UiThread::~UiThread() {
+    if (state_->shutdown() != 0) {
+        // The thread still owns WinUI state. Destroying it would be a use-after-free.
+        OutputDebugStringW(
+            L"[winui] UI thread did not stop; retaining its state until process exit\n");
+        (void)state_.release();
+    }
 }
-extern "C" std::int32_t llavon_ui_thread_release() { return llavon::ui::ui_thread().release(); }
-extern "C" std::int32_t llavon_ui_thread_shutdown() { return llavon::ui::ui_thread().shutdown(); }
+
+void UiThread::invoke(std::function<void()> work) const {
+    state_->invoke(std::move(work));
+}
+
+} // namespace llavon::ui

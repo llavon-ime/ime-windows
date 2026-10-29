@@ -175,8 +175,6 @@ add_custom_target(llavon-ime-artifacts
         llavon-ime-lifecycle
         llavon-ime-uninstaller
         llavon-ime-service
-        llavon-ime-settings-ui
-        llavon-ime-candidate-ui
         llavon-ime-debugger
 )
 

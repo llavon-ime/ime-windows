@@ -127,27 +127,10 @@ TextBlock make_text(const wchar_t* value, double size, FontWeight weight = FontW
 }
 
 std::optional<std::vector<TrainingDataOption>> fetch_training_items(
-    llavon_settings_refresh_training_items_callback callback, void* context,
-    llavon_settings_protection_callback protection_callback, void* protection_context,
-    const char16_t* password, std::int64_t base_run_id) {
-    std::size_t count = 0;
-    if (!callback || callback(context, nullptr, 0, &count, password, base_run_id) !=
-            ERROR_SUCCESS) return std::nullopt;
-    std::vector<llavon_settings_training_item> items(count);
-    if (count != 0 && callback(context, items.data(), items.size(), &count, password,
-            base_run_id) != ERROR_SUCCESS) return std::nullopt;
-    std::vector<TrainingDataOption> result;
-    result.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
-        const auto& item = items[index];
-        result.push_back(TrainingDataOption{
-            .event_id = item.event_id, .context = item.context, .answer = item.answer,
-            .reading = item.reading, .revice = item.revice != 0,
-        });
-    }
-    if (protection_callback) protection_callback(
-        protection_context, LLAVON_PROTECTION_CLEAR_VIEW, nullptr, &count);
-    return result;
+    const std::function<std::optional<std::vector<TrainingDataOption>>(
+        std::u16string_view, std::int64_t)>& load,
+    std::u16string_view password, std::int64_t base_run_id) {
+    return load ? load(password, base_run_id) : std::nullopt;
 }
 
 std::wstring utc8_timestamp(std::u16string_view value) {
@@ -168,41 +151,27 @@ std::wstring utc8_timestamp(std::u16string_view value) {
 
 std::vector<LoraHistoryRunView> load_lora_history_snapshot(
     const SettingsConfiguration& configuration) {
-    const auto callback = configuration.get_lora_history_callback;
-    std::size_t count = 0;
-    if (!callback || callback(configuration.get_lora_history_context,
-            nullptr, 0, &count) != ERROR_SUCCESS) {
-        throw std::runtime_error("unable to load LoRA training history");
-    }
-    std::vector<llavon_settings_lora_history_item> raw(count);
-    if (count != 0 && callback(configuration.get_lora_history_context,
-            raw.data(), raw.size(), &count) != ERROR_SUCCESS) {
-        throw std::runtime_error("unable to load LoRA training history");
-    }
+    if (!configuration.actions.load_lora_history) return {};
+    const auto raw = configuration.actions.load_lora_history();
     std::vector<LoraHistoryRunView> history;
-    history.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
+    history.reserve(raw.size());
+    for (std::size_t index = 0; index < raw.size(); ++index) {
         const auto& run = raw[index];
         history.push_back(LoraHistoryRunView{
             .id = run.id,
             .parent_id = run.parent_id,
-            .base_model_fingerprint = run.base_model_fingerprint
-                ? run.base_model_fingerprint : "",
-            .base_model_revision = run.base_model_revision
-                ? run.base_model_revision : "",
-            .completed_local = run.completed_at_utc
-                ? utc8_timestamp(run.completed_at_utc) : std::wstring{},
-            .output_model_path = run.output_model_path
-                ? run.output_model_path : u"",
+            .base_model_fingerprint = run.base_model_fingerprint,
+            .base_model_revision = run.base_model_revision,
+            .completed_local = utc8_timestamp(utf8::utf8to16(run.completed_at_utc)),
+            .output_model_path = run.output_model_path.u16string(),
             .record_count = run.record_count,
             .cumulative_record_count = run.cumulative_record_count,
             .optimizer_steps = run.optimizer_steps,
             .rank = run.rank,
             .alpha = run.alpha,
             .dropout = run.dropout,
-            .target_modules = run.target_modules ? run.target_modules : u"",
-            .training_request_json = run.training_request_json
-                ? run.training_request_json : "",
+            .target_modules = run.target_modules,
+            .training_request_json = run.training_request_json,
         });
     }
     return history;
@@ -210,22 +179,15 @@ std::vector<LoraHistoryRunView> load_lora_history_snapshot(
 
 std::vector<LoraHistoryBaseView> load_lora_base_models_snapshot(
     const SettingsConfiguration& configuration) {
-    const auto callback = configuration.get_lora_base_models_callback;
-    std::size_t count = 0;
-    if (!callback || callback(configuration.get_lora_base_models_context,
-            nullptr, 0, &count) != ERROR_SUCCESS)
-        throw std::runtime_error("unable to load LoRA base model catalog");
-    std::vector<llavon_settings_lora_base_model> raw(count);
-    if (count != 0 && callback(configuration.get_lora_base_models_context,
-            raw.data(), raw.size(), &count) != ERROR_SUCCESS)
-        throw std::runtime_error("unable to load LoRA base model catalog");
+    if (!configuration.actions.load_lora_base_models) return {};
+    const auto raw = configuration.actions.load_lora_base_models();
     std::vector<LoraHistoryBaseView> result;
-    result.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
+    result.reserve(raw.size());
+    for (std::size_t i = 0; i < raw.size(); ++i) {
         result.push_back(LoraHistoryBaseView{
-            .fingerprint = raw[i].fingerprint ? raw[i].fingerprint : "",
-            .revision = raw[i].revision ? raw[i].revision : "",
-            .output_model_path = raw[i].output_model_path ? raw[i].output_model_path : u"",
+            .fingerprint = raw[i].fingerprint,
+            .revision = raw[i].revision,
+            .output_model_path = raw[i].output_model_path.u16string(),
         });
     }
     return result;
@@ -233,17 +195,15 @@ std::vector<LoraHistoryBaseView> load_lora_base_models_snapshot(
 
 std::optional<LoraHistoryBaseView> current_lora_base(
     const SettingsConfiguration& configuration) {
-    llavon_settings_lora_status status{};
-    if (!configuration.get_lora_status_callback ||
-        configuration.get_lora_status_callback(
-            configuration.get_lora_status_context, &status) != ERROR_SUCCESS ||
-        !status.base_model_fingerprint || !*status.base_model_fingerprint ||
-        !status.model_revision || !*status.model_revision) return std::nullopt;
+    if (!configuration.actions.get_lora_status) return std::nullopt;
+    const auto status = configuration.actions.get_lora_status();
+    if (!status || status->base_model_fingerprint.empty() || status->model_revision.empty()) {
+        return std::nullopt;
+    }
     return LoraHistoryBaseView{
-        .fingerprint = status.base_model_fingerprint,
-        .revision = utf8::utf16to8(std::u16string_view(status.model_revision)),
-        .output_model_path = status.base_model_output_path
-            ? status.base_model_output_path : u"",
+        .fingerprint = status->base_model_fingerprint,
+        .revision = utf8::utf16to8(status->model_revision),
+        .output_model_path = status->base_model_output_path,
     };
 }
 
@@ -311,16 +271,16 @@ std::wstring build_identity(
            short_commit(commit) + L"）";
 }
 
-const char16_t* backend_label(std::int32_t backend) {
+const char16_t* backend_label(InferenceBackend backend) {
     switch (backend) {
-        case LLAVON_SETTINGS_BACKEND_CUDA:
-            return u"CUDA";
-        case LLAVON_SETTINGS_BACKEND_VULKAN:
-            return u"Vulkan";
-        case LLAVON_SETTINGS_BACKEND_CPU:
-            return u"CPU";
-        default:
-            return u"自動";
+    case InferenceBackend::cuda:
+        return u"CUDA";
+    case InferenceBackend::vulkan:
+        return u"Vulkan";
+    case InferenceBackend::cpu:
+        return u"CPU";
+    default:
+        return u"自動";
     }
 }
 
@@ -329,7 +289,7 @@ std::u16string device_label(const InferenceDeviceOption& device) {
     if (label.empty()) label = device.device_id;
     label += u"（";
     label += backend_label(device.backend);
-    if (device.backend != LLAVON_SETTINGS_BACKEND_CPU && device.memory_total != 0) {
+    if (device.backend != InferenceBackend::cpu && device.memory_total != 0) {
         label += u"，";
         std::ostringstream memory;
         memory << std::fixed << std::setprecision(1)
@@ -857,7 +817,7 @@ void SettingsWindow::build_page() {
     backend_detail += backend_label(active.backend);
     const auto backend_detail_text = to_hstring(backend_detail);
     tooltip_content.Children().Append(make_text(backend_detail_text.c_str(), caption_text_size));
-    if (active.backend != LLAVON_SETTINGS_BACKEND_CPU && active.memory_total != 0) {
+    if (active.backend != InferenceBackend::cpu && active.memory_total != 0) {
         std::wostringstream memory;
         memory << L"顯示記憶體：" << std::fixed << std::setprecision(1)
                << static_cast<double>(active.memory_total) / 1024.0 / 1024.0 / 1024.0
@@ -887,21 +847,23 @@ void SettingsWindow::build_page() {
 
     inference_options_.clear();
     inference_options_.push_back(InferenceDeviceOption{
-        .backend = LLAVON_SETTINGS_BACKEND_AUTO, .name = u"自動選擇",
+        .backend = InferenceBackend::automatic,
+        .name = u"自動選擇",
     });
     inference_options_.push_back(InferenceDeviceOption{
-        .backend = LLAVON_SETTINGS_BACKEND_CPU,
-        .device_type = LLAVON_SETTINGS_DEVICE_CPU, .name = u"CPU",
+        .backend = InferenceBackend::cpu,
+        .device_type = InferenceDeviceType::cpu,
+        .name = u"CPU",
     });
     for (const auto& device : configuration_.devices) {
-        if (device.backend == LLAVON_SETTINGS_BACKEND_CUDA ||
-            device.backend == LLAVON_SETTINGS_BACKEND_VULKAN) {
+        if (device.backend == InferenceBackend::cuda ||
+            device.backend == InferenceBackend::vulkan) {
             inference_options_.push_back(device);
         }
     }
     bool selected_device_available =
-        configuration_.selected_backend == LLAVON_SETTINGS_BACKEND_AUTO ||
-        configuration_.selected_backend == LLAVON_SETTINGS_BACKEND_CPU;
+        configuration_.selected_backend == InferenceBackend::automatic ||
+        configuration_.selected_backend == InferenceBackend::cpu;
     for (const auto& option : inference_options_) {
         if (option.backend == configuration_.selected_backend &&
             option.device_id == configuration_.selected_device_id) {
@@ -956,11 +918,10 @@ void SettingsWindow::build_page() {
             const auto toggle = sender.template as<ToggleSwitch>();
             const bool enabled = toggle.IsOn();
             if (enabled == *saved_gpu_boost) return;
-            const std::int32_t result = configuration_.save_gpu_boost_callback
-                ? configuration_.save_gpu_boost_callback(
-                      configuration_.save_gpu_boost_context, enabled ? 1 : 0)
-                : ERROR_INVALID_FUNCTION;
-            if (result == ERROR_SUCCESS) {
+            const bool result = configuration_.actions.save_gpu_boost
+                                    ? configuration_.actions.save_gpu_boost(enabled)
+                                    : false;
+            if (result) {
                 *saved_gpu_boost = enabled;
                 gpu_boost_note.Text(enabled
                     ? L"已儲存；下次 GPU 推論時啟用。"
@@ -987,11 +948,10 @@ void SettingsWindow::build_page() {
             const auto toggle = sender.template as<ToggleSwitch>();
             const bool enabled = toggle.IsOn();
             if (enabled == *saved_full_width) return;
-            const std::int32_t result = configuration_.save_width_toggle_callback
-                ? configuration_.save_width_toggle_callback(
-                      configuration_.save_width_toggle_context, enabled ? 1 : 0)
-                : ERROR_INVALID_FUNCTION;
-            if (result == ERROR_SUCCESS) {
+            const bool result = configuration_.actions.save_width_toggle
+                                    ? configuration_.actions.save_width_toggle(enabled)
+                                    : false;
+            if (result) {
                 *saved_full_width = enabled;
                 full_width_note.Text(L"已儲存；切回輸入中的應用程式後套用。");
             } else {
@@ -1015,11 +975,10 @@ void SettingsWindow::build_page() {
             const auto toggle = sender.template as<ToggleSwitch>();
             const bool enabled = toggle.IsOn();
             if (enabled == *saved_prediction) return;
-            const auto result = configuration_.save_immediate_conversion_callback
-                ? configuration_.save_immediate_conversion_callback(
-                      configuration_.save_immediate_conversion_context, enabled ? 1 : 0)
-                : ERROR_INVALID_FUNCTION;
-            if (result == ERROR_SUCCESS) {
+            const auto result = configuration_.actions.save_immediate_conversion
+                                    ? configuration_.actions.save_immediate_conversion(enabled)
+                                    : false;
+            if (result) {
                 *saved_prediction = enabled;
                 prediction_note.Text(L"已儲存；切回輸入中的應用程式後套用。");
             } else {
@@ -1059,26 +1018,24 @@ void SettingsWindow::build_page() {
     const auto recording = named<CheckBox>(shell_, L"EncryptedRecording");
     recording.Checked([this](const auto&, const auto&) {
         if (updating_protection_) return;
-        std::size_t status = 0;
-        const auto callback = configuration_.protection_callback;
-        if (!callback || callback(configuration_.protection_context,
-                LLAVON_PROTECTION_STATUS, nullptr, &status) != ERROR_SUCCESS) {
+        const auto& protection = configuration_.actions.protection;
+        const auto status = protection.status ? protection.status() : std::nullopt;
+        if (!status) {
             refresh_protection_controls();
             return;
         }
-        if ((status & 1) == 0) {
+        if (!status->configured) {
             refresh_protection_controls();
             show_password_dialog(true, {});
         } else {
-            callback(configuration_.protection_context, LLAVON_PROTECTION_ENABLE, nullptr, &status);
+            if (protection.set_enabled) protection.set_enabled(true);
             refresh_protection_controls();
         }
     });
     recording.Unchecked([this](const auto&, const auto&) {
         if (updating_protection_) return;
-        std::size_t result = 0;
-        if (configuration_.protection_callback) configuration_.protection_callback(
-            configuration_.protection_context, LLAVON_PROTECTION_DISABLE, nullptr, &result);
+        if (configuration_.actions.protection.set_enabled)
+            configuration_.actions.protection.set_enabled(false);
         refresh_protection_controls();
     });
     named<Button>(shell_, L"LoraButton").Click(
@@ -1126,11 +1083,10 @@ void SettingsWindow::build_page() {
             const auto toggle = sender.template as<ToggleSwitch>();
             const bool enabled = toggle.IsOn();
             if (enabled == *saved_update_notifications) return;
-            const std::int32_t result = configuration_.save_update_notifications_callback
-                ? configuration_.save_update_notifications_callback(
-                      configuration_.save_update_notifications_context, enabled ? 1 : 0)
-                : ERROR_INVALID_FUNCTION;
-            if (result == ERROR_SUCCESS) {
+            const bool result = configuration_.actions.save_update_notifications
+                                    ? configuration_.actions.save_update_notifications(enabled)
+                                    : false;
+            if (result) {
                 *saved_update_notifications = enabled;
                 configuration_.major_update_notifications_enabled = enabled;
                 update_notifications_note.Visibility(Visibility::Collapsed);
@@ -1151,15 +1107,15 @@ void SettingsWindow::build_page() {
 }
 
 void SettingsWindow::refresh_protection_controls() {
-    std::size_t status = 0;
-    const auto callback = configuration_.protection_callback;
-    const bool ok = callback && callback(configuration_.protection_context,
-        LLAVON_PROTECTION_STATUS, nullptr, &status) == ERROR_SUCCESS;
+    const auto& protection = configuration_.actions.protection;
+    const auto result = protection.status ? protection.status() : std::nullopt;
+    const bool ok = result.has_value();
+    const auto status = result.value_or(ProtectionStatus{});
     updating_protection_ = true;
-    named<CheckBox>(shell_, L"EncryptedRecording").IsChecked(ok && (status & 2) != 0);
+    named<CheckBox>(shell_, L"EncryptedRecording").IsChecked(ok && status.enabled);
     named<CheckBox>(shell_, L"EncryptedRecording").IsEnabled(ok);
-    named<TextBlock>(shell_, L"PasswordStatus").Text(!ok ? L"無法讀取密碼狀態" :
-        ((status & 1) != 0 ? L"密碼已設定" : L"密碼未設定"));
+    named<TextBlock>(shell_, L"PasswordStatus")
+        .Text(!ok ? L"無法讀取密碼狀態" : (status.configured ? L"密碼已設定" : L"密碼未設定"));
     updating_protection_ = false;
 }
 
@@ -1183,7 +1139,16 @@ winrt::Windows::Foundation::IAsyncOperation<bool> SettingsWindow::run_in_backgro
 void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
                                          bool clean_datasets,
                                          std::function<void()> on_success) {
-    if (password_dialog_open_) return;
+    if (password_dialog_open_) {
+        if (password_dialog_closing_) {
+            reopen_password_dialog_ = [this, setup, action = std::move(action), clean_datasets,
+                                          on_success = std::move(on_success)]() mutable {
+                show_password_dialog(
+                    setup, std::move(action), clean_datasets, std::move(on_success));
+            };
+        }
+        return;
+    }
     ContentDialog dialog;
     dialog.XamlRoot(shell_.XamlRoot());
     dialog.RequestedTheme(shell_.ActualTheme());
@@ -1271,11 +1236,10 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
     dialog.Opened([this, setup, clean_datasets, status, password](const auto& sender, const auto&) {
         password.Focus(FocusState::Programmatic);
         if (!setup && !clean_datasets) return;
-        std::size_t removed = 0;
-        const auto callback = configuration_.protection_callback;
-        const auto result = callback ? callback(configuration_.protection_context,
-            LLAVON_PROTECTION_CLEANUP, nullptr, &removed) : ERROR_INVALID_FUNCTION;
-        if (result != ERROR_SUCCESS) {
+        const auto& protection = configuration_.actions.protection;
+        const auto result = protection.cleanup ? protection.cleanup() : std::nullopt;
+        const auto removed = result.value_or(0);
+        if (!result) {
             status.Text(L"無法清除明文暫存檔，目前不能繼續。請結束訓練並確認檔案權限後重試。");
             sender.as<ContentDialog>().IsPrimaryButtonEnabled(false);
         } else if (removed != 0) {
@@ -1288,10 +1252,8 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
         if (dialog_state->confirming_reset) {
             args.Cancel(true);
             const auto dialog = sender.as<ContentDialog>();
-            std::size_t result = 0;
-            const auto callback = configuration_.protection_callback;
-            if (!callback || callback(configuration_.protection_context,
-                    LLAVON_PROTECTION_RESET, nullptr, &result) != ERROR_SUCCESS) {
+            const auto& protection = configuration_.actions.protection;
+            if (!protection.reset || !protection.reset()) {
                 status.Text(L"清除未完成，請先結束訓練並確認檔案權限後重試。LoRA 模型檔不會被刪除。");
                 return;
             }
@@ -1327,21 +1289,19 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
         if (!repeated.empty()) SecureZeroMemory(repeated.data(), repeated.size() * sizeof(char16_t));
         password.Password(L"");
         confirmation.Password(L"");
-        PasswordAction operation = dialog_state->setup
-            ? PasswordAction{[this](const char16_t* value)
-                  -> winrt::Windows::Foundation::IAsyncOperation<bool> {
-                  const auto callback = configuration_.protection_callback;
-                  const auto context = configuration_.protection_context;
-                  const auto alive = restore_ui_alive_;
-                  const bool ok = co_await run_in_background([callback, context, value] {
-                      std::size_t result = 0;
-                      return callback && callback(context, LLAVON_PROTECTION_SETUP,
-                          value, &result) == ERROR_SUCCESS;
-                  });
-                  if (alive->load(std::memory_order_acquire)) refresh_protection_controls();
-                  co_return ok;
-              }}
-            : action;
+        PasswordAction operation =
+            dialog_state->setup
+                ? PasswordAction{[this](std::u16string_view value)
+                                     -> winrt::Windows::Foundation::IAsyncOperation<bool> {
+                      const auto setup_password = configuration_.actions.protection.setup;
+                      const auto alive = restore_ui_alive_;
+                      const bool ok = co_await run_in_background([setup_password, value] {
+                          return setup_password && setup_password(value);
+                      });
+                      if (alive->load(std::memory_order_acquire)) refresh_protection_controls();
+                      co_return ok;
+                  }}
+                : action;
         if (!valid || !operation) {
             if (!secret.empty()) SecureZeroMemory(secret.data(), secret.size() * sizeof(char16_t));
             args.Cancel(true);
@@ -1363,7 +1323,7 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
             status.Text(dialog_state->setup ? L"正在設定密碼…" : L"正在解密對話資料…");
             bool ok = false;
             try {
-                ok = co_await operation(secret.c_str());
+                ok = co_await operation(secret);
             } catch (...) {}
             SecureZeroMemory(secret.data(), secret.size() * sizeof(char16_t));
             if (!co_await ResumeOnDispatcher{dispatcher}) co_return;
@@ -1388,8 +1348,23 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
         }(sender.as<ContentDialog>(), dialog_state, std::move(operation),
           std::move(secret), password, reset, status, restore_ui_alive_);
     });
-    dialog.Closing([dialog_state](const auto&, const ContentDialogClosingEventArgs& args) {
-        if (dialog_state->busy) args.Cancel(true);
+    dialog.Closing([this, dialog_state, alive = restore_ui_alive_](
+                       const auto&, const ContentDialogClosingEventArgs& args) {
+        if (dialog_state->busy) {
+            args.Cancel(true);
+        } else if (alive->load(std::memory_order_acquire)) {
+            password_dialog_closing_ = true;
+        }
+    });
+    dialog.Closed([this, alive = restore_ui_alive_](const auto&, const auto&) {
+        if (!alive->load(std::memory_order_acquire)) return;
+        password_dialog_open_ = false;
+        password_dialog_closing_ = false;
+        if (auto reopen = std::exchange(reopen_password_dialog_, {})) {
+            shell_.DispatcherQueue().TryEnqueue([alive, reopen = std::move(reopen)] {
+                if (alive->load(std::memory_order_acquire)) reopen();
+            });
+        }
     });
     password_dialog_open_ = true;
     [](SettingsWindow* self, ContentDialog dialog,
@@ -1409,7 +1384,7 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
         }
         if (!co_await ResumeOnDispatcher{dispatcher}) co_return;
         if (!alive->load(std::memory_order_acquire)) co_return;
-        self->password_dialog_open_ = false;
+        if (!closed) self->password_dialog_open_ = false;
         password.Password(L"");
         confirmation.Password(L"");
         if (closed && dialog_state->succeeded && on_success) {
@@ -1423,14 +1398,10 @@ void SettingsWindow::show_password_dialog(bool setup, PasswordAction action,
       restore_ui_alive_);
 }
 
-bool SettingsWindow::load_training_items(
-    const char16_t* password, std::int64_t base_run_id) {
+bool SettingsWindow::load_training_items(std::u16string_view password, std::int64_t base_run_id) {
     configuration_.training_items.clear();
-    auto items = fetch_training_items(
-        configuration_.refresh_training_items_callback,
-        configuration_.refresh_training_items_context,
-        configuration_.protection_callback, configuration_.protection_context,
-        password, base_run_id);
+    auto items =
+        fetch_training_items(configuration_.actions.load_training_items, password, base_run_id);
     if (!items) return false;
     configuration_.training_items = std::move(*items);
     return true;
@@ -1450,7 +1421,7 @@ void SettingsWindow::show_lora_training_dialog() {
         ? dialog_bases.front().id : applied_base_id != -1 ? applied_base_id
         : (!dialog_bases.empty() ? dialog_bases.front().id :
            (history.empty() ? 0 : history.back().id));
-    if (!load_training_items(nullptr, initial_base_id < 0 ? 0 : initial_base_id)) {
+    if (!load_training_items({}, initial_base_id < 0 ? 0 : initial_base_id)) {
         throw std::runtime_error("unable to load training metadata");
     }
 
@@ -1550,7 +1521,7 @@ void SettingsWindow::show_lora_training_dialog() {
         bool setup_user_changed = false;
         bool changing_setup_expansion = false;
         bool setup_needs_attention = false;
-        std::int32_t cuda_runtime = LLAVON_CUDA_RUNTIME_UNKNOWN;
+        CudaRuntimeState cuda_runtime = CudaRuntimeState::unknown;
         bool checking_updates_observed = false;
         bool model_checked = false;
         bool busy = false;
@@ -1777,12 +1748,9 @@ void SettingsWindow::show_lora_training_dialog() {
                 remove.Click([this, state, index, row, remove, refresh_training_count]
                     (const auto&, const auto&) {
                     if (state->closed || state->deleted_items[index]) return;
-                    const auto callback = configuration_.delete_training_item_callback;
-                    const auto result = callback
-                        ? callback(configuration_.delete_training_item_context,
-                                   state->items[index].event_id.c_str())
-                        : ERROR_INVALID_FUNCTION;
-                    if (result != ERROR_SUCCESS) {
+                    const auto callback = configuration_.actions.delete_training_item;
+                    const bool result = callback && callback(state->items[index].event_id);
+                    if (!result) {
                         state->delete_status.Text(L"刪除失敗，請稍後再試。");
                         state->delete_status.Visibility(Visibility::Visible);
                         return;
@@ -1826,41 +1794,42 @@ void SettingsWindow::show_lora_training_dialog() {
             });
         (*render_page)();
         state->training_data_button.Click([this, state, render_page](const auto&, const auto&) {
-            show_password_dialog(false, [this, state](const char16_t* password)
-                -> winrt::Windows::Foundation::IAsyncOperation<bool> {
-                const auto base_index = state->training_base.SelectedIndex();
-                if (base_index < 0 || state->closed) co_return false;
-                const auto base_id = state->base_run_ids[static_cast<std::size_t>(base_index)];
-                const auto callback = configuration_.refresh_training_items_callback;
-                const auto context = configuration_.refresh_training_items_context;
-                const auto protection_callback = configuration_.protection_callback;
-                const auto protection_context = configuration_.protection_context;
-                const auto alive = restore_ui_alive_;
-                std::optional<std::vector<TrainingDataOption>> decrypted;
-                co_await run_in_background([&] {
-                    decrypted = fetch_training_items(callback, context, protection_callback,
-                        protection_context, password, base_id < 0 ? 0 : base_id);
-                    return decrypted.has_value();
+            show_password_dialog(
+                false,
+                [this, state](std::u16string_view password)
+                    -> winrt::Windows::Foundation::IAsyncOperation<bool> {
+                    const auto base_index = state->training_base.SelectedIndex();
+                    if (base_index < 0 || state->closed) co_return false;
+                    const auto base_id = state->base_run_ids[static_cast<std::size_t>(base_index)];
+                    const auto callback = configuration_.actions.load_training_items;
+                    const auto alive = restore_ui_alive_;
+                    std::optional<std::vector<TrainingDataOption>> decrypted;
+                    co_await run_in_background([&] {
+                        decrypted =
+                            fetch_training_items(callback, password, base_id < 0 ? 0 : base_id);
+                        return decrypted.has_value();
+                    });
+                    if (!decrypted || !alive->load(std::memory_order_acquire) || state->closed) {
+                        co_return false;
+                    }
+                    state->items = std::move(*decrypted);
+                    state->deleted_items.assign(state->items.size(), false);
+                    state->active_count = state->items.size();
+                    state->current_page = 0;
+                    co_return true;
+                },
+                false,
+                [state, render_page] {
+                    if (state->closed) return;
+                    (*render_page)();
+                    state->selecting_training_data = true;
+                    state->content.Content(state->training_data_page);
+                    state->title.Text(L"檢視訓練資料");
+                    state->primary_button.Content(winrt::box_value(L"完成"));
+                    Grid::SetColumnSpan(state->primary_button, 2);
+                    state->secondary_button.Visibility(Visibility::Collapsed);
+                    state->primary_button.IsEnabled(true);
                 });
-                if (!decrypted || !alive->load(std::memory_order_acquire) || state->closed) {
-                    co_return false;
-                }
-                state->items = std::move(*decrypted);
-                state->deleted_items.assign(state->items.size(), false);
-                state->active_count = state->items.size();
-                state->current_page = 0;
-                co_return true;
-            }, false, [state, render_page] {
-                if (state->closed) return;
-                (*render_page)();
-                state->selecting_training_data = true;
-                state->content.Content(state->training_data_page);
-                state->title.Text(L"檢視訓練資料");
-                state->primary_button.Content(winrt::box_value(L"完成"));
-                Grid::SetColumnSpan(state->primary_button, 2);
-                state->secondary_button.Visibility(Visibility::Collapsed);
-                state->primary_button.IsEnabled(true);
-            });
         });
     }
 
@@ -2013,10 +1982,10 @@ void SettingsWindow::show_lora_training_dialog() {
         state->training_data_button.IsEnabled(state->active_count != 0);
         state->primary_button.IsEnabled(
             state->selecting_training_data ||
-            (state->training_busy && !state->cancel_requested && configuration_.cancel_lora_callback) ||
-            (!state->busy && !restoring_lora_model_ &&
-             state->model_available && state->trainer_available &&
-             eligible != 0));
+            (state->training_busy && !state->cancel_requested &&
+                configuration_.actions.cancel_lora) ||
+            (!state->busy && !restoring_lora_model_ && state->model_available &&
+                state->trainer_available && eligible != 0));
         if (!state->selecting_training_data) {
             state->primary_button.Content(winrt::box_value(state->training_busy
                 ? (state->cancel_requested ? L"正在取消…" : L"取消訓練") : L"開始訓練"));
@@ -2057,9 +2026,10 @@ void SettingsWindow::show_lora_training_dialog() {
                     std::wstring{}));
             load_base_parameters(*state, index);
             if (reload_training_items) {
-                if (!load_training_items(nullptr,
-                        state->base_run_ids[static_cast<std::size_t>(index)] < 0 ? 0 :
-                        state->base_run_ids[static_cast<std::size_t>(index)])) {
+                if (!load_training_items(
+                        {}, state->base_run_ids[static_cast<std::size_t>(index)] < 0
+                                ? 0
+                                : state->base_run_ids[static_cast<std::size_t>(index)])) {
                     state->status.Text(L"無法讀取此基底可用的訓練資料。");
                     return;
                 }
@@ -2100,26 +2070,23 @@ void SettingsWindow::show_lora_training_dialog() {
             refresh_estimated_steps();
         });
     }
-    const auto request_setup_action = [this, state](std::int32_t action,
-                                                    const wchar_t* failure) {
-        const std::int32_t result = configuration_.lora_model_action_callback
-            ? configuration_.lora_model_action_callback(
-                  configuration_.lora_model_action_context, action)
-            : ERROR_INVALID_FUNCTION;
-        if (result != ERROR_SUCCESS) {
-            state->status.Text(result == ERROR_BUSY
-                ? L"另一個 LoRA 操作正在執行。" : failure);
+    const auto request_setup_action = [this, state](LoraAction action, const wchar_t* failure) {
+        const bool result = configuration_.actions.lora_model_action
+                                ? configuration_.actions.lora_model_action(action)
+                                : false;
+        if (!result) {
+            state->status.Text(failure);
         }
     };
     state->check_updates.Click([request_setup_action](const auto&, const auto&) {
-        request_setup_action(LLAVON_LORA_CHECK_UPDATES, L"無法開始檢查更新。");
+        request_setup_action(LoraAction::check_updates, L"無法開始檢查更新。");
     });
     state->download_model.Click([request_setup_action](const auto&, const auto&) {
-        request_setup_action(LLAVON_LORA_DOWNLOAD_MODEL, L"無法開始下載基礎模型。");
+        request_setup_action(LoraAction::download_model, L"無法開始下載基礎模型。");
     });
     state->cancel.Click([this](const auto&, const auto&) {
-        if (configuration_.cancel_lora_callback) {
-            configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
+        if (configuration_.actions.cancel_lora) {
+            configuration_.actions.cancel_lora();
         }
     });
     // The trainer always ships the CPU build; CUDA is an optional runtime
@@ -2127,24 +2094,23 @@ void SettingsWindow::show_lora_training_dialog() {
     const auto update_cuda_runtime_row = [state] {
         const auto runtime = state->cuda_runtime;
         state->install_cuda_runtime.IsEnabled(
-            !state->busy && state->trainer_available &&
-            runtime == LLAVON_CUDA_RUNTIME_NOT_INSTALLED);
+            !state->busy && state->trainer_available && runtime == CudaRuntimeState::not_installed);
         state->remove_cuda_runtime.IsEnabled(
-            !state->busy && runtime == LLAVON_CUDA_RUNTIME_INSTALLED);
-        state->remove_cuda_runtime.Visibility(runtime == LLAVON_CUDA_RUNTIME_INSTALLED
-            ? Visibility::Visible : Visibility::Collapsed);
-        state->install_cuda_runtime.Visibility(runtime == LLAVON_CUDA_RUNTIME_INSTALLED
-            ? Visibility::Collapsed : Visibility::Visible);
+            !state->busy && runtime == CudaRuntimeState::installed);
+        state->remove_cuda_runtime.Visibility(
+            runtime == CudaRuntimeState::installed ? Visibility::Visible : Visibility::Collapsed);
+        state->install_cuda_runtime.Visibility(
+            runtime == CudaRuntimeState::installed ? Visibility::Collapsed : Visibility::Visible);
         if (!state->trainer_available) {
             show_setup_icon(state->cuda_runtime_icons, SetupIcon::inactive);
             state->cuda_runtime_status.Text(L"安裝訓練器後可用");
-        } else if (runtime == LLAVON_CUDA_RUNTIME_INSTALLED) {
+        } else if (runtime == CudaRuntimeState::installed) {
             show_setup_icon(state->cuda_runtime_icons, SetupIcon::ready);
             state->cuda_runtime_status.Text(L"已安裝，有 NVIDIA 顯示卡時會自動使用");
-        } else if (runtime == LLAVON_CUDA_RUNTIME_NOT_INSTALLED) {
+        } else if (runtime == CudaRuntimeState::not_installed) {
             show_setup_icon(state->cuda_runtime_icons, SetupIcon::inactive);
             state->cuda_runtime_status.Text(L"未安裝，目前使用 CPU 訓練");
-        } else if (runtime == LLAVON_CUDA_RUNTIME_UNSUPPORTED) {
+        } else if (runtime == CudaRuntimeState::unsupported) {
             show_setup_icon(state->cuda_runtime_icons, SetupIcon::attention);
             state->cuda_runtime_status.Text(L"請先更新訓練器");
         } else {
@@ -2153,19 +2119,16 @@ void SettingsWindow::show_lora_training_dialog() {
         }
     };
     state->install_trainer.Click([request_setup_action](const auto&, const auto&) {
-        request_setup_action(LLAVON_LORA_INSTALL_TRAINER, L"無法開始下載 LoRA 訓練器。");
+        request_setup_action(LoraAction::install_trainer, L"無法開始下載 LoRA 訓練器。");
     });
     state->install_cuda_runtime.Click([request_setup_action](const auto&, const auto&) {
-        request_setup_action(LLAVON_LORA_INSTALL_CUDA_RUNTIME,
-                             L"無法開始下載 CUDA 加速元件。");
+        request_setup_action(LoraAction::install_cuda_runtime, L"無法開始下載 CUDA 加速元件。");
     });
     state->remove_cuda_runtime.Click([request_setup_action](const auto&, const auto&) {
-        request_setup_action(LLAVON_LORA_REMOVE_CUDA_RUNTIME,
-                             L"無法移除 CUDA 加速元件。");
+        request_setup_action(LoraAction::remove_cuda_runtime, L"無法移除 CUDA 加速元件。");
     });
     state->cancel_trainer.Click([this](const auto&, const auto&) {
-        if (configuration_.cancel_lora_callback)
-            configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
+        if (configuration_.actions.cancel_lora) configuration_.actions.cancel_lora();
     });
     const auto refresh_apply_state = [state] {
         const bool pending = !state->output_model_path.empty() &&
@@ -2177,12 +2140,11 @@ void SettingsWindow::show_lora_training_dialog() {
     };
     const auto apply_new_model = [this, state, refresh_apply_state] {
         if (state->output_model_path.empty() || state->model_applied) return true;
-        const std::int32_t result = configuration_.save_model_path_callback
-            ? configuration_.save_model_path_callback(
-                  configuration_.save_model_path_context,
-                  state->output_model_path.c_str())
-            : ERROR_INVALID_FUNCTION;
-        if (result == ERROR_SUCCESS) {
+        const bool result = configuration_.actions.save_model_path
+                                ? configuration_.actions.save_model_path(
+                                      std::filesystem::path(state->output_model_path))
+                                : false;
+        if (result) {
             configuration_.model_path = state->output_model_path;
             model_path_.Text(to_hstring(configuration_.model_path));
             update_model_path_save_state();
@@ -2192,21 +2154,18 @@ void SettingsWindow::show_lora_training_dialog() {
             state->status.Text(L"無法套用新模型，請重試。");
         }
         refresh_apply_state();
-        return result == ERROR_SUCCESS;
+        return result;
     };
     state->reload_model.Click([apply_new_model](const auto&, const auto&) {
         apply_new_model();
     });
 
-    const auto refresh_status = [this, state, refresh_training_selection,
-                                 refresh_apply_state, update_cuda_runtime_row,
-                                 reload_training_base] {
-        llavon_settings_lora_status status{};
-        const std::int32_t result = configuration_.get_lora_status_callback
-            ? configuration_.get_lora_status_callback(
-                  configuration_.get_lora_status_context, &status)
-            : ERROR_INVALID_FUNCTION;
-        if (result != ERROR_SUCCESS) {
+    const auto refresh_status = [this, state, refresh_training_selection, refresh_apply_state,
+                                    update_cuda_runtime_row, reload_training_base] {
+        const auto snapshot = configuration_.actions.get_lora_status
+                                  ? configuration_.actions.get_lora_status()
+                                  : std::nullopt;
+        if (!snapshot) {
             state->status.Text(L"無法取得 LoRA 狀態。");
             state->setup_summary.Text(L"無法確認安裝狀態");
             if (!state->setup_expansion_initialized) {
@@ -2217,37 +2176,30 @@ void SettingsWindow::show_lora_training_dialog() {
             }
             return;
         }
-        const bool checking_updates =
-            status.stage == LLAVON_SETTINGS_LORA_CHECKING_UPDATES;
-        const bool downloading_model =
-            status.stage == LLAVON_SETTINGS_LORA_CHECKING_MODEL ||
-            status.stage == LLAVON_SETTINGS_LORA_DOWNLOADING_MODEL;
-        const bool trainer_busy =
-            status.stage == LLAVON_SETTINGS_LORA_CHECKING_TRAINER ||
-            status.stage == LLAVON_SETTINGS_LORA_INSTALLING_TRAINER;
+        const auto& status = *snapshot;
+        const bool checking_updates = status.stage == LoraOperationStage::checking_updates;
+        const bool downloading_model = status.stage == LoraOperationStage::checking_model ||
+                                       status.stage == LoraOperationStage::downloading_model;
+        const bool trainer_busy = status.stage == LoraOperationStage::checking_trainer ||
+                                  status.stage == LoraOperationStage::installing_trainer;
         const bool busy = checking_updates || downloading_model || trainer_busy ||
-                          status.stage == LLAVON_SETTINGS_LORA_PREPARING_DATA ||
-                          status.stage == LLAVON_SETTINGS_LORA_TRAINING ||
-                          status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL;
-        const std::wstring message = status.message
-            ? to_hstring(std::u16string_view(status.message)).c_str() : L"";
+                          status.stage == LoraOperationStage::preparing_data ||
+                          status.stage == LoraOperationStage::training ||
+                          status.stage == LoraOperationStage::exporting_model;
+        const std::wstring message = to_hstring(status.message).c_str();
         if (!checking_updates && !downloading_model && !trainer_busy &&
             !message.empty()) {
             state->status.Text(message);
         }
-        const bool training_busy =
-            status.stage == LLAVON_SETTINGS_LORA_PREPARING_DATA ||
-            status.stage == LLAVON_SETTINGS_LORA_TRAINING ||
-            status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL;
+        const bool training_busy = status.stage == LoraOperationStage::preparing_data ||
+                                   status.stage == LoraOperationStage::training ||
+                                   status.stage == LoraOperationStage::exporting_model;
         if (training_busy) state->training_observed = true;
         state->busy = busy;
         state->training_busy = training_busy;
-        const std::string status_fingerprint = status.base_model_fingerprint
-            ? status.base_model_fingerprint : "";
-        const std::string status_revision = status.model_revision
-            ? utf8::utf16to8(std::u16string_view(status.model_revision)) : "";
-        const std::u16string status_base_output_path = status.base_model_output_path
-            ? status.base_model_output_path : u"";
+        const std::string status_fingerprint = status.base_model_fingerprint;
+        const std::string status_revision = utf8::utf16to8(status.model_revision);
+        const std::u16string status_base_output_path = status.base_model_output_path;
         const bool base_identity_changed =
             status_fingerprint != state->observed_base_fingerprint ||
             status_revision != state->observed_base_revision;
@@ -2327,8 +2279,10 @@ void SettingsWindow::show_lora_training_dialog() {
                 static_cast<std::int32_t>(restored_index));
             state->rebuilding_base_choices = false;
             close_history_picker();
-            if (selection_preserved) refresh_training_selection();
-            else reload_training_base(true);
+            if (selection_preserved)
+                refresh_training_selection();
+            else
+                reload_training_base(true);
         }
         if (!training_busy) state->cancel_requested = false;
         if (state->cancel_requested) state->status.Text(L"正在取消訓練並結束子程序…");
@@ -2375,18 +2329,16 @@ void SettingsWindow::show_lora_training_dialog() {
             state->setup_expansion_initialized = true;
         }
         state->setup_needs_attention = setup_needs_attention;
-        const auto wide_text = [](const char16_t* value) {
+        const auto wide_text = [](std::u16string_view value) {
             std::wstring result;
-            if (value) {
-                for (; *value; ++value)
-                    result.push_back(static_cast<wchar_t>(*value));
-            }
+            for (const auto character : value)
+                result.push_back(static_cast<wchar_t>(character));
             return result;
         };
-        const auto installed_version = status.trainer_version && *status.trainer_version
-            ? wide_text(status.trainer_version) : std::wstring(L"未知版本");
-        const bool trainer_release_known =
-            status.trainer_release_version && *status.trainer_release_version;
+        const auto installed_version = !status.trainer_version.empty()
+                                           ? wide_text(status.trainer_version)
+                                           : std::wstring(L"未知版本");
+        const bool trainer_release_known = !status.trainer_release_version.empty();
         if (trainer_busy) {
             show_setup_icon(state->trainer_icons, SetupIcon::update);
             state->trainer_status_detail.Text(message);
@@ -2408,8 +2360,7 @@ void SettingsWindow::show_lora_training_dialog() {
             state->trainer_status_detail.Text(
                 std::format(L"已是最新版本（{}）", installed_version));
         }
-        const std::wstring trainer_warning = status.trainer_message
-            ? wide_text(status.trainer_message) : L"";
+        const std::wstring trainer_warning = wide_text(status.trainer_message);
         state->trainer_warning.Text(trainer_warning);
         state->trainer_warning.Visibility(
             !trainer_busy && !checking_updates && !trainer_warning.empty()
@@ -2426,22 +2377,21 @@ void SettingsWindow::show_lora_training_dialog() {
         state->install_trainer.Visibility(
             !trainer_busy && (!status.trainer_available || trainer_update)
                 ? Visibility::Visible : Visibility::Collapsed);
-        state->cancel_trainer.Visibility(
-            status.stage == LLAVON_SETTINGS_LORA_INSTALLING_TRAINER
-                ? Visibility::Visible : Visibility::Collapsed);
+        state->cancel_trainer.Visibility(status.stage == LoraOperationStage::installing_trainer
+                                             ? Visibility::Visible
+                                             : Visibility::Collapsed);
         state->check_updates.IsEnabled(!busy);
         update_cuda_runtime_row();
 
         state->progress.Visibility(
             training_busy ? Visibility::Visible : Visibility::Collapsed);
         state->progress.IsIndeterminate(
-            training_busy && status.stage == LLAVON_SETTINGS_LORA_EXPORTING_MODEL);
+            training_busy && status.stage == LoraOperationStage::exporting_model);
         if (!state->progress.IsIndeterminate()) {
             state->progress.Value(std::clamp(status.progress, 0.0, 1.0) * 100.0);
         }
 
-        const bool model_progress_known =
-            status.stage == LLAVON_SETTINGS_LORA_DOWNLOADING_MODEL;
+        const bool model_progress_known = status.stage == LoraOperationStage::downloading_model;
         state->download_progress.Visibility(
             downloading_model || checking_updates
                 ? Visibility::Visible
@@ -2480,9 +2430,7 @@ void SettingsWindow::show_lora_training_dialog() {
         state->cancel.Visibility(
             downloading_model ? Visibility::Visible : Visibility::Collapsed);
         refresh_training_selection();
-        const std::u16string completed_model_path =
-            status.output_model_path
-                ? status.output_model_path : u"";
+        const std::u16string completed_model_path = status.output_model_path;
         if (state->training_observed && !completed_model_path.empty() &&
             configuration_.model_path != completed_model_path) {
             configuration_.model_path = completed_model_path;
@@ -2566,9 +2514,9 @@ void SettingsWindow::show_lora_training_dialog() {
                 return;
             }
             if (state->training_busy) {
-                if (!state->cancel_requested && configuration_.cancel_lora_callback) {
+                if (!state->cancel_requested && configuration_.actions.cancel_lora) {
                     state->cancel_requested = true;
-                    configuration_.cancel_lora_callback(configuration_.cancel_lora_context);
+                    configuration_.actions.cancel_lora();
                     state->status.Text(L"正在取消訓練並結束子程序…");
                     refresh_training_selection();
                 }
@@ -2600,7 +2548,13 @@ void SettingsWindow::show_lora_training_dialog() {
                     state->training_base.SelectedIndex());
                 const auto selected_base_id =
                     state->base_run_ids[selected_base_index];
-                llavon_settings_lora_options options{
+                const std::u16string dtype =
+                    state->dtype.SelectedIndex() == 1 ? u"bfloat16" : u"float32";
+                const std::u16string target_modules = to_utf16(state->target_modules.Text());
+                LoraTrainingOptions options{
+                    .base_run_id = selected_base_id < 0 ? 0 : selected_base_id,
+                    .base_model_fingerprint = state->base_fingerprints[selected_base_index],
+                    .base_model_revision = state->base_revisions[selected_base_index],
                     .rank = parse_integer(state->rank),
                     .alpha = parse_real(state->alpha),
                     .dropout = parse_real(state->dropout),
@@ -2614,32 +2568,20 @@ void SettingsWindow::show_lora_training_dialog() {
                     .max_gradient_norm = parse_real(state->max_gradient_norm),
                     .save_every = parse_integer(state->save_every),
                     .device = state->device.SelectedIndex() == 1
-                        ? LLAVON_SETTINGS_LORA_DEVICE_CUDA
-                        : (state->device.SelectedIndex() == 2
-                               ? LLAVON_SETTINGS_LORA_DEVICE_CPU
-                               : LLAVON_SETTINGS_LORA_DEVICE_AUTO),
+                                  ? 2
+                                  : (state->device.SelectedIndex() == 2 ? 1 : 0),
                     .seed = parse_integer(state->seed),
-                    .shuffle = state->shuffle.IsOn() ? 1 : 0,
+                    .shuffle = state->shuffle.IsOn(),
                     .max_sequence_length = parse_integer(state->max_sequence_length),
-                    .dtype = nullptr,
-                    .target_modules = nullptr,
-                    .strength = state->training_strength.SelectedIndex(),
-                    .only_manually_selected = state->only_selected_sentences.IsOn() ? 1 : 0,
-                    .train_until_remembered = state->train_until_remembered.IsOn() ? 1 : 0,
-                    .only_train_incorrect = state->only_train_incorrect.IsOn() ? 1 : 0,
-                    .base_run_id = selected_base_id < 0 ? 0 : selected_base_id,
-                    .base_model_fingerprint =
-                        state->base_fingerprints[selected_base_index].c_str(),
-                    .base_model_revision =
-                        state->base_revisions[selected_base_index].c_str(),
-                    .stabilize_intruders = state->stabilize_intruders.IsOn() ? 1 : 0,
+                    .dtype = dtype,
+                    .target_modules = target_modules,
+                    .strength = static_cast<service::LoraTrainingStrength>(
+                        state->training_strength.SelectedIndex()),
+                    .only_manually_selected = state->only_selected_sentences.IsOn(),
+                    .train_until_remembered = state->train_until_remembered.IsOn(),
+                    .only_train_incorrect = state->only_train_incorrect.IsOn(),
+                    .stabilize_intruders = state->stabilize_intruders.IsOn(),
                 };
-                const std::u16string dtype = state->dtype.SelectedIndex() == 1
-                    ? u"bfloat16"
-                    : u"float32";
-                const std::u16string target_modules = to_utf16(state->target_modules.Text());
-                options.dtype = dtype.c_str();
-                options.target_modules = target_modules.c_str();
 
                 if (options.rank <= 0 || options.alpha <= 0 ||
                     options.dropout < 0 || options.dropout >= 1 ||
@@ -2664,44 +2606,40 @@ void SettingsWindow::show_lora_training_dialog() {
                     state->status.Text(L"目前沒有符合條件的訓練資料。");
                     return;
                 }
-                show_password_dialog(false, [this, state, options, dtype, target_modules,
-                                             selected, refresh_apply_state, refresh_training_selection](
-                    const char16_t* password) mutable
-                    -> winrt::Windows::Foundation::IAsyncOperation<bool> {
-                    if (state->closed) co_return false;
-                    options.dtype = dtype.c_str();
-                    options.target_modules = target_modules.c_str();
-                    std::vector<const char16_t*> selected_pointers;
-                    for (const auto& event_id : selected) selected_pointers.push_back(event_id.c_str());
-                    state->progress.IsIndeterminate(true);
-                    state->progress.Visibility(Visibility::Visible);
-                    state->status.Text(L"正在由 service 儲存資料選擇…");
-                    const auto callback = configuration_.start_lora_training_callback;
-                    const auto context = configuration_.start_lora_training_context;
-                    const auto alive = restore_ui_alive_;
-                    std::int32_t result = ERROR_INVALID_FUNCTION;
-                    co_await run_in_background([&] {
-                        if (callback) result = callback(context, selected_pointers.data(),
-                            selected_pointers.size(), &options, password);
-                        return result == ERROR_SUCCESS;
-                    });
-                    if (!alive->load(std::memory_order_acquire)) co_return false;
-                    if (result == ERROR_SUCCESS) {
-                        state->training_observed = true;
-                        state->busy = true;
-                        state->training_busy = true;
-                        state->cancel_requested = false;
-                        state->output_model_path.clear();
-                        state->model_applied = false;
-                        refresh_apply_state();
-                        refresh_training_selection();
-                        state->status.Text(L"訓練已啟動，關閉視窗後仍會在背景繼續。");
-                    } else {
-                        state->progress.Visibility(Visibility::Collapsed);
-                        state->status.Text(L"無法儲存訓練資料選擇，請稍後再試。");
-                    }
-                    co_return result == ERROR_SUCCESS;
-                }, true);
+                show_password_dialog(
+                    false,
+                    [this, state, options, selected, refresh_apply_state,
+                        refresh_training_selection](std::u16string_view password) mutable
+                        -> winrt::Windows::Foundation::IAsyncOperation<bool> {
+                        if (state->closed) co_return false;
+                        state->progress.IsIndeterminate(true);
+                        state->progress.Visibility(Visibility::Visible);
+                        state->status.Text(L"正在由 service 儲存資料選擇…");
+                        const auto callback = configuration_.actions.start_lora_training;
+                        const auto alive = restore_ui_alive_;
+                        bool result = false;
+                        co_await run_in_background([&] {
+                            if (callback) result = callback(selected, options, password);
+                            return result;
+                        });
+                        if (!alive->load(std::memory_order_acquire)) co_return false;
+                        if (result) {
+                            state->training_observed = true;
+                            state->busy = true;
+                            state->training_busy = true;
+                            state->cancel_requested = false;
+                            state->output_model_path.clear();
+                            state->model_applied = false;
+                            refresh_apply_state();
+                            refresh_training_selection();
+                            state->status.Text(L"訓練已啟動，關閉視窗後仍會在背景繼續。");
+                        } else {
+                            state->progress.Visibility(Visibility::Collapsed);
+                            state->status.Text(L"無法儲存訓練資料選擇，請稍後再試。");
+                        }
+                        co_return result;
+                    },
+                    true);
             } catch (...) {
                 state->progress.Visibility(Visibility::Collapsed);
                 state->status.Text(L"參數格式或範圍不正確，請檢查所有欄位。");
@@ -2714,9 +2652,8 @@ void SettingsWindow::show_lora_training_dialog() {
     shell_.Children().GetAt(0).as<Control>().IsEnabled(false);
     shell_.Children().Append(state->overlay);
     lora_dialog_open_ = true;
-    if (configuration_.lora_model_action_callback)
-        configuration_.lora_model_action_callback(
-            configuration_.lora_model_action_context, LLAVON_LORA_CHECK_UPDATES);
+    if (configuration_.actions.lora_model_action)
+        configuration_.actions.lora_model_action(LoraAction::check_updates);
 }
 
 void SettingsWindow::add_custom_name_row(
@@ -2866,7 +2803,7 @@ bool SettingsWindow::collect_custom_names(std::vector<CustomNameEntry>& entries)
 
 void SettingsWindow::save_custom_names() {
     if (!save_custom_names_button_ || !custom_names_note_ ||
-        !configuration_.save_custom_names_callback) {
+        !configuration_.actions.save_custom_names) {
         return;
     }
 
@@ -2877,25 +2814,12 @@ void SettingsWindow::save_custom_names() {
         return;
     }
 
-    std::vector<std::vector<const char16_t*>> reading_pointers;
-    reading_pointers.reserve(entries.size());
-    std::vector<llavon_settings_custom_name> custom_names;
+    std::vector<CustomNameOption> custom_names;
     custom_names.reserve(entries.size());
-    for (const auto& entry : entries) {
-        auto& pointers = reading_pointers.emplace_back();
-        pointers.reserve(entry.readings.size());
-        for (const auto& reading : entry.readings) {
-            pointers.push_back(reading.c_str());
-        }
-        custom_names.push_back(llavon_settings_custom_name{
-            .name = entry.name.c_str(),
-            .readings = pointers.data(),
-            .reading_count = pointers.size(),
-        });
-    }
-    const std::int32_t result = configuration_.save_custom_names_callback(
-        configuration_.save_custom_names_context, custom_names.data(), custom_names.size());
-    if (result == ERROR_SUCCESS) {
+    for (const auto& entry : entries)
+        custom_names.push_back({entry.name, entry.readings});
+    const bool result = configuration_.actions.save_custom_names(custom_names);
+    if (result) {
         saved_custom_names_ = std::move(entries);
         save_custom_names_button_.IsEnabled(false);
         custom_names_note_.Text(L"已儲存");
@@ -2986,12 +2910,10 @@ void SettingsWindow::browse_model_file() {
 
 void SettingsWindow::close_history_picker() {
     if (!history_picker_overlay_ || restoring_lora_model_) return;
-    if (history_picker_new_export_ &&
-        configuration_.prepare_model_callback &&
+    if (history_picker_new_export_ && configuration_.actions.prepare_model &&
         !history_picker_prepared_model_path_.empty()) {
-        configuration_.prepare_model_callback(
-            configuration_.prepare_model_context,
-            history_picker_prepared_model_path_.c_str(), LLAVON_MODEL_DISCARD);
+        configuration_.actions.prepare_model(
+            std::filesystem::path(history_picker_prepared_model_path_), ModelPreparation::discard);
     }
     if (shell_) {
         const auto children = shell_.Children();
@@ -3105,9 +3027,9 @@ void SettingsWindow::show_history_picker(
         history_picker_status_ = status;
         history_picker_apply_button_ = apply_button;
         apply_button.Click([this](const auto&, const auto&) {
-            if (restoring_lora_model_ ||
-                history_picker_prepared_model_path_.empty() ||
-                !configuration_.save_model_path_callback) return;
+            if (restoring_lora_model_ || history_picker_prepared_model_path_.empty() ||
+                !configuration_.actions.save_model_path)
+                return;
             history_picker_close_button_.IsEnabled(false);
             history_picker_apply_button_.IsEnabled(false);
             history_picker_progress_.Visibility(Visibility::Visible);
@@ -3115,13 +3037,13 @@ void SettingsWindow::show_history_picker(
             // The service may load the model before persisting its path. Once
             // application starts, a failed save must not discard that file.
             const bool newly_exported = std::exchange(history_picker_new_export_, false);
-            const auto callback = configuration_.save_model_path_callback;
-            const auto context = configuration_.save_model_path_context;
+            const auto callback = configuration_.actions.save_model_path;
             if (!begin_lora_history_operation(
                     history_picker_prepared_model_path_,
-                    [callback, context](const char16_t* path) {
-                        return callback(context, path);
-                    }, true, [this](bool success) {
+                    [callback](
+                        std::u16string_view path) { return callback(std::filesystem::path(path)); },
+                    true,
+                    [this](bool success) {
                         model_history_button_.IsEnabled(true);
                         if (success) {
                             history_picker_new_export_ = false;
@@ -3215,13 +3137,10 @@ void SettingsWindow::show_model_history_tree() {
         }
         paths->try_emplace(0, configuration_.base_model_path);
         for (const auto& run : history) paths->emplace(run.id, run.output_model_path);
-        show_history_picker(model_history_button_, std::move(history), chosen,
-            applied, LoraHistoryTreeAction::apply_model,
-            current_base,
-            std::move(catalog),
+        show_history_picker(model_history_button_, std::move(history), chosen, applied,
+            LoraHistoryTreeAction::apply_model, current_base, std::move(catalog),
             [this, paths](std::int64_t id) {
-                if (restoring_lora_model_ ||
-                    !configuration_.prepare_model_callback) return;
+                if (restoring_lora_model_ || !configuration_.actions.prepare_model) return;
                 const auto found = paths->find(id);
                 if (found == paths->end() || found->second.empty()) {
                     history_picker_status_.Text(L"此版本沒有模型檔案");
@@ -3242,14 +3161,15 @@ void SettingsWindow::show_model_history_tree() {
                 const bool already_converted = std::filesystem::is_regular_file(
                     std::filesystem::path(found->second), path_error);
                 model_history_button_.IsEnabled(false);
-                const auto callback = configuration_.prepare_model_callback;
-                const auto context = configuration_.prepare_model_context;
-                if (!begin_lora_history_operation(found->second,
-                        [callback, context](const char16_t* path) {
-                            return callback(context, path, LLAVON_MODEL_PREPARE);
-                        }, false,
+                const auto callback = configuration_.actions.prepare_model;
+                if (!begin_lora_history_operation(
+                        found->second,
+                        [callback](std::u16string_view path) {
+                            return callback(std::filesystem::path(path), ModelPreparation::prepare);
+                        },
+                        false,
                         [this, path = found->second,
-                         newly_exported = !path_error && !already_converted](bool success) {
+                            newly_exported = !path_error && !already_converted](bool success) {
                             model_history_button_.IsEnabled(true);
                             if (success) {
                                 history_picker_prepared_model_path_ = path;
@@ -3288,20 +3208,19 @@ void SettingsWindow::show_model_history_tree() {
     }
 }
 
-bool SettingsWindow::begin_lora_history_operation(
-    std::u16string model_path,
-    std::function<std::int32_t(const char16_t*)> operation,
-    bool apply_model, std::function<void(bool)> finished) {
+bool SettingsWindow::begin_lora_history_operation(std::u16string model_path,
+    std::function<bool(std::u16string_view)> operation, bool apply_model,
+    std::function<void(bool)> finished) {
     if (restoring_lora_model_ || !operation) return false;
     if (lora_restore_worker_.joinable()) lora_restore_worker_.join();
     restoring_lora_model_ = true;
     const auto dispatcher = shell_.DispatcherQueue();
     const auto alive = restore_ui_alive_;
     try {
-        lora_restore_worker_ = std::jthread(
-            [this, model_path = std::move(model_path), operation = std::move(operation),
-             apply_model, dispatcher, alive, finished = std::move(finished)] {
-            const bool success = operation(model_path.c_str()) == ERROR_SUCCESS;
+        lora_restore_worker_ = std::jthread([this, model_path = std::move(model_path),
+                                                operation = std::move(operation), apply_model,
+                                                dispatcher, alive, finished = std::move(finished)] {
+            const bool success = operation(model_path);
             try {
                 dispatcher.TryEnqueue([this, model_path, success, apply_model,
                                        alive, finished] {
@@ -3326,7 +3245,7 @@ bool SettingsWindow::begin_lora_history_operation(
 
 void SettingsWindow::save_model_path() {
     if (!model_path_ || !save_model_button_ || !model_note_ ||
-        !configuration_.save_model_path_callback) {
+        !configuration_.actions.save_model_path) {
         return;
     }
 
@@ -3337,9 +3256,8 @@ void SettingsWindow::save_model_path() {
         return;
     }
 
-    const std::int32_t result = configuration_.save_model_path_callback(
-        configuration_.save_model_path_context, path.c_str());
-    if (result == ERROR_SUCCESS) {
+    const bool result = configuration_.actions.save_model_path(std::filesystem::path(path));
+    if (result) {
         configuration_.model_path = path;
         model_path_.Text(to_hstring(path));
         save_model_button_.IsEnabled(false);
@@ -3391,7 +3309,7 @@ void SettingsWindow::update_model_path_save_state() {
 }
 
 void SettingsWindow::save_inference_setting() {
-    if (!inference_device_ || !note_ || !configuration_.save_callback) {
+    if (!inference_device_ || !note_ || !configuration_.actions.save_inference) {
         return;
     }
     const std::int32_t selected_index = inference_device_.SelectedIndex();
@@ -3402,9 +3320,8 @@ void SettingsWindow::save_inference_setting() {
     }
 
     const auto& option = inference_options_[static_cast<std::size_t>(selected_index)];
-    const std::int32_t result = configuration_.save_callback(
-        configuration_.save_context, option.backend, option.device_id.c_str());
-    if (result == ERROR_SUCCESS) {
+    const bool result = configuration_.actions.save_inference(option.backend, option.device_id);
+    if (result) {
         configuration_.selected_backend = option.backend;
         configuration_.selected_device_id = option.device_id;
         save_inference_button_.IsEnabled(false);
@@ -3677,11 +3594,10 @@ void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
 }
 
 void SettingsWindow::close_xaml() noexcept {
-    if (history_picker_new_export_ && configuration_.prepare_model_callback &&
+    if (history_picker_new_export_ && configuration_.actions.prepare_model &&
         !history_picker_prepared_model_path_.empty()) {
-        configuration_.prepare_model_callback(
-            configuration_.prepare_model_context,
-            history_picker_prepared_model_path_.c_str(), LLAVON_MODEL_DISCARD);
+        configuration_.actions.prepare_model(
+            std::filesystem::path(history_picker_prepared_model_path_), ModelPreparation::discard);
     }
     history_picker_prepared_model_path_.clear();
     history_picker_new_export_ = false;

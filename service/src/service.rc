@@ -1,5 +1,4 @@
 #include <winuser.h>
 #include "resource.h"
 
-1 RT_MANIFEST "service.manifest"
 IDI_LLAVON_TRAY ICON "assets\\llavon_tray.ico"

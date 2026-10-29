@@ -647,15 +647,12 @@ inline asio::awaitable<void> listener(
 
 class PredictionPipeServer final {
 public:
-    PredictionPipeServer(
-        std::shared_ptr<llavon::ime::core::Core> core,
-        CandidateUiLoader& candidate_ui,
-        std::shared_ptr<CustomNameMatcher> custom_names,
+    PredictionPipeServer(std::shared_ptr<llavon::ime::core::Core> core,
+        candidate::CandidateUi& candidate_ui, std::shared_ptr<CustomNameMatcher> custom_names,
         bool gpu_boost_enabled = true)
         : sessions_(std::make_shared<prediction_pipe::SessionLru>(
               inference_.get_executor(), std::move(core), gpu_boost_enabled)),
-          candidate_ui_(candidate_ui),
-          custom_names_(std::move(custom_names)),
+          candidate_ui_(candidate_ui), custom_names_(std::move(custom_names)),
           training_data_(std::make_shared<TrainingDataWriter>()) {
         if (!custom_names_) {
             throw std::invalid_argument("prediction server dependencies are required");
@@ -753,7 +750,7 @@ private:
     asio::thread_pool inference_{1};
     asio::io_context io_ctx_;
     std::shared_ptr<prediction_pipe::SessionLru> sessions_;
-    CandidateUiLoader& candidate_ui_;
+    candidate::CandidateUi& candidate_ui_;
     std::shared_ptr<CustomNameMatcher> custom_names_;
     std::shared_ptr<TrainingDataWriter> training_data_;
     std::atomic<bool> accepting_reloads_{true};

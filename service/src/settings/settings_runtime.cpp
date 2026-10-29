@@ -1,4 +1,4 @@
-#include "settings_ui_api.h"
+#include "settings_ui.hpp"
 #include "settings_resources.h"
 
 #include "settings_configuration.hpp"
@@ -18,6 +18,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <winrt/base.h>
 
@@ -57,236 +58,18 @@ void report_settings_error(std::wstring_view message) noexcept {
 }
 
 struct UiClientState {
-    bool connected = false;
     std::atomic<HWND> command_window{nullptr};
 };
-class Runtime final {
-public:
-    int32_t configure_lora_base_models(
-        llavon_settings_get_lora_base_models_callback callback, void* context) {
-        std::lock_guard lock(mutex_);
-        if (settings_client_.connected) return ERROR_BUSY;
-        if (!callback) return ERROR_INVALID_PARAMETER;
-        configuration_.get_lora_base_models_callback = callback;
-        configuration_.get_lora_base_models_context = context;
-        return ERROR_SUCCESS;
-    }
-    int32_t configure_gpu_boost(
-        bool enabled, llavon_settings_save_gpu_boost_callback save_callback,
-        void* save_context) {
-        std::lock_guard lock(mutex_);
-        if (settings_client_.connected) return ERROR_BUSY;
-        if (!save_callback) return ERROR_INVALID_PARAMETER;
-        configuration_.gpu_boost_enabled = enabled;
-        configuration_.save_gpu_boost_callback = save_callback;
-        configuration_.save_gpu_boost_context = save_context;
-        return ERROR_SUCCESS;
-    }
+} // namespace
 
-    int32_t configure_immediate_conversion(
-        bool enabled, llavon_settings_save_immediate_conversion_callback save_callback,
-        void* save_context) {
-        std::lock_guard lock(mutex_);
-        if (settings_client_.connected) return ERROR_BUSY;
-        if (!save_callback) return ERROR_INVALID_PARAMETER;
-        configuration_.immediate_conversion_enabled = enabled;
-        configuration_.save_immediate_conversion_callback = save_callback;
-        configuration_.save_immediate_conversion_context = save_context;
-        return ERROR_SUCCESS;
-    }
-
-    int32_t configure_model_preparation(
-        llavon_settings_prepare_model_callback callback, void* context,
-        const char16_t* base_model_path) {
-        std::lock_guard lock(mutex_);
-        if (settings_client_.connected) return ERROR_BUSY;
-        if (!callback || !base_model_path) return ERROR_INVALID_PARAMETER;
-        configuration_.prepare_model_callback = callback;
-        configuration_.prepare_model_context = context;
-        configuration_.base_model_path = base_model_path;
-        return ERROR_SUCCESS;
-    }
-
-    int32_t configure_update_notifications(
-        bool enabled, llavon_settings_save_update_notifications_callback save_callback,
-        void* save_context) {
-        std::lock_guard lock(mutex_);
-        if (settings_client_.connected) return ERROR_BUSY;
-        if (!save_callback) return ERROR_INVALID_PARAMETER;
-        configuration_.major_update_notifications_enabled = enabled;
-        configuration_.save_update_notifications_callback = save_callback;
-        configuration_.save_update_notifications_context = save_context;
-        return ERROR_SUCCESS;
-    }
+struct SettingsUi::State {
+    State(ui::UiThread& thread, SettingsConfiguration configuration)
+        : thread_(thread), thread_configuration_(std::move(configuration)) {}
 
     void set_pending_count(std::size_t count) noexcept {
         pending_count_.store(count, std::memory_order_release);
         has_pending_count_.store(true, std::memory_order_release);
         post(settings_client_, pending_count_message);
-    }
-
-    int32_t configure(const llavon_settings_inference_device* devices,
-                      std::size_t device_count,
-                      std::int32_t selected_backend,
-                      const char16_t* selected_device_id,
-                      const llavon_settings_inference_device* active_device,
-                      std::int32_t gpu_offload,
-                      std::int32_t fell_back_to_cpu,
-                      llavon_settings_save_inference_callback save_callback,
-                      void* save_context,
-                      const char16_t* model_path,
-                      llavon_settings_save_model_path_callback save_model_path_callback,
-                      void* save_model_path_context,
-                      const llavon_settings_custom_name* custom_names,
-                      std::size_t custom_name_count,
-                      llavon_settings_save_custom_names_callback save_custom_names_callback,
-                      void* save_custom_names_context,
-                      std::int32_t shift_space_width_toggle_enabled,
-                      llavon_settings_save_width_toggle_callback save_width_toggle_callback,
-                      void* save_width_toggle_context,
-                      const llavon_settings_training_item* training_items,
-                      std::size_t training_item_count,
-                      llavon_settings_refresh_training_items_callback
-                          refresh_training_items_callback,
-                      void* refresh_training_items_context,
-                      llavon_settings_delete_training_item_callback
-                          delete_training_item_callback,
-                      void* delete_training_item_context,
-                      llavon_settings_get_lora_history_callback
-                          get_lora_history_callback,
-                      void* get_lora_history_context,
-                      llavon_settings_start_lora_training_callback
-                          start_lora_training_callback,
-                      void* start_lora_training_context,
-                      llavon_settings_get_lora_status_callback get_lora_status_callback,
-                      void* get_lora_status_context,
-                      llavon_settings_lora_model_action_callback lora_model_action_callback,
-                      void* lora_model_action_context,
-                      llavon_settings_cancel_lora_callback cancel_lora_callback,
-                      void* cancel_lora_context,
-    llavon_settings_protection_callback protection_callback, void* protection_context) {
-        std::lock_guard lock(mutex_);
-        if (settings_client_.connected) {
-            return ERROR_BUSY;
-        }
-        if ((device_count != 0 && !devices) || !active_device || !save_callback ||
-            !model_path || !save_model_path_callback ||
-            (custom_name_count != 0 && !custom_names) || !save_custom_names_callback ||
-            !save_width_toggle_callback ||
-            (training_item_count != 0 && !training_items) ||
-            !refresh_training_items_callback || !delete_training_item_callback ||
-            !get_lora_history_callback ||
-            !start_lora_training_callback ||
-            !get_lora_status_callback ||
-            !lora_model_action_callback || !cancel_lora_callback) {
-            return ERROR_INVALID_PARAMETER;
-        }
-
-        SettingsConfiguration configuration;
-        configuration.selected_backend = selected_backend;
-        configuration.selected_device_id = selected_device_id ? selected_device_id : u"";
-        configuration.active_device = InferenceDeviceOption{
-            .backend = active_device->backend,
-            .device_type = active_device->device_type,
-            .device_id = active_device->device_id ? active_device->device_id : u"",
-            .name = active_device->name ? active_device->name : u"",
-            .description = active_device->description ? active_device->description : u"",
-            .memory_total = active_device->memory_total,
-        };
-        configuration.gpu_offload = gpu_offload != 0;
-        configuration.fell_back_to_cpu = fell_back_to_cpu != 0;
-        configuration.save_callback = save_callback;
-        configuration.save_context = save_context;
-        configuration.model_path = model_path;
-        configuration.save_model_path_callback = save_model_path_callback;
-        configuration.save_model_path_context = save_model_path_context;
-        configuration.save_custom_names_callback = save_custom_names_callback;
-        configuration.save_custom_names_context = save_custom_names_context;
-        configuration.shift_space_width_toggle_enabled =
-            shift_space_width_toggle_enabled != 0;
-        configuration.save_width_toggle_callback = save_width_toggle_callback;
-        configuration.save_width_toggle_context = save_width_toggle_context;
-        configuration.start_lora_training_callback = start_lora_training_callback;
-        configuration.start_lora_training_context = start_lora_training_context;
-        configuration.refresh_training_items_callback = refresh_training_items_callback;
-        configuration.refresh_training_items_context = refresh_training_items_context;
-        configuration.delete_training_item_callback = delete_training_item_callback;
-        configuration.delete_training_item_context = delete_training_item_context;
-        configuration.get_lora_history_callback = get_lora_history_callback;
-        configuration.get_lora_history_context = get_lora_history_context;
-        configuration.get_lora_status_callback = get_lora_status_callback;
-        configuration.get_lora_status_context = get_lora_status_context;
-        configuration.lora_model_action_callback = lora_model_action_callback;
-        configuration.lora_model_action_context = lora_model_action_context;
-        configuration.cancel_lora_callback = cancel_lora_callback;
-        configuration.cancel_lora_context = cancel_lora_context;
-        configuration.protection_callback = protection_callback;
-        configuration.protection_context = protection_context;
-        configuration.training_items.reserve(training_item_count);
-        for (std::size_t index = 0; index < training_item_count; ++index) {
-            const auto& source = training_items[index];
-            if (!source.event_id || !source.context || !source.answer || !source.reading) {
-                return ERROR_INVALID_PARAMETER;
-            }
-            configuration.training_items.push_back(TrainingDataOption{
-                .event_id = source.event_id,
-                .context = source.context,
-                .answer = source.answer,
-                .reading = source.reading,
-                .revice = source.revice != 0,
-            });
-        }
-        configuration.custom_names.reserve(custom_name_count);
-        for (std::size_t index = 0; index < custom_name_count; ++index) {
-            const auto& source = custom_names[index];
-            if (!source.name || (source.reading_count != 0 && !source.readings)) {
-                return ERROR_INVALID_PARAMETER;
-            }
-            CustomNameOption option;
-            option.name = source.name;
-            option.readings.reserve(source.reading_count);
-            for (std::size_t reading = 0; reading < source.reading_count; ++reading) {
-                if (!source.readings[reading]) return ERROR_INVALID_PARAMETER;
-                option.readings.emplace_back(source.readings[reading]);
-            }
-            configuration.custom_names.push_back(std::move(option));
-        }
-        configuration.devices.reserve(device_count);
-        for (std::size_t index = 0; index < device_count; ++index) {
-            const auto& source = devices[index];
-            configuration.devices.push_back(InferenceDeviceOption{
-                .backend = source.backend,
-                .device_type = source.device_type,
-                .device_id = source.device_id ? source.device_id : u"",
-                .name = source.name ? source.name : u"",
-                .description = source.description ? source.description : u"",
-                .memory_total = source.memory_total,
-            });
-        }
-        configuration_ = std::move(configuration);
-        return 0;
-    }
-
-    int32_t start() {
-        std::lock_guard lock(mutex_);
-        if (settings_client_.connected) {
-            return 0;
-        }
-
-        thread_configuration_ = configuration_;
-        const auto result = llavon_ui_thread_acquire();
-        if (result != 0) return result;
-        settings_client_.connected = true;
-        const auto initialized = llavon_ui_thread_invoke([](void* context) {
-            static_cast<Runtime*>(context)->initialize_on_thread();
-        }, this);
-        if (initialized != 0) {
-            llavon_ui_thread_invoke([](void* context) {
-                static_cast<Runtime*>(context)->destroy_on_thread();
-            }, this);
-            if (llavon_ui_thread_release() == 0) settings_client_.connected = false;
-        }
-        return initialized;
     }
 
     void show() const noexcept {
@@ -306,22 +89,6 @@ public:
         }
     }
 
-    int32_t stop() {
-        std::lock_guard lock(mutex_);
-        if (!settings_client_.connected) {
-            return 0;
-        }
-
-        const auto destroyed = llavon_ui_thread_invoke([](void* context) {
-            static_cast<Runtime*>(context)->destroy_on_thread();
-        }, this);
-        if (destroyed != 0) return destroyed;
-        const auto result = llavon_ui_thread_release();
-        if (result == 0) settings_client_.connected = false;
-        return result;
-    }
-
-private:
     void initialize_on_thread() {
         using namespace winrt::Microsoft::UI::Xaml;
         theme_ = ui::load_xaml_resource(IDR_SETTINGS_THEME_XAML).as<ResourceDictionary>();
@@ -336,8 +103,11 @@ private:
         if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
             winrt::throw_last_error();
         }
-        settings_window_ = std::make_unique<SettingsWindow>(thread_configuration_);
+        settings_window_ = std::make_unique<SettingsWindow>(std::move(thread_configuration_));
         settings_menu_ = std::make_unique<SettingsMenuWindow>([this] { show(); });
+        if (!settings_window_->create(instance) || !settings_menu_->initialize(instance)) {
+            winrt::throw_hresult(E_FAIL);
+        }
         const HWND command_window = CreateWindowExW(
             0, settings_command_window_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
         if (!command_window) winrt::throw_last_error();
@@ -364,23 +134,22 @@ private:
         UnregisterClassW(settings_command_window_class, reinterpret_cast<HINSTANCE>(&__ImageBase));
         UnregisterClassW(L"LlavonImeSettingsMenuWindow", reinterpret_cast<HINSTANCE>(&__ImageBase));
         UnregisterClassW(L"LlavonImeSettingsWindow", reinterpret_cast<HINSTANCE>(&__ImageBase));
-        winrt::clear_factory_cache();
     }
-    static Runtime* get_runtime(HWND window, UINT message, LPARAM lparam) noexcept {
-        Runtime* self = nullptr;
+    static State* get_runtime(HWND window, UINT message, LPARAM lparam) noexcept {
+        State* self = nullptr;
         if (message == WM_NCCREATE) {
             const auto create = reinterpret_cast<CREATESTRUCTW*>(lparam);
-            self = static_cast<Runtime*>(create->lpCreateParams);
+            self = static_cast<State*>(create->lpCreateParams);
             SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         } else {
-            self = reinterpret_cast<Runtime*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+            self = reinterpret_cast<State*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         }
         return self;
     }
 
     static LRESULT CALLBACK settings_command_window_proc(HWND window, UINT message,
                                                          WPARAM wparam, LPARAM lparam) {
-        Runtime* self = get_runtime(window, message, lparam);
+        State* self = get_runtime(window, message, lparam);
 
         if (!self) {
             return DefWindowProcW(window, message, wparam, lparam);
@@ -450,136 +219,41 @@ private:
         }
     }
 
-    mutable std::mutex mutex_;
+    ui::UiThread& thread_;
     UiClientState settings_client_;
     std::unique_ptr<SettingsWindow> settings_window_;
     std::unique_ptr<SettingsMenuWindow> settings_menu_;
     winrt::Microsoft::UI::Xaml::ResourceDictionary theme_{nullptr};
-    SettingsConfiguration configuration_;
     SettingsConfiguration thread_configuration_;
     std::atomic<std::size_t> pending_count_{0};
     std::atomic_bool has_pending_count_{false};
 };
 
-Runtime& runtime() {
-    static Runtime instance;
-    return instance;
+SettingsUi::SettingsUi(ui::UiThread& thread, SettingsConfiguration configuration)
+    : state_(std::make_unique<State>(thread, std::move(configuration))) {
+    try {
+        thread.invoke([this] { state_->initialize_on_thread(); });
+    } catch (...) {
+        thread.invoke([this] { state_->destroy_on_thread(); });
+        throw;
+    }
 }
 
-}  // namespace
-}  // namespace llavon::settings
-
-extern "C" int32_t llavon_settings_ui_configure_v6(
-    const struct llavon_settings_inference_device* devices,
-    size_t device_count,
-    int32_t selected_backend,
-    const char16_t* selected_device_id,
-    const struct llavon_settings_inference_device* active_device,
-    int32_t gpu_offload,
-    int32_t fell_back_to_cpu,
-    llavon_settings_save_inference_callback save_callback,
-    void* save_context,
-    const char16_t* model_path,
-    llavon_settings_save_model_path_callback save_model_path_callback,
-    void* save_model_path_context,
-    const struct llavon_settings_custom_name* custom_names,
-    size_t custom_name_count,
-    llavon_settings_save_custom_names_callback save_custom_names_callback,
-    void* save_custom_names_context,
-    int32_t shift_space_width_toggle_enabled,
-    llavon_settings_save_width_toggle_callback save_width_toggle_callback,
-    void* save_width_toggle_context,
-    const struct llavon_settings_training_item* training_items,
-    size_t training_item_count,
-    llavon_settings_refresh_training_items_callback refresh_training_items_callback,
-    void* refresh_training_items_context,
-    llavon_settings_delete_training_item_callback delete_training_item_callback,
-    void* delete_training_item_context,
-    llavon_settings_get_lora_history_callback get_lora_history_callback,
-    void* get_lora_history_context,
-    llavon_settings_start_lora_training_callback start_lora_training_callback,
-    void* start_lora_training_context,
-    llavon_settings_get_lora_status_callback get_lora_status_callback,
-    void* get_lora_status_context,
-    llavon_settings_lora_model_action_callback lora_model_action_callback,
-    void* lora_model_action_context,
-    llavon_settings_cancel_lora_callback cancel_lora_callback,
-    void* cancel_lora_context,
-    llavon_settings_protection_callback protection_callback, void* protection_context) {
-    return llavon::settings::runtime().configure(
-        devices, device_count, selected_backend, selected_device_id, active_device,
-        gpu_offload, fell_back_to_cpu, save_callback, save_context,
-        model_path, save_model_path_callback, save_model_path_context,
-        custom_names, custom_name_count, save_custom_names_callback,
-        save_custom_names_context, shift_space_width_toggle_enabled,
-        save_width_toggle_callback, save_width_toggle_context,
-        training_items, training_item_count, refresh_training_items_callback,
-        refresh_training_items_context, delete_training_item_callback,
-        delete_training_item_context, get_lora_history_callback,
-        get_lora_history_context, start_lora_training_callback,
-        start_lora_training_context, get_lora_status_callback,
-        get_lora_status_context, lora_model_action_callback,
-        lora_model_action_context, cancel_lora_callback, cancel_lora_context,
-        protection_callback, protection_context);
+SettingsUi::~SettingsUi() {
+    state_->thread_.invoke([this] { state_->destroy_on_thread(); });
 }
 
-extern "C" int32_t llavon_settings_ui_configure_model_preparation_v2(
-    llavon_settings_prepare_model_callback callback, void* context,
-    const char16_t* base_model_path) {
-    return llavon::settings::runtime().configure_model_preparation(
-        callback, context, base_model_path);
+void SettingsUi::show() const noexcept {
+    state_->show();
+}
+void SettingsUi::hide() const noexcept {
+    state_->hide();
+}
+void SettingsUi::show_context_menu(POINT location) const noexcept {
+    state_->show_context_menu(location.x, location.y);
+}
+void SettingsUi::notify_pending_count(std::size_t count) noexcept {
+    state_->set_pending_count(count);
 }
 
-extern "C" int32_t llavon_settings_ui_configure_lora_base_models_v1(
-    llavon_settings_get_lora_base_models_callback callback, void* context) {
-    return llavon::settings::runtime().configure_lora_base_models(callback, context);
-}
-
-extern "C" int32_t llavon_settings_ui_configure_update_notifications(
-    int32_t enabled,
-    llavon_settings_save_update_notifications_callback save_callback,
-    void* save_context) {
-    return llavon::settings::runtime().configure_update_notifications(
-        enabled != 0, save_callback, save_context);
-}
-
-extern "C" int32_t llavon_settings_ui_configure_gpu_boost(
-    int32_t enabled,
-    llavon_settings_save_gpu_boost_callback save_callback,
-    void* save_context) {
-    return llavon::settings::runtime().configure_gpu_boost(
-        enabled != 0, save_callback, save_context);
-}
-
-extern "C" int32_t llavon_settings_ui_configure_immediate_conversion(
-    int32_t enabled,
-    llavon_settings_save_immediate_conversion_callback save_callback,
-    void* save_context) {
-    return llavon::settings::runtime().configure_immediate_conversion(
-        enabled != 0, save_callback, save_context);
-}
-
-extern "C" int32_t llavon_settings_ui_start(void) {
-    return llavon::settings::runtime().start();
-}
-
-extern "C" void llavon_settings_ui_show(void) {
-    llavon::settings::runtime().show();
-}
-
-extern "C" void llavon_settings_ui_hide(void) {
-    llavon::settings::runtime().hide();
-}
-
-extern "C" void llavon_settings_ui_set_pending_count(size_t count) {
-    llavon::settings::runtime().set_pending_count(count);
-}
-
-extern "C" void llavon_settings_ui_show_context_menu(int32_t screen_x,
-                                                       int32_t screen_y) {
-    llavon::settings::runtime().show_context_menu(screen_x, screen_y);
-}
-
-extern "C" int32_t llavon_settings_ui_stop(void) {
-    return llavon::settings::runtime().stop();
-}
+} // namespace llavon::settings

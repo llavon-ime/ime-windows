@@ -73,15 +73,13 @@ private:
         std::vector<LoraHistoryBaseView> catalog,
         std::function<void(std::int64_t)> on_action);
     void close_history_picker();
-    bool begin_lora_history_operation(
-        std::u16string model_path,
-        std::function<std::int32_t(const char16_t*)> operation,
-        bool apply_model, std::function<void(bool)> finished);
-    bool load_training_items(const char16_t* password = nullptr,
-                             std::int64_t base_run_id = 0);
+    bool begin_lora_history_operation(std::u16string model_path,
+        std::function<bool(std::u16string_view)> operation, bool apply_model,
+        std::function<void(bool)> finished);
+    bool load_training_items(std::u16string_view password = {}, std::int64_t base_run_id = 0);
     void refresh_protection_controls();
     using PasswordAction =
-        std::function<winrt::Windows::Foundation::IAsyncOperation<bool>(const char16_t*)>;
+        std::function<winrt::Windows::Foundation::IAsyncOperation<bool>(std::u16string_view)>;
     void show_password_dialog(bool setup, PasswordAction action,
                               bool clean_datasets = false,
                               std::function<void()> on_success = {});
@@ -89,6 +87,8 @@ private:
         std::function<bool()> work);
     bool updating_protection_ = false;
     bool password_dialog_open_ = false;
+    bool password_dialog_closing_ = false;
+    std::function<void()> reopen_password_dialog_;
     std::function<void()> close_lora_dialog_;
     bool collect_custom_names(std::vector<CustomNameEntry>& entries) const;
     const std::vector<std::u16string>& lookup_bopomofo(char32_t character) const;

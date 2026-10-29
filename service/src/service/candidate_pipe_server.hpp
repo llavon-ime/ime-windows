@@ -2,7 +2,8 @@
 
 #if defined(_WIN32)
 
-#include "candidate_ui_loader.hpp"
+#include "candidate_ui_snapshot.hpp"
+#include "../candidate/candidate_ui.hpp"
 #include "candidate_pipe_protocol.hpp"
 
 #include <asio.hpp>
@@ -19,7 +20,8 @@ namespace llavon::service {
 
 class CandidatePipeServer final {
 public:
-    explicit CandidatePipeServer(CandidateUiLoader& candidate_ui) : candidate_ui_(candidate_ui) {}
+    explicit CandidatePipeServer(candidate::CandidateUi& candidate_ui)
+        : candidate_ui_(candidate_ui) {}
 
     asio::awaitable<void> listen() {
         auto executor = co_await asio::this_coro::executor;
@@ -171,7 +173,19 @@ private:
                     break;
                 }
                 active_client_id_ = client_id;
-                candidate_ui_.present(snapshot);
+                candidate_ui_.present(candidate::Presentation{
+                    .owner_window =
+                        reinterpret_cast<HWND>(static_cast<ULONG_PTR>(snapshot.owner_window)),
+                    .anchor_x = snapshot.anchor_x,
+                    .anchor_y = snapshot.anchor_y,
+                    .anchor_top = snapshot.anchor_top,
+                    .candidates = std::move(snapshot.candidates),
+                    .selection_index = snapshot.selection_index,
+                    .layout_columns = snapshot.layout_columns,
+                    .number_column = snapshot.number_column,
+                    .can_prev_page = snapshot.can_prev_page,
+                    .can_next_page = snapshot.can_next_page,
+                });
                 continue;
             }
             if (command == candidate_pipe_protocol::Command::Hide) {
@@ -192,7 +206,7 @@ private:
         candidate_ui_.hide();
     }
 
-    CandidateUiLoader& candidate_ui_;
+    candidate::CandidateUi& candidate_ui_;
     uint64_t next_client_id_ = 1;
     uint64_t active_client_id_ = 0;
 };

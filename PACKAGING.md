@@ -31,10 +31,10 @@ cmake --build --preset package --parallel
 cmake --build build/windows --config Release --target llavon-ime-setup --parallel
 ```
 
-只改 UI 時，可以只建置 UI DLL：
+只改背景服務或 UI 時，可以只建置服務（設定與候選字視窗都在其中）：
 
 ```powershell
-cmake --build build/windows --config Release --target llavon-ime-settings-ui llavon-ime-candidate-ui --parallel
+cmake --build build/windows --config Release --target llavon-ime-service --parallel
 ```
 
 > [!WARNING]
@@ -114,9 +114,7 @@ Toast 需要安裝程式建立的開始功能表捷徑，直接執行建置目�
 <install-root>/
   bin/
     llavon-ime.dll                 TSF 前端
-    llavon-ime-service.exe         背景服務
-    llavon-ime-settings-ui.dll     設定視窗
-    llavon-ime-candidate-ui.dll    候選字視窗
+    llavon-ime-service.exe         背景服務（含設定與候選字視窗）
     llavon-ime-debugger.exe        診斷工具
     start-llavon-ime-service.vbs   開機啟動用
     （Windows App SDK 執行階段 DLL 與資源）
@@ -161,6 +159,6 @@ preset 已設定 `--x-abi-tools-use-exact-versions`，讓 vcpkg 使用固定版�
 ## 附錄：UI 技術說明
 
 - 設定視窗、系統匣選單與候選字視窗都使用 Windows App SDK（WinUI 3）XAML Islands。
-- XAML 原始檔位於 `service/src/settings/ui/`，以資源嵌入設定 UI DLL。
+- XAML 原始檔位於 `service/src/settings/ui/` 與 `service/src/candidate/ui/`，由 `service/src/ui_resources.rc` 以資源嵌入 `llavon-ime-service.exe`。
 - `cmake/WinUI3.cmake` 使用 Microsoft 實驗性的 Windows App SDK CMake 整合，套件版本與雜湊鎖定在 `cmake/winui3.packages.lock.json`。不需要 Visual Studio 方案檔。
 - 產生 C++/WinRT 投影時需要 WebView2 中繼資料，但程式本身不使用也不部署 WebView2。

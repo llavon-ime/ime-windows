@@ -1,16 +1,52 @@
 #pragma once
 
-#include "settings_ui_api.h"
+#include "../service/lora_types.hpp"
+#include "../service/training_data_writer.hpp"
 
-#include <cstdint>
+#include <ime-core/core.hpp>
+
+#include <cstddef>
+#include <filesystem>
+#include <functional>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace llavon::settings {
 
+using InferenceBackend = ime::core::InferenceBackend;
+using InferenceDeviceType = ime::core::InferenceDeviceType;
+using TrainingDataOption = service::TrainingDataItem;
+using LoraTrainingOptions = service::LoraTrainingOptions;
+using LoraOperationStatus = service::LoraOperationStatus;
+using LoraOperationStage = service::LoraOperationStage;
+using CudaRuntimeState = service::CudaRuntimeState;
+
+enum class ModelPreparation { prepare, discard };
+enum class LoraAction {
+    check_updates,
+    download_model,
+    install_trainer,
+    install_cuda_runtime,
+    remove_cuda_runtime
+};
+struct ProtectionStatus {
+    bool configured = false;
+    bool enabled = false;
+};
+
+struct ProtectionActions {
+    std::function<std::optional<ProtectionStatus>()> status;
+    std::function<bool(std::u16string_view)> setup;
+    std::function<bool(bool)> set_enabled;
+    std::function<std::optional<std::size_t>()> cleanup;
+    std::function<bool()> reset;
+};
+
 struct InferenceDeviceOption {
-    std::int32_t backend = LLAVON_SETTINGS_BACKEND_AUTO;
-    std::int32_t device_type = LLAVON_SETTINGS_DEVICE_CPU;
+    InferenceBackend backend = InferenceBackend::automatic;
+    InferenceDeviceType device_type = InferenceDeviceType::cpu;
     std::u16string device_id;
     std::u16string name;
     std::u16string description;
@@ -22,71 +58,47 @@ struct CustomNameOption {
     std::vector<std::u16string> readings;
 };
 
-struct TrainingDataOption {
-    std::u16string event_id;
-    std::u16string context;
-    std::u16string answer;
-    std::u16string reading;
-    bool revice = false;
-};
-
-struct LoraHistoryOption {
-    std::u16string completed_at_utc;
-    std::size_t record_count = 0;
-    std::size_t cumulative_record_count = 0;
-    std::int64_t optimizer_steps = 0;
+// Operations run on their caller's thread. The UI explicitly schedules blocking
+// operations on workers. Returned snapshots own every string and collection.
+struct SettingsActions {
+    std::function<bool(InferenceBackend, std::u16string_view)> save_inference;
+    std::function<bool(const std::filesystem::path&)> save_model_path;
+    std::function<bool(const std::filesystem::path&, ModelPreparation)> prepare_model;
+    std::function<bool(const std::vector<CustomNameOption>&)> save_custom_names;
+    std::function<bool(bool)> save_width_toggle;
+    std::function<bool(bool)> save_immediate_conversion;
+    std::function<bool(bool)> save_gpu_boost;
+    std::function<bool(bool)> save_update_notifications;
+    std::function<std::optional<std::vector<TrainingDataOption>>(std::u16string_view, std::int64_t)>
+        load_training_items;
+    std::function<bool(std::u16string_view)> delete_training_item;
+    std::function<std::vector<service::LoraTrainingRun>()> load_lora_history;
+    std::function<std::vector<service::LoraBaseModel>()> load_lora_base_models;
+    std::function<bool(
+        const std::vector<std::u16string>&, LoraTrainingOptions, std::u16string_view)>
+        start_lora_training;
+    std::function<std::optional<LoraOperationStatus>()> get_lora_status;
+    std::function<bool(LoraAction)> lora_model_action;
+    std::function<void()> cancel_lora;
+    ProtectionActions protection;
 };
 
 struct SettingsConfiguration {
     std::vector<InferenceDeviceOption> devices;
-    std::int32_t selected_backend = LLAVON_SETTINGS_BACKEND_AUTO;
+    InferenceBackend selected_backend = InferenceBackend::automatic;
     std::u16string selected_device_id;
     InferenceDeviceOption active_device;
     bool gpu_offload = false;
     bool fell_back_to_cpu = false;
-    llavon_settings_save_inference_callback save_callback = nullptr;
-    void* save_context = nullptr;
     std::u16string model_path;
     std::u16string base_model_path;
-    llavon_settings_save_model_path_callback save_model_path_callback = nullptr;
-    void* save_model_path_context = nullptr;
-    llavon_settings_prepare_model_callback prepare_model_callback = nullptr;
-    void* prepare_model_context = nullptr;
     std::vector<CustomNameOption> custom_names;
-    llavon_settings_save_custom_names_callback save_custom_names_callback = nullptr;
-    void* save_custom_names_context = nullptr;
     bool shift_space_width_toggle_enabled = false;
     bool immediate_conversion_enabled = false;
-    llavon_settings_save_immediate_conversion_callback save_immediate_conversion_callback = nullptr;
-    void* save_immediate_conversion_context = nullptr;
     bool gpu_boost_enabled = true;
-    llavon_settings_save_gpu_boost_callback save_gpu_boost_callback = nullptr;
-    void* save_gpu_boost_context = nullptr;
-    llavon_settings_save_width_toggle_callback save_width_toggle_callback = nullptr;
-    void* save_width_toggle_context = nullptr;
     bool major_update_notifications_enabled = true;
-    llavon_settings_save_update_notifications_callback
-        save_update_notifications_callback = nullptr;
-    void* save_update_notifications_context = nullptr;
     std::vector<TrainingDataOption> training_items;
-    llavon_settings_refresh_training_items_callback refresh_training_items_callback = nullptr;
-    void* refresh_training_items_context = nullptr;
-    llavon_settings_delete_training_item_callback delete_training_item_callback = nullptr;
-    void* delete_training_item_context = nullptr;
-    llavon_settings_get_lora_history_callback get_lora_history_callback = nullptr;
-    void* get_lora_history_context = nullptr;
-    llavon_settings_get_lora_base_models_callback get_lora_base_models_callback = nullptr;
-    void* get_lora_base_models_context = nullptr;
-    llavon_settings_protection_callback protection_callback = nullptr;
-    void* protection_context = nullptr;
-    llavon_settings_start_lora_training_callback start_lora_training_callback = nullptr;
-    void* start_lora_training_context = nullptr;
-    llavon_settings_get_lora_status_callback get_lora_status_callback = nullptr;
-    void* get_lora_status_context = nullptr;
-    llavon_settings_lora_model_action_callback lora_model_action_callback = nullptr;
-    void* lora_model_action_context = nullptr;
-    llavon_settings_cancel_lora_callback cancel_lora_callback = nullptr;
-    void* cancel_lora_context = nullptr;
+    SettingsActions actions;
 };
 
-}  // namespace llavon::settings
+} // namespace llavon::settings

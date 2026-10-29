@@ -21,6 +21,7 @@ public:
     SettingsMenuWindow& operator=(const SettingsMenuWindow&) = delete;
     ~SettingsMenuWindow();
 
+    bool initialize(HINSTANCE instance) { return create(instance); }
     bool show(HINSTANCE instance, POINT anchor);
     void hide() const noexcept;
     void destroy() noexcept;

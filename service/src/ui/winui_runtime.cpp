@@ -64,8 +64,7 @@ struct WinuiRuntime::State {
         // ShutdownQueue pumps pending work and raises the framework shutdown
         // notifications before the STA and its activation context disappear.
         try {
-            // Activation factories are cached separately in each DLL. Release
-            // this module's factories while the XAML Application is still alive.
+            // Release cached factories while the XAML Application is still alive.
             winrt::clear_factory_cache();
             if (manager) {
                 manager.Close();
@@ -88,7 +87,7 @@ WinuiRuntime::WinuiRuntime() : state_(std::make_unique<State>()) {
     ACTCTXW context{sizeof(context)};
     context.dwFlags = ACTCTX_FLAG_HMODULE_VALID | ACTCTX_FLAG_RESOURCE_NAME_VALID;
     context.hModule = reinterpret_cast<HMODULE>(&__ImageBase);
-    context.lpResourceName = MAKEINTRESOURCEW(2);
+    context.lpResourceName = MAKEINTRESOURCEW(1);
     state_->activation_context = CreateActCtxW(&context);
     if (state_->activation_context == INVALID_HANDLE_VALUE) winrt::throw_last_error();
     if (!ActivateActCtx(state_->activation_context, &state_->activation_cookie)) {

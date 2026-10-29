@@ -1,5 +1,5 @@
-#include "candidate/candidate_ui_api.h"
-#include "settings/settings_ui_api.h"
+#include "candidate/candidate_ui.hpp"
+#include "settings/settings_ui.hpp"
 #include "ui/ui_thread.hpp"
 
 #include <chrono>
@@ -15,7 +15,7 @@
 #include <objidl.h>
 #include <gdiplus.h>
 #include <UIAutomation.h>
-#include <wrl/client.h>
+#include <winrt/base.h>
 
 namespace {
 using namespace std::chrono_literals;
@@ -33,60 +33,64 @@ template <typename Predicate> void await_ui(Predicate predicate, const char* mes
     }
 }
 
-int32_t save_inference(void*, int32_t, const char16_t*) { return 0; }
-int32_t save_model(void*, const char16_t*) { return 0; }
-int32_t save_names(void*, const llavon_settings_custom_name*, size_t) { return 0; }
-int32_t save_width(void*, int32_t) { return 0; }
 struct PasswordTestState {
     std::atomic_int delay_ms{0};
     std::atomic<DWORD> worker_thread{0};
 };
-int32_t refresh_training(void* context, llavon_settings_training_item* items, size_t capacity,
-                         size_t* count, const char16_t* password, int64_t) {
-    if (auto* state = static_cast<PasswordTestState*>(context)) {
-        if (password && *password && !items) {
+
+llavon::settings::SettingsConfiguration test_configuration(PasswordTestState* state) {
+    using namespace llavon::settings;
+    SettingsConfiguration config;
+    const InferenceDeviceOption cpu{
+        InferenceBackend::cpu, InferenceDeviceType::cpu, u"cpu", u"CPU", u"CPU", 0};
+    config.devices = {cpu};
+    config.active_device = cpu;
+    config.selected_backend = InferenceBackend::cpu;
+    config.selected_device_id = u"cpu";
+    config.actions.save_inference = [](InferenceBackend, std::u16string_view) { return true; };
+    config.actions.save_model_path = [](const std::filesystem::path&) { return true; };
+    config.actions.save_custom_names = [](const std::vector<CustomNameOption>&) { return true; };
+    config.actions.save_width_toggle = [](bool) { return true; };
+    config.actions.save_immediate_conversion = [](bool) { return true; };
+    config.actions.load_training_items =
+        [state](std::u16string_view password,
+            std::int64_t) -> std::optional<std::vector<TrainingDataOption>> {
+        if (!state) return std::vector<TrainingDataOption>{};
+        if (!password.empty()) {
             state->worker_thread.store(GetCurrentThreadId());
             std::this_thread::sleep_for(std::chrono::milliseconds(state->delay_ms.load()));
-            if (std::u16string_view(password) != u"test") return ERROR_ACCESS_DENIED;
+            if (password != u"test") return std::nullopt;
         }
-        *count = 1;
-        if (items && capacity != 0) {
-            const bool decrypted = password && *password;
-            items[0] = {u"test-1",
-                decrypted ? u"這是一段解密後才顯示的較長對話內容" : u"",
-                decrypted ? u"這是用來驗證解密後才建立提示元件的測試資料" : u"",
-                decrypted ? u"ㄘㄜˋ ㄕˋ" : u"", 0};
-        }
-        return 0;
-    }
-    *count = 0;
-    return 0;
-}
-int32_t delete_training(void*, const char16_t*) { return 0; }
-int32_t get_history(void*, llavon_settings_lora_history_item*, size_t, size_t* count) {
-    *count = 0;
-    return 0;
-}
-int32_t get_base_models(void*, llavon_settings_lora_base_model*, size_t, size_t* count) {
-    *count = 0;
-    return 0;
-}
-int32_t start_training(void*, const char16_t* const*, size_t, const llavon_settings_lora_options*, const char16_t*) {
-    return 0;
-}
-int32_t get_status(void* context, llavon_settings_lora_status* status) {
-    *status = {};
-    if (context) {
-        status->model_available = 1;
-        status->trainer_available = 1;
-    }
-    return 0;
-}
-int32_t model_action(void*, int32_t) { return 0; }
-void cancel_training(void*) {}
-int32_t protection(void* context, int32_t action, const char16_t*, size_t* result) {
-    *result = context && action == LLAVON_PROTECTION_STATUS ? 3 : 0;
-    return 0;
+        return std::vector<TrainingDataOption>{
+            {u"test-1", password.empty() ? u"" : u"這是一段解密後才顯示的較長對話內容",
+                password.empty() ? u"" : u"這是用來驗證解密後才建立提示元件的測試資料",
+                password.empty() ? u"" : u"ㄘㄜˋ ㄕˋ", false}};
+    };
+    config.actions.delete_training_item = [](std::u16string_view) { return true; };
+    config.actions.load_lora_history = [] {
+        return std::vector<llavon::service::LoraTrainingRun>{};
+    };
+    config.actions.load_lora_base_models = [] {
+        return std::vector<llavon::service::LoraBaseModel>{};
+    };
+    config.actions.start_lora_training = [](const std::vector<std::u16string>&, LoraTrainingOptions,
+                                             std::u16string_view) { return true; };
+    config.actions.get_lora_status = [state] {
+        LoraOperationStatus status;
+        status.model_available = state != nullptr;
+        status.trainer_available = state != nullptr;
+        return std::optional{status};
+    };
+    config.actions.lora_model_action = [](LoraAction) { return true; };
+    config.actions.cancel_lora = [] {};
+    config.actions.protection.status = [state]() -> std::optional<ProtectionStatus> {
+        return ProtectionStatus{state != nullptr, state != nullptr};
+    };
+    config.actions.protection.setup = [](std::u16string_view) { return true; };
+    config.actions.protection.set_enabled = [](bool) { return true; };
+    config.actions.protection.cleanup = []() -> std::optional<std::size_t> { return 0; };
+    config.actions.protection.reset = [] { return true; };
+    return config;
 }
 
 RECT window_rect(HWND window) {
@@ -106,76 +110,77 @@ HWND find_window(const wchar_t* class_name) {
     return nullptr;
 }
 struct UiLifetime final {
-    ~UiLifetime() {
-        llavon_settings_ui_stop();
-        llavon_candidate_ui_stop();
-        llavon_ui_thread_shutdown();
-    }
+    std::unique_ptr<llavon::ui::UiThread> thread;
+    std::unique_ptr<llavon::candidate::CandidateUi> candidate;
+    std::unique_ptr<llavon::settings::SettingsUi> settings;
 };
 
-void test_password_dialog(PasswordTestState& state) {
+void test_password_dialog(PasswordTestState& state, llavon::settings::SettingsUi& settings) {
     // UI Automation marshals the caller's activation context to the UI thread.
     // This test host must use the same self-contained WinUI manifest as the UI.
     ACTCTXW context{sizeof(context)};
     context.dwFlags = ACTCTX_FLAG_HMODULE_VALID | ACTCTX_FLAG_RESOURCE_NAME_VALID;
-    context.hModule = GetModuleHandleW(L"llavon-ime-ui-runtime.dll");
-    context.lpResourceName = MAKEINTRESOURCEW(2);
+    context.hModule = GetModuleHandleW(nullptr);
+    context.lpResourceName = MAKEINTRESOURCEW(1);
     const auto activation = CreateActCtxW(&context);
     require(activation != INVALID_HANDLE_VALUE, "Cannot load UI activation context");
     ULONG_PTR cookie = 0;
     require(ActivateActCtx(activation, &cookie) != FALSE, "Cannot activate UI context");
     require(SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)), "Cannot initialize UI automation");
-    Microsoft::WRL::ComPtr<IUIAutomation> automation;
+    winrt::com_ptr<IUIAutomation> automation;
     require(SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
-                                      IID_PPV_ARGS(&automation))), "Cannot create UI automation");
-    require(llavon_settings_ui_start() == 0, "Settings startup failed");
-    llavon_settings_ui_show();
+                winrt::guid_of<IUIAutomation>(), automation.put_void())),
+        "Cannot create UI automation");
+    settings.show();
     HWND window = nullptr;
     await_ui([&] {
         window = find_window(L"LlavonImeSettingsWindow");
         return window && IsWindowVisible(window);
     }, "Settings window did not open");
     const auto find = [&](const wchar_t* value, bool by_name = false) {
-        Microsoft::WRL::ComPtr<IUIAutomationElement> root;
-        Microsoft::WRL::ComPtr<IUIAutomationElement> element;
-        if (FAILED(automation->ElementFromHandle(window, &root))) return element;
+        winrt::com_ptr<IUIAutomationElement> root;
+        winrt::com_ptr<IUIAutomationElement> element;
+        if (FAILED(automation->ElementFromHandle(window, root.put()))) return element;
         VARIANT property{};
         property.vt = VT_BSTR;
         property.bstrVal = SysAllocString(value);
-        Microsoft::WRL::ComPtr<IUIAutomationCondition> condition;
+        winrt::com_ptr<IUIAutomationCondition> condition;
         const auto result = automation->CreatePropertyCondition(
-            by_name ? UIA_NamePropertyId : UIA_AutomationIdPropertyId, property, &condition);
+            by_name ? UIA_NamePropertyId : UIA_AutomationIdPropertyId, property, condition.put());
         VariantClear(&property);
-        if (SUCCEEDED(result)) root->FindFirst(TreeScope_Descendants, condition.Get(), &element);
+        if (SUCCEEDED(result))
+            root->FindFirst(TreeScope_Descendants, condition.get(), element.put());
         return element;
     };
     int invocation = 0;
     const auto invoke = [&](const wchar_t* value, bool by_name = false) {
         std::cout << "Invoke #" << ++invocation << '\n' << std::flush;
-        Microsoft::WRL::ComPtr<IUIAutomationElement> element;
+        winrt::com_ptr<IUIAutomationElement> element;
         await_ui([&] {
             element = find(value, by_name);
             if (!element) element = find(value, true);
             BOOL enabled = FALSE;
             return element && SUCCEEDED(element->get_CurrentIsEnabled(&enabled)) && enabled;
         }, "Dialog button did not become available");
-        Microsoft::WRL::ComPtr<IUIAutomationInvokePattern> pattern;
-        require(SUCCEEDED(element->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&pattern))),
-                "Dialog button cannot be invoked");
+        winrt::com_ptr<IUIAutomationInvokePattern> pattern;
+        require(SUCCEEDED(element->GetCurrentPatternAs(UIA_InvokePatternId,
+                    winrt::guid_of<IUIAutomationInvokePattern>(), pattern.put_void())),
+            "Dialog button cannot be invoked");
         const auto result = pattern->Invoke();
         if (FAILED(result)) std::cout << "Invoke HRESULT: " << std::hex << result << '\n';
         require(SUCCEEDED(result), "Dialog button invocation failed");
     };
     const auto fill = [&](const wchar_t* value) {
-        Microsoft::WRL::ComPtr<IUIAutomationElement> field;
+        winrt::com_ptr<IUIAutomationElement> field;
         await_ui([&] {
             field = find(L"PasswordInput");
             BOOL enabled = FALSE;
             return field && SUCCEEDED(field->get_CurrentIsEnabled(&enabled)) && enabled;
         }, "Password input did not become available");
-        Microsoft::WRL::ComPtr<IUIAutomationValuePattern> pattern;
-        require(SUCCEEDED(field->GetCurrentPatternAs(UIA_ValuePatternId, IID_PPV_ARGS(&pattern))),
-                "Password input cannot be filled");
+        winrt::com_ptr<IUIAutomationValuePattern> pattern;
+        require(SUCCEEDED(field->GetCurrentPatternAs(UIA_ValuePatternId,
+                    winrt::guid_of<decltype(pattern)::type>(), pattern.put_void())),
+            "Password input cannot be filled");
         BSTR text = SysAllocString(value);
         const auto result = pattern->SetValue(text);
         SysFreeString(text);
@@ -207,8 +212,7 @@ void test_password_dialog(PasswordTestState& state) {
                 "Decryption ran on the UI thread");
         invoke(L"DialogPrimaryButton");
     }
-    require(llavon_settings_ui_stop() == 0, "Password dialog shutdown failed");
-    automation.Reset();
+    automation = nullptr;
     CoUninitialize();
     DeactivateActCtx(0, cookie);
     ReleaseActCtx(activation);
@@ -273,6 +277,7 @@ int main(int argc, char** argv) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     // Prevent a settings error from opening a blocking message box in the test.
     SetEnvironmentVariableW(L"LLAVON_IME_TEST_ERROR_LOG", L"candidate-ui-test-errors.log");
+    PasswordTestState password_state;
     UiLifetime lifetime;
     try {
         if (argc > 1 && std::string_view(argv[1]) == "settings-window-hidden") {
@@ -286,43 +291,42 @@ int main(int argc, char** argv) {
             return 0;
         }
         const bool password_test = argc > 1 && std::string_view(argv[1]) == "settings-password";
-        PasswordTestState password_state;
-        const llavon_settings_inference_device cpu{
-            LLAVON_SETTINGS_BACKEND_CPU, LLAVON_SETTINGS_DEVICE_CPU, u"cpu", u"CPU", u"CPU", 0};
-        require(llavon_settings_ui_configure_v6(
-                    &cpu, 1, LLAVON_SETTINGS_BACKEND_CPU, u"cpu", &cpu, 0, 0, save_inference, nullptr, u"", save_model,
-                    nullptr, nullptr, 0, save_names, nullptr, 0, save_width, nullptr, nullptr, 0, refresh_training,
-                    password_test ? &password_state : nullptr, delete_training, nullptr, get_history, nullptr, start_training, nullptr, get_status,
-                    password_test ? &password_state : nullptr, model_action, nullptr, cancel_training, nullptr,
-                    protection, password_test ? &password_state : nullptr) == 0,
-                "Settings configuration failed");
-        require(llavon_settings_ui_configure_immediate_conversion(0, save_width, nullptr) == 0,
-                "Prediction display configuration failed");
-
+        lifetime.thread = std::make_unique<llavon::ui::UiThread>();
+        auto config = test_configuration(password_test ? &password_state : nullptr);
+        const auto start_settings = [&] {
+            if (!lifetime.settings)
+                lifetime.settings =
+                    std::make_unique<llavon::settings::SettingsUi>(*lifetime.thread, config);
+        };
+        const auto start_candidate = [&] {
+            if (!lifetime.candidate)
+                lifetime.candidate =
+                    std::make_unique<llavon::candidate::CandidateUi>(*lifetime.thread);
+        };
         if (password_test) {
-            require(llavon_settings_ui_configure_lora_base_models_v1(get_base_models, nullptr) == 0,
-                    "Cannot configure base model catalog");
-            test_password_dialog(password_state);
+            start_settings();
+            test_password_dialog(password_state, *lifetime.settings);
+            lifetime.settings.reset();
             return 0;
         }
 
         const bool settings_first = argc > 1 && std::string_view(argv[1]) == "settings-first";
         const bool menu_first = argc > 1 && std::string_view(argv[1]) == "settings-menu-first";
         if (menu_first || (argc > 1 && std::string_view(argv[1]) == "settings-window-first")) {
-            require(llavon_settings_ui_start() == 0, "Settings startup failed");
+            start_settings();
             HWND menu = nullptr;
             if (menu_first) {
                 MONITORINFO monitor{sizeof(monitor)};
                 require(GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY),
                                         &monitor) != FALSE, "Cannot locate settings menu monitor");
-                llavon_settings_ui_show_context_menu(monitor.rcWork.left + 200,
-                                                      monitor.rcWork.top + 200);
+                lifetime.settings->show_context_menu(
+                    {monitor.rcWork.left + 200, monitor.rcWork.top + 200});
                 await_ui([&] {
                     menu = find_window(L"LlavonImeSettingsMenuWindow");
                     return menu && IsWindowVisible(menu) && GetWindow(menu, GW_CHILD);
                 }, "Settings menu did not become visible after the first show request");
             }
-            llavon_settings_ui_show();
+            lifetime.settings->show();
             HWND settings = nullptr;
             await_ui(
                 [&] {
@@ -331,57 +335,54 @@ int main(int argc, char** argv) {
                 },
                 "Settings window did not become visible after the first show request");
             if (menu_first) require(!IsWindowVisible(menu), "Opening settings did not hide its menu");
-            llavon_settings_ui_hide();
+            lifetime.settings->hide();
             await_ui([&] { return !IsWindowVisible(settings); }, "Settings hide failed");
-            llavon_settings_ui_show();
+            lifetime.settings->show();
             await_ui([&] { return IsWindowVisible(settings); }, "Settings reopen failed");
-            require(llavon_ui_thread_invoke([](void* context) {
-                ShowWindow(static_cast<HWND>(context), SW_MINIMIZE);
-            }, settings) == 0, "Cannot minimize settings");
+            lifetime.thread->invoke([settings] { ShowWindow(settings, SW_MINIMIZE); });
             await_ui([&] { return IsIconic(settings); }, "Settings did not minimize");
-            llavon_settings_ui_show();
+            lifetime.settings->show();
             await_ui([&] { return IsWindowVisible(settings) && !IsIconic(settings); },
                      "Settings did not restore after minimizing");
-            require(llavon_ui_thread_invoke([](void* context) {
-                ShowWindow(static_cast<HWND>(context), SW_MAXIMIZE);
-            }, settings) == 0, "Cannot maximize settings");
-            llavon_settings_ui_hide();
+            lifetime.thread->invoke([settings] { ShowWindow(settings, SW_MAXIMIZE); });
+            lifetime.settings->hide();
             await_ui([&] { return !IsWindowVisible(settings); }, "Maximized settings hide failed");
-            llavon_settings_ui_show();
+            lifetime.settings->show();
             await_ui([&] { return IsWindowVisible(settings); }, "Maximized settings reopen failed");
             require(IsZoomed(settings) != FALSE, "Reopening settings lost its maximized state");
-            require(llavon_settings_ui_stop() == 0, "Settings shutdown failed");
-            require(llavon_ui_thread_shutdown() == 0, "Terminal WinUI shutdown failed");
+            lifetime.settings.reset();
+            lifetime.thread.reset();
             std::cout << "PASS: settings first show, hide, reopen, restore, maximize\n";
             return 0;
         }
-        if (settings_first)
-            require(llavon_settings_ui_start() == 0, "Settings startup failed");
-        require(llavon_candidate_ui_start() == 0, "Candidate startup failed");
-        require(llavon_candidate_ui_start() == 0, "Repeated candidate startup failed");
-        if (!settings_first)
-            require(llavon_settings_ui_start() == 0, "Concurrent settings startup failed");
+        if (settings_first) start_settings();
+        start_candidate();
+        start_candidate();
+        if (!settings_first) start_settings();
 
+        require(find_window(L"TSF_CandidatePopupWindow") != nullptr,
+            "Candidate HWND was not created during startup");
+        require(GetWindow(find_window(L"TSF_CandidatePopupWindow"), GW_CHILD) != nullptr,
+            "Candidate XAML island was not created during startup");
+        require(!IsWindowVisible(find_window(L"TSF_CandidatePopupWindow")),
+            "Candidate startup displayed a window");
+        require(!IsWindowVisible(find_window(L"LlavonImeSettingsWindow")),
+            "Settings startup displayed a window");
         MONITORINFO monitor{sizeof(monitor)};
         require(GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &monitor) != FALSE,
                 "Cannot read monitor work area");
         std::vector<std::wstring> text;
-        std::vector<llavon_candidate_ui_string_view> values;
         text.reserve(36);
         for (int index = 0; index < 36; ++index)
             text.push_back(L"候選" + std::to_wstring(index + 1));
-        for (const auto& value : text)
-            values.push_back({value.data(), static_cast<uint32_t>(value.size())});
-        llavon_candidate_ui_presentation presentation{};
-        presentation.struct_size = sizeof(presentation);
+        llavon::candidate::Presentation presentation;
         presentation.anchor_x = monitor.rcWork.left + 100;
         presentation.anchor_top = monitor.rcWork.top + 100;
         presentation.anchor_y = presentation.anchor_top + 24;
-        presentation.candidate_count = 9;
-        presentation.candidates = values.data();
+        presentation.candidates.assign(text.begin(), text.begin() + 9);
         presentation.layout_columns = 1;
         const HWND foreground = GetForegroundWindow();
-        require(llavon_candidate_ui_present(&presentation) == 0, "Single column rejected");
+        require(lifetime.candidate->present(presentation), "Single column rejected");
         HWND candidate = nullptr;
         await_ui(
             [&] {
@@ -399,13 +400,13 @@ int main(int argc, char** argv) {
             capture(candidate, L"candidate-single.png");
         }
 
-        presentation.candidate_count = 36;
+        presentation.candidates.assign(text.begin(), text.begin() + 36);
         presentation.layout_columns = 4;
         presentation.number_column = 3;
         presentation.selection_index = 35;
         presentation.can_prev_page = 1;
         presentation.can_next_page = 1;
-        require(llavon_candidate_ui_present(&presentation) == 0, "Four columns rejected");
+        require(lifetime.candidate->present(presentation), "Four columns rejected");
         await_ui(
             [&] {
                 const auto rect = window_rect(candidate);
@@ -423,46 +424,50 @@ int main(int argc, char** argv) {
         presentation.anchor_x = monitor.rcWork.right - 1;
         presentation.anchor_top = monitor.rcWork.bottom - 30;
         presentation.anchor_y = monitor.rcWork.bottom - 6;
-        require(llavon_candidate_ui_present(&presentation) == 0, "Edge presentation rejected");
+        require(lifetime.candidate->present(presentation), "Edge presentation rejected");
         await_ui(
             [&] {
                 const auto rect = window_rect(candidate);
                 return rect.right == monitor.rcWork.right && rect.bottom < presentation.anchor_top;
             },
             "Candidate did not flip above the composition at the monitor boundary");
-        llavon_candidate_ui_hide();
+        lifetime.candidate->hide();
         await_ui([&] { return !IsWindowVisible(candidate); }, "Candidate hide failed");
 
-        llavon_settings_ui_show_context_menu(monitor.rcWork.left + 200, monitor.rcWork.top + 200);
+        lifetime.settings->show_context_menu({monitor.rcWork.left + 200, monitor.rcWork.top + 200});
         await_ui([] { return IsWindowVisible(find_window(L"LlavonImeSettingsMenuWindow")); },
                  "Settings XAML failed while candidate runtime was active");
         require(GetWindowThreadProcessId(candidate, nullptr) ==
                     GetWindowThreadProcessId(find_window(L"LlavonImeSettingsMenuWindow"), nullptr),
                 "Settings and candidates do not share the WinUI STA");
-        require(llavon_settings_ui_stop() == 0, "Concurrent settings shutdown failed");
-        presentation.candidate_count = 1;
+        lifetime.settings.reset();
+        presentation.candidates.assign(text.begin(), text.begin() + 1);
         presentation.layout_columns = 1;
         presentation.number_column = 0;
         presentation.selection_index = 0;
-        require(llavon_candidate_ui_present(&presentation) == 0, "Candidate after settings shutdown rejected");
+        require(lifetime.candidate->present(presentation),
+            "Candidate after settings shutdown rejected");
         await_ui(
             [&] {
                 const auto rect = window_rect(candidate);
                 return IsWindowVisible(candidate) && rect.bottom - rect.top < single.bottom - single.top;
             },
             "Candidate XAML stopped working after settings shutdown");
-        require(llavon_candidate_ui_stop() == 0, "Candidate shutdown failed");
+        lifetime.candidate.reset();
         std::cout << "WinUI shutdown completed\n" << std::flush;
         require(!IsWindow(candidate), "Candidate HWND leaked after shutdown");
-        require(llavon_candidate_ui_start() == 0, "Candidate restart failed");
-        require(llavon_candidate_ui_present(&presentation) == 0, "Presentation after restart rejected");
+        start_candidate();
+        require(lifetime.candidate->present(presentation), "Presentation after restart rejected");
         await_ui([] { return IsWindowVisible(find_window(L"TSF_CandidatePopupWindow")); },
                  "XAML did not render after restart");
-        require(llavon_candidate_ui_stop() == 0, "Candidate restart shutdown failed");
-        require(llavon_ui_thread_shutdown() == 0, "Terminal WinUI shutdown failed");
+        lifetime.candidate.reset();
+        lifetime.thread.reset();
         std::cout << "PASS: WinUI startup order, columns, focus, bounds, hide, "
                      "concurrent settings, restart\n";
         return 0;
+    } catch (const winrt::hresult_error& error) {
+        std::cerr << "WinUI error: " << winrt::to_string(error.message()) << '\n';
+        return 1;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

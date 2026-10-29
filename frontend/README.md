@@ -24,7 +24,7 @@ DLL 在本地處理 TSF 組字、候選字狀態、鍵盤行為與
 `ITfCandidateListUIElementBehavior`。預測與輸入模式請求使用
 `\\.\pipe\llavon-ime`；可直接繪製的候選字快照則使用獨立的
 `\\.\pipe\llavon-ime-candidate-ui`。候選字 HWND 與 XAML island 由背景服務
-程序中的 `llavon-ime-candidate-ui.dll` 擁有。
+`llavon-ime-service.exe` 擁有。
 
 SearchHost 等 AppContainer 宿主程序會依據宿主自身的套件相依關係與系統目錄
 解析前端 DLL 的相依項目，不會搜尋輸入法安裝目錄。因此兩個儲存庫 triplet

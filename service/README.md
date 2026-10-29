@@ -7,8 +7,8 @@ tokenization 與 llama.cpp 推論由 `ime-core` 子模組提供。
 
 - `llavon-ime-service.exe` 在推論工作執行緒上執行 named pipe 伺服器，
   主執行緒則擁有通知區域圖示。
-- `llavon-ime-settings-ui.dll` 於需要時從執行檔所在目錄載入，擁有設定視窗的
-  HWND 與 WinUI 3 `Microsoft.UI.Xaml` island。
+- 設定視窗與候選字視窗都編譯在 `llavon-ime-service.exe` 內，各自擁有 HWND 與
+  WinUI 3 `Microsoft.UI.Xaml` island。
 - 設定 UI 的呼叫會排入共用的 WinUI STA，絕不會在推論工作執行緒上執行 XAML
   或模型相關工作。
 - 模型路徑與推論裝置設定儲存於 `%LOCALAPPDATA%\Llavon IME\settings.json`。
@@ -55,8 +55,8 @@ tokenization 與 llama.cpp 推論由 `ime-core` 子模組提供。
   `AMD GPU boost restored` 代表已成功收到 `Default` 的確認。
   效能驗證必須包含間隔 250 ms 的請求，以及閒置超過兩秒後恢復輸入的情境，
   不能只測連續 token 吞吐量。
-- `llavon-ime-candidate-ui.dll` 在第一次顯示候選字時載入。它在共用 STA 上
-  擁有一個候選字 HWND 與自己的 WinUI 3 XAML island。其 runtime 擁有一個
+- 候選字視窗在服務啟動時建立並保持隱藏，之後每次更新只把候選字快照排入共用
+  STA。它的 runtime 擁有一個
   非同步 logger 轉接器，透過 `ime-core::Logger` 注入候選字視窗；UI 追蹤
   訊息會以 `LogInformation::debug` 記錄出現在偵錯工具的 **Debug messages**
   頁面。
@@ -83,27 +83,37 @@ tokenization 與 llama.cpp 推論由 `ime-core` 子模組提供。
   會先釋放背景服務與 TSF processor；其他應用程式則保持執行。若仍有應用程式
   持有舊的 TSF DLL，Windows 可能需要重新啟動。
 
-設定與候選字模組是各自獨立、擁有不同 HWND 的 DLL。
-`llavon-ime-ui-runtime.dll` 擁有兩者共用的 STA、Win32 訊息迴圈、dispatcher
-與整個程序唯一的 WinUI Application。每個 UI 用戶端都會取得一份 runtime
-參考；關閉其中一個用戶端不會影響另一個。在背景服務結束前，框架都會保持可用，
-以便重新開啟用戶端；背景服務結束時，宿主會在兩個用戶端都關閉後關閉 runtime。
+## 程式結構
+
+設定視窗、候選字視窗與共用的 WinUI runtime 都編譯在背景服務 EXE 中：
+
+- `ui::UiThread` 擁有程序唯一的 WinUI Application、STA 與 dispatcher。WinUI
+  關閉後無法重新初始化，因此它在服務的整個生命週期內都存在。
+- `candidate::CandidateUi` 與 `settings::SettingsUi` 以 RAII 管理各自的視窗，
+  必須在 `ui::UiThread` 之前解構。
+- 服務在開始接受 IPC 請求前建立兩個 UI 並保持隱藏，所以第一次顯示候選字時不需要
+  等待 UI 初始化。UI 初始化失敗代表程式或安裝有問題，服務會直接結束，不會在缺少
+  UI 的狀態下繼續執行。
+- `SettingsConfiguration` 提供設定視窗的初始值；`SettingsActions` 是設定視窗
+  呼叫服務的操作。操作在呼叫端的執行緒上同步執行，耗時的操作由設定視窗自行排到
+  背景執行緒。
+- 每個 `SettingsActions` 操作都必須自行攔截所有例外，並以回傳值（`false`、
+  `std::nullopt`）回報失敗。UI 與推論在同一個程序中，例外若傳到 XAML 事件處理器，
+  會終止整個服務。
 
 原始碼依執行階段職責而非作業系統名稱劃分：
 
-- `src/service/`：常駐 EXE 的職責，包含預測 IPC、系統匣圖示與載入 UI 模組。
+- `src/service/`：常駐 EXE 的職責，包含預測 IPC、系統匣圖示與背景工作。
 - `src/ui/`：共用的 WinUI STA runtime 與 XAML 資源輔助工具。
-- `src/settings/`：設定 DLL，包含其 UI 用戶端、HWND 與 XAML island。
-- `src/candidate/`：候選字 UI DLL，包含其 UI 用戶端、單一 HWND 與 XAML
-  island。
+- `src/settings/`：設定視窗與系統匣選單，包含各自的 HWND 與 XAML island。
+- `src/candidate/`：候選字視窗，包含單一 HWND 與 XAML island。
+- `src/ui_resources.rc`：以 RCDATA 內嵌設定與候選字的 XAML。
 - `src/service/debug/`：`ime-core::Logger` 與另外安裝的
   `llavon::debug-client` 記錄產生端之間的輕量轉接層。
 
 背景服務沿用既有的執行檔與 IPC 相容名稱：
 
 - 執行檔：`llavon-ime-service.exe`
-- 設定 UI 模組：`llavon-ime-settings-ui.dll`
-- 候選字 UI 模組：`llavon-ime-candidate-ui.dll`
 - 偵錯工具執行檔：`llavon-ime-debugger.exe`
 - named pipe：`\\.\pipe\llavon-ime`
 - 候選字 UI named pipe：`\\.\pipe\llavon-ime-candidate-ui`
@@ -112,6 +122,8 @@ tokenization 與 llama.cpp 推論由 `ime-core` 子模組提供。
 - 字表路徑：`LLAVON_IME_TABLES_DIR`
 - 收集的訓練資料庫：`%LOCALAPPDATA%\Llavon IME\training-data\commits.sqlite3`
 - 收集的訓練資料庫路徑覆寫：`LLAVON_IME_TRAINING_DATABASE_PATH`
+
+## 訓練資料收集
 
 一般注音送出內容儲存在 SQLite 的 `training_commits` 資料表中。
 `context`、`answer` 與 `padding_json` 的結構與公開驗證集相同。只要該次送出中
@@ -232,7 +244,7 @@ weight decay、最大梯度範數 1、seed 42、啟用洗牌，裝置為 `auto`�
 套用後，只保留最近一次完成訓練的量化 GGUF 供推論使用。若載入或儲存新模型失敗，
 則保留舊的 GGUF 檔案。中間產物 f16 GGUF 在匯出後即刪除。將選取的 SQLite 資料列
 轉換為 CLI 可接受的數值 JSONL、啟動隱藏的訓練器程序、匯出 adapter，以及所有
-相關的檔案操作，都由背景服務負責，而非設定 DLL。舊版安裝的備用 CLI 路徑為：
+相關的檔案操作，都在背景服務的工作執行緒上進行，不在設定視窗的 UI 執行緒上執行。舊版安裝的備用 CLI 路徑為：
 
 ```text
 %ProgramFiles%\Llavon IME\tools\lora\llavon-lora.exe
@@ -269,13 +281,14 @@ NuGet 套件，Windows 版不再提供。
 
 ## 建置
 
-候選字與設定 DLL 都在同一個共用 STA 執行緒上承載 WinUI 3
+候選字視窗與設定視窗都在同一個共用 STA 執行緒上承載 WinUI 3
 `DesktopWindowXamlSource` island。兩者共用 `src/ui` 中的啟用、dispatcher、
 XAML metadata 與內嵌資源輔助工具。兩個 UI 都不在應用程式的 TSF 執行緒中執行。
 
 候選字 UI 的修改應放在 `src/candidate/ui/candidate_page.xaml`（欄位與頁尾）、
 `candidate_item.xaml`（每一列候選字）與 `theme.xaml`（字型、欄寬、淺色／深色／
-高對比筆刷）。這些檔案由 `candidate_ui.rc` 以 RCDATA 內嵌；編輯後需重新建置 DLL。
+高對比筆刷）。設定視窗的 XAML 位於 `src/settings/ui/`。兩者都由
+`src/ui_resources.rc` 以 RCDATA 內嵌，編輯後需重新建置 `llavon-ime-service`。
 C++ 負責更新候選字文字、選取狀態、編號與分頁狀態；彈出視窗會量測 XAML 樹，以取得
 目前 DPI 下的原生大小。
 

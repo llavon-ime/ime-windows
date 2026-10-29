@@ -2,17 +2,18 @@
 #include <utf8/cpp20.h>
 #include <windows.h>
 #include <shlobj.h>
+#include <winrt/base.h>
 
 #include "service/prediction_pipe_server.hpp"
 #include "service/amd_gpu_latency_boost.hpp"
-#include "service/candidate_ui_loader.hpp"
+#include "candidate/candidate_ui.hpp"
 #include "service/custom_name_matcher.hpp"
 #include "service/debug/core_logger_adapter.hpp"
 #include "service/lora_training_manager.hpp"
 #include "service/major_update_notifier.hpp"
 #include "service/process_mta.hpp"
 #include "service/user_settings.hpp"
-#include "service/settings_ui_loader.hpp"
+#include "settings/settings_ui.hpp"
 #include "service/tray_icon.hpp"
 
 #include <algorithm>
@@ -30,23 +31,19 @@
 
 namespace {
 
+// Password conversion is scoped to the operation and wiped before returning.
+struct TransientPassword {
+    std::string value;
+    explicit TransientPassword(std::u16string_view password) : value(utf8::utf16to8(password)) {}
+    ~TransientPassword() {
+        if (!value.empty()) SecureZeroMemory(value.data(), value.size());
+    }
+};
+
 constexpr const wchar_t* kModelFilename = L"llavon-ime-llama-250m-Q4_K_M.gguf";
 constexpr const wchar_t* kModelPathEnv = L"LLAVON_IME_MODEL_PATH";
 constexpr const wchar_t* kTablesDirEnv = L"LLAVON_IME_TABLES_DIR";
 constexpr const wchar_t* kServiceInstanceMutexName = L"Local\\LlavonImeServiceInstance";
-
-// Keep WinUI alive while the service can reopen either UI client. Its
-// process-wide control resources cannot be initialized again after shutdown.
-struct UiRuntimeShutdown final {
-    ~UiRuntimeShutdown() {
-        HMODULE module = nullptr;
-        if (!GetModuleHandleExW(0, L"llavon-ime-ui-runtime.dll", &module)) return;
-        using Shutdown = std::int32_t (*)();
-        const auto shutdown = reinterpret_cast<Shutdown>(GetProcAddress(module, "llavon_ui_thread_shutdown"));
-        if (shutdown) shutdown();
-        FreeLibrary(module);
-    }
-};
 
 class ServiceInstanceLock {
 public:
@@ -249,6 +246,8 @@ int main(int argc, char* argv[]) {
 
         std::clog << "[SRV] IME Windows Service starting\n";
 
+        llavon::ui::UiThread ui_thread;
+
         auto config = parse_core_config(service_argc, argv);
         config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
         config.sessions_per_context =
@@ -273,8 +272,7 @@ int main(int argc, char* argv[]) {
         auto core = std::make_shared<llavon::ime::core::Core>(config);
         const auto active_inference = core->inference_runtime_info();
 
-        UiRuntimeShutdown ui_runtime_shutdown;
-        llavon::service::CandidateUiLoader candidate_ui;
+        llavon::candidate::CandidateUi candidate_ui(ui_thread);
         auto custom_names =
             std::make_shared<llavon::service::CustomNameMatcher>(user_settings.custom_names);
         llavon::service::PredictionPipeServer server(
@@ -283,7 +281,7 @@ int main(int argc, char* argv[]) {
         llavon::service::LoraTrainingManager lora_training(
             server.training_data_writer(), config.tables_dir);
         auto custom_names_update_mutex = std::make_shared<std::mutex>();
-        llavon::service::SettingsUiLoader settings_ui;
+        llavon::settings::SettingsConfiguration settings;
         auto active_config = std::make_shared<llavon::ime::core::CoreConfig>(config);
         std::u16string displayed_model_path;
         if (service_argc != 1) {
@@ -295,27 +293,59 @@ int main(int argc, char* argv[]) {
         } else {
             displayed_model_path = config.model_path.u16string();
         }
-        settings_ui.configure(
-            inference_devices, user_settings.inference, active_inference,
-            [&server, active_config](
-                const llavon::ime::core::InferenceDeviceSelection& selection) {
-                try {
-                    auto reload_config = *active_config;
-                    reload_config.inference_device = selection;
-                    (void)server.replace_core(std::move(reload_config));
-                    if (!llavon::service::save_inference_settings(selection)) return false;
-                    active_config->inference_device = selection;
-                    return true;
-                } catch (const std::exception& error) {
-                    std::cerr << "[ERR] unable to reload inference core: "
-                              << error.what() << '\n';
-                    return false;
-                }
-            },
-            std::move(displayed_model_path),
-            installed_base_model_path().u16string(),
-            [&server, active_config, &lora_training](
-                const std::filesystem::path& model_path) {
+        const auto device_option = [](const llavon::ime::core::InferenceDeviceInfo& device) {
+            return llavon::settings::InferenceDeviceOption{
+                .backend = device.backend,
+                .device_type = device.type,
+                .device_id = utf8::utf8to16(device.device_id),
+                .name = utf8::utf8to16(device.name),
+                .description = utf8::utf8to16(device.description),
+                .memory_total = device.memory_total,
+            };
+        };
+        for (const auto& device : inference_devices)
+            settings.devices.push_back(device_option(device));
+        settings.selected_backend = user_settings.inference.backend;
+        settings.selected_device_id = utf8::utf8to16(user_settings.inference.device_id);
+        settings.active_device = device_option(active_inference.device);
+        settings.gpu_offload = active_inference.gpu_offload;
+        settings.fell_back_to_cpu = active_inference.fell_back_to_cpu;
+        settings.model_path = std::move(displayed_model_path);
+        settings.base_model_path = installed_base_model_path().u16string();
+        for (const auto& name : user_settings.custom_names) {
+            settings.custom_names.push_back(
+                {utf8::utf8to16(utf8::utf32to8(name.name)), name.readings});
+        }
+        settings.shift_space_width_toggle_enabled = user_settings.shift_space_width_toggle_enabled;
+        settings.immediate_conversion_enabled = user_settings.immediate_conversion_enabled;
+        settings.gpu_boost_enabled = user_settings.gpu_boost_enabled;
+        settings.major_update_notifications_enabled =
+            user_settings.major_update_notifications_enabled;
+        settings.actions.save_inference = [&server, active_config](
+                                              llavon::settings::InferenceBackend backend,
+                                              std::u16string_view device_id) {
+            try {
+                llavon::ime::core::InferenceDeviceSelection selection{
+                    backend, utf8::utf16to8(device_id)};
+                if (backend == llavon::settings::InferenceBackend::automatic ||
+                    backend == llavon::settings::InferenceBackend::cpu)
+                    selection.device_id.clear();
+                auto reload_config = *active_config;
+                reload_config.inference_device = selection;
+                (void)server.replace_core(std::move(reload_config));
+                if (!llavon::service::save_inference_settings(selection)) return false;
+                active_config->inference_device = selection;
+                return true;
+            } catch (const std::exception& error) {
+                std::cerr << "[ERR] unable to reload inference core: " << error.what() << '\n';
+                return false;
+            } catch (...) {
+                std::cerr << "[ERR] unable to reload inference core: unknown error\n";
+                return false;
+            }
+        };
+        settings.actions.save_model_path =
+            [&server, active_config, &lora_training](const std::filesystem::path& model_path) {
                 try {
                     const auto resolved_model_path =
                         resolve_configured_model_path(model_path);
@@ -337,125 +367,167 @@ int main(int argc, char* argv[]) {
                     std::cerr << "[ERR] unable to reload model: "
                               << error.what() << '\n';
                     return false;
+                } catch (...) {
+                    std::cerr << "[ERR] unable to reload model: unknown error\n";
+                    return false;
                 }
-            },
-            [active_config, &lora_training](
-                const std::filesystem::path& model_path, std::int32_t action) {
-                const auto resolved_model_path =
-                    resolve_configured_model_path(model_path);
-                if (action == LLAVON_MODEL_PREPARE)
+            };
+        settings.actions.prepare_model = [active_config, &lora_training](
+                                             const std::filesystem::path& model_path,
+                                             llavon::settings::ModelPreparation action) {
+            try {
+                const auto resolved_model_path = resolve_configured_model_path(model_path);
+                if (action == llavon::settings::ModelPreparation::prepare)
                     return lora_training.ensure_model_exported(resolved_model_path);
-                if (action == LLAVON_MODEL_DISCARD &&
+                if (action == llavon::settings::ModelPreparation::discard &&
                     resolved_model_path != active_config->model_path)
                     return lora_training.discard_model_export(resolved_model_path);
                 return false;
-            },
-            user_settings.custom_names,
+            } catch (...) {
+                return false;
+            }
+        };
+        settings.actions.save_custom_names =
             [custom_names, custom_names_update_mutex](
-                const std::vector<llavon::service::CustomNameSetting>& settings) {
-                // Keep persistent and in-memory revisions in the same order even if
-                // more than one caller saves concurrently.
-                std::lock_guard update_lock(*custom_names_update_mutex);
-                if (!llavon::service::save_custom_names(settings)) return false;
-                custom_names->replace(settings);
-                return true;
-            },
-            user_settings.shift_space_width_toggle_enabled,
-            [](bool enabled) {
-                return llavon::service::save_shift_space_width_toggle_setting(enabled);
-            },
-            user_settings.immediate_conversion_enabled,
-            [](bool enabled) {
-                return llavon::service::save_immediate_conversion_setting(enabled);
-            },
-            user_settings.gpu_boost_enabled,
-            [&server](bool enabled) {
+                const std::vector<llavon::settings::CustomNameOption>& names) {
+                try {
+                    std::vector<llavon::service::CustomNameSetting> settings;
+                    for (const auto& name : names)
+                        settings.push_back(
+                            {utf8::utf8to32(utf8::utf16to8(name.name)), name.readings});
+                    // Keep persistent and in-memory revisions in the same order even if
+                    // more than one caller saves concurrently.
+                    std::lock_guard update_lock(*custom_names_update_mutex);
+                    if (!llavon::service::save_custom_names(settings)) return false;
+                    custom_names->replace(settings);
+                    return true;
+                } catch (...) {
+                    return false;
+                }
+            };
+        settings.actions.save_width_toggle = [](bool enabled) {
+            return llavon::service::save_shift_space_width_toggle_setting(enabled);
+        };
+        settings.actions.save_immediate_conversion = [](bool enabled) {
+            return llavon::service::save_immediate_conversion_setting(enabled);
+        };
+        settings.actions.save_gpu_boost = [&server](bool enabled) {
+            try {
                 if (!llavon::service::save_gpu_boost_setting(enabled)) return false;
                 server.set_gpu_boost_enabled(enabled);
                 return true;
-            },
-            user_settings.major_update_notifications_enabled,
-            [](bool enabled) {
-                return llavon::service::save_major_update_notifications_setting(enabled);
-            },
-            [&server](std::string_view password, std::int64_t base_run_id) {
-                return server.training_data_writer()->pending_items(password, base_run_id);
-            },
-            [&server](std::u16string_view event_id) {
-                return server.training_data_writer()->delete_pending(event_id);
-            },
-            [&server] {
-                return server.training_data_writer()->lora_training_history();
-            },
-            [&server] {
-                return server.training_data_writer()->lora_base_models();
-            },
-            [&lora_training](const std::vector<std::u16string>& selected_event_ids,
-                             const llavon_settings_lora_options& source, std::string_view password) {
-                llavon::service::LoraTrainingOptions options{
-                    .base_run_id = source.base_run_id,
-                    .base_model_fingerprint = source.base_model_fingerprint
-                        ? source.base_model_fingerprint : "",
-                    .base_model_revision = source.base_model_revision
-                        ? source.base_model_revision : "",
-                    .rank = source.rank,
-                    .alpha = source.alpha,
-                    .dropout = source.dropout,
-                    .batch_size = source.batch_size,
-                    .gradient_accumulation = source.gradient_accumulation,
-                    .epochs = source.epochs,
-                    .max_steps = source.max_steps,
-                    .learning_rate = source.learning_rate,
-                    .weight_decay = source.weight_decay,
-                    .warmup_steps = source.warmup_steps,
-                    .max_gradient_norm = source.max_gradient_norm,
-                    .save_every = source.save_every,
-                    .device = source.device,
-                    .seed = source.seed,
-                    .shuffle = source.shuffle != 0,
-                    .max_sequence_length = source.max_sequence_length,
-                    .dtype = source.dtype ? source.dtype : u"float32",
-                    .target_modules = source.target_modules
-                        ? source.target_modules
-                        : u"q_proj,v_proj",
-                    .strength = static_cast<llavon::service::LoraTrainingStrength>(source.strength),
-                    .only_manually_selected = source.only_manually_selected != 0,
-                    .train_until_remembered = source.train_until_remembered != 0,
-                    .only_train_incorrect = source.only_train_incorrect != 0,
-                    .stabilize_intruders = source.stabilize_intruders != 0,
-                };
+            } catch (...) {
+                return false;
+            }
+        };
+        settings.actions.save_update_notifications = [](bool enabled) {
+            return llavon::service::save_major_update_notifications_setting(enabled);
+        };
+        settings.actions.load_training_items = [&server](std::u16string_view password,
+                                                   std::int64_t base_run_id)
+            -> std::optional<std::vector<llavon::settings::TrainingDataOption>> {
+            try {
+                TransientPassword secret(password);
+                return server.training_data_writer()->pending_items(secret.value, base_run_id);
+            } catch (...) {
+                return std::nullopt;
+            }
+        };
+        settings.actions.delete_training_item = [&server](std::u16string_view event_id) {
+            return server.training_data_writer()->delete_pending(event_id);
+        };
+        settings.actions.load_lora_history = [&server] {
+            return server.training_data_writer()->lora_training_history();
+        };
+        settings.actions.load_lora_base_models = [&server] {
+            return server.training_data_writer()->lora_base_models();
+        };
+        settings.actions.start_lora_training = [&lora_training](
+                                                   const std::vector<std::u16string>& event_ids,
+                                                   llavon::service::LoraTrainingOptions options,
+                                                   std::u16string_view password) {
+            try {
+                TransientPassword secret(password);
                 return lora_training.start_training_async(
-                    selected_event_ids, std::move(options), password);
-            },
-            [&lora_training] { return lora_training.status(); },
-            [&lora_training](std::int32_t action) {
+                    event_ids, std::move(options), secret.value);
+            } catch (...) {
+                return false;
+            }
+        };
+        settings.actions.get_lora_status =
+            [&lora_training]() -> std::optional<llavon::service::LoraOperationStatus> {
+            try {
+                return lora_training.status();
+            } catch (...) {
+                return std::nullopt;
+            }
+        };
+        settings.actions.lora_model_action = [&lora_training](llavon::settings::LoraAction action) {
+            try {
                 switch (action) {
-                case LLAVON_LORA_CHECK_UPDATES: return lora_training.check_updates_async();
-                case LLAVON_LORA_DOWNLOAD_MODEL: return lora_training.download_model_async();
-                case LLAVON_LORA_INSTALL_TRAINER: return lora_training.install_trainer_async();
-                case LLAVON_LORA_INSTALL_CUDA_RUNTIME:
+                case llavon::settings::LoraAction::check_updates:
+                    return lora_training.check_updates_async();
+                case llavon::settings::LoraAction::download_model:
+                    return lora_training.download_model_async();
+                case llavon::settings::LoraAction::install_trainer:
+                    return lora_training.install_trainer_async();
+                case llavon::settings::LoraAction::install_cuda_runtime:
                     return lora_training.install_cuda_runtime_async();
-                case LLAVON_LORA_REMOVE_CUDA_RUNTIME:
+                case llavon::settings::LoraAction::remove_cuda_runtime:
                     return lora_training.remove_cuda_runtime_async();
-                default: return false;
+                default:
+                    return false;
                 }
-            },
-            [&lora_training] { lora_training.cancel(); },
-            [&server, &lora_training](int action, std::string_view password) -> std::size_t {
-                auto writer = server.training_data_writer();
-                switch (action) {
-                case LLAVON_PROTECTION_STATUS: {
-                    const auto status = writer->protection_status();
-                    return (status.configured ? 1u : 0u) | (status.enabled ? 2u : 0u);
-                }
-                case LLAVON_PROTECTION_SETUP: writer->configure_password(password); return 0;
-                case LLAVON_PROTECTION_ENABLE: writer->set_recording_enabled(true); return 0;
-                case LLAVON_PROTECTION_DISABLE: writer->set_recording_enabled(false); return 0;
-                case LLAVON_PROTECTION_CLEANUP: return lora_training.discard_plaintext_datasets();
-                case LLAVON_PROTECTION_RESET: lora_training.reset_conversation_data(); return 0;
-                default: throw std::invalid_argument("unknown protection action");
-                }
-            });
+            } catch (...) {
+                return false;
+            }
+        };
+        settings.actions.cancel_lora = [&lora_training] { lora_training.cancel(); };
+        const auto writer = server.training_data_writer();
+        settings.actions.protection.status =
+            [writer]() -> std::optional<llavon::settings::ProtectionStatus> {
+            try {
+                const auto status = writer->protection_status();
+                return llavon::settings::ProtectionStatus{status.configured, status.enabled};
+            } catch (...) {
+                return std::nullopt;
+            }
+        };
+        settings.actions.protection.setup = [writer](std::u16string_view password) {
+            try {
+                TransientPassword secret(password);
+                writer->configure_password(secret.value);
+                return true;
+            } catch (...) {
+                return false;
+            }
+        };
+        settings.actions.protection.set_enabled = [writer](bool enabled) {
+            try {
+                writer->set_recording_enabled(enabled);
+                return true;
+            } catch (...) {
+                return false;
+            }
+        };
+        settings.actions.protection.cleanup = [&lora_training]() -> std::optional<std::size_t> {
+            try {
+                return lora_training.discard_plaintext_datasets();
+            } catch (...) {
+                return std::nullopt;
+            }
+        };
+        settings.actions.protection.reset = [&lora_training] {
+            try {
+                lora_training.reset_conversation_data();
+                return true;
+            } catch (...) {
+                return false;
+            }
+        };
+        settings.training_items = server.training_data_writer()->pending_items();
+        llavon::settings::SettingsUi settings_ui(ui_thread, std::move(settings));
+
         struct PendingCountRegistration {
             std::shared_ptr<llavon::service::TrainingDataWriter> writer;
             ~PendingCountRegistration() {
@@ -489,6 +561,9 @@ int main(int argc, char* argv[]) {
         tray.run_message_loop();
         server_thread.join();
         return server_result;
+    } catch (const winrt::hresult_error& error) {
+        std::cerr << "[ERR] WinUI startup failed: " << winrt::to_string(error.message()) << '\n';
+        return 1;
     } catch (const std::invalid_argument& error) {
         if (std::string(error.what()) != "invalid command line") {
             std::cerr << "[ERR] fatal: " << error.what() << '\n';

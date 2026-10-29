@@ -17,8 +17,6 @@ add_executable(llavon-ime-service
     src/resource.h
     src/service/candidate_pipe_server.hpp
     src/service/candidate_pipe_protocol.hpp
-    src/service/candidate_ui_loader.cpp
-    src/service/candidate_ui_loader.hpp
     src/service/custom_name_matcher.cpp
     src/service/custom_name_matcher.hpp
     src/service/amd_gpu_latency_boost.cpp
@@ -51,18 +49,16 @@ add_executable(llavon-ime-service
     src/service/user_settings_codec.cpp
     src/service/user_settings_codec.hpp
     src/service/prediction_pipe_server.hpp
-    src/service/settings_ui_loader.cpp
-    src/service/settings_ui_loader.hpp
     src/service/tray_icon.cpp
     src/service/tray_icon.hpp
     src/service/training_data_writer.cpp
     src/service/training_data_writer.hpp
-    src/service/winrt_http.cpp
     src/service/winrt_http.hpp
     src/service/process_mta.hpp
-    src/settings/update_checker.cpp
     src/settings/update_checker.hpp
     src/service.rc
+    src/service.manifest
+    src/ui_resources.rc
 )
 
 # Embedded only in the web setup. The MSI never carries the GGUF payload.
@@ -82,201 +78,51 @@ target_compile_options(llavon-ime-model-installer PRIVATE /W4 /WX /utf-8 /await:
 target_link_libraries(llavon-ime-model-installer PRIVATE
     Microsoft::CppWinRT WindowsApp bcrypt shell32)
 
-add_library(llavon-ime-ui-runtime SHARED
+# Internal modules remain separate compilation units, linked into the service EXE.
+# OBJECT libraries also let desktop integration tests host the same implementation.
+add_library(llavon-ime-ui OBJECT
     src/ui/ui_thread.cpp
-    src/ui/ui_thread.hpp
     src/ui/winui_runtime.cpp
-    src/ui/winui_runtime.hpp
-    src/ui/winui_platform.hpp
-)
-target_compile_features(llavon-ime-ui-runtime PRIVATE cxx_std_23)
-set_target_properties(llavon-ime-ui-runtime PROPERTIES CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
-target_compile_definitions(llavon-ime-ui-runtime PRIVATE
-    LLAVON_UI_RUNTIME_EXPORTS WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE WINVER=0x0A00 _WIN32_WINNT=0x0A00)
-target_compile_options(llavon-ime-ui-runtime PRIVATE /W4 /WX /utf-8 /permissive-
-    /FI"${CMAKE_CURRENT_SOURCE_DIR}/src/ui/winui_platform.hpp")
-target_link_libraries(llavon-ime-ui-runtime PRIVATE WindowsApp ole32 runtimeobject)
-
-add_library(llavon-ime-candidate-ui SHARED
     src/candidate/candidate_runtime.cpp
-    src/candidate/candidate_ui_api.h
-    src/candidate/candidate_ui.rc
-    src/candidate/candidate_resources.h
-    src/candidate/ui/candidate_page.xaml
-    src/candidate/ui/candidate_item.xaml
-    src/candidate/ui/theme.xaml
-    src/ui/ui_thread.hpp
-    src/ui/winui_platform.hpp
-    src/ui/xaml_resource.hpp
-    src/candidate/candidate_window.hpp
-    src/candidate/window.hpp
-)
-
-add_library(llavon-ime-settings-ui SHARED
-    src/settings/settings_ui.rc
-    src/settings/settings_resources.h
-    src/settings/ui/settings_page.xaml
-    src/settings/ui/settings_menu.xaml
-    src/settings/ui/theme.xaml
-    src/settings/ui/lora_dialog.xaml
-    src/settings/ui/lora_selection.xaml
-    src/settings/ui/lora_ruby_cell.xaml
-    src/settings/ui/lora_item_tooltip.xaml
-    src/settings/ui/lora_training_item.xaml
-    src/settings/ui/custom_name_row.xaml
-    src/settings/ui/custom_name_reading.xaml
-    src/settings/ui/custom_name_warning.xaml
-    src/settings/settings_configuration.hpp
-    src/settings/lora_history_tree.cpp
-    src/settings/lora_history_tree.hpp
-    src/settings/lora_history_lca.cpp
-    src/settings/lora_history_lca.hpp
-    src/settings/settings_menu_window.cpp
-    src/settings/settings_menu_window.hpp
     src/settings/settings_runtime.cpp
-    src/settings/settings_ui_api.h
-    src/ui/ui_thread.hpp
-    src/ui/winui_platform.hpp
-    src/ui/xaml_resource.hpp
     src/settings/settings_window.cpp
-    src/settings/settings_window.hpp
-    src/settings/update_checker.cpp
-    src/settings/update_checker.hpp
+    src/settings/settings_menu_window.cpp
+    src/settings/lora_history_tree.cpp
+    src/settings/lora_history_lca.cpp
     src/settings/update_installer.cpp
-    src/settings/update_installer.hpp
+    src/settings/update_checker.cpp
     src/service/winrt_http.cpp
-    src/service/winrt_http.hpp
-    src/service/process_mta.hpp
 )
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/WinUI3.cmake")
-llavon_target_winui3(llavon-ime-ui-runtime)
-llavon_target_winui3(llavon-ime-settings-ui NO_DEPLOY)
-llavon_target_winui3(llavon-ime-candidate-ui NO_DEPLOY)
-target_link_libraries(llavon-ime-settings-ui PRIVATE llavon-ime-ui-runtime)
-target_link_libraries(llavon-ime-candidate-ui PRIVATE llavon-ime-ui-runtime)
+llavon_target_winui3(llavon-ime-ui NO_DEPLOY)
+llavon_target_winui3(llavon-ime-service)
 
-target_compile_features(llavon-ime-service PRIVATE cxx_std_23)
-target_compile_features(llavon-ime-candidate-ui PRIVATE cxx_std_23)
-target_compile_features(llavon-ime-settings-ui PRIVATE cxx_std_23)
-set_target_properties(llavon-ime-service PROPERTIES
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS NO
-)
-set_target_properties(llavon-ime-settings-ui PROPERTIES
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS NO
-    OUTPUT_NAME "llavon-ime-settings-ui"
-)
-set_target_properties(llavon-ime-candidate-ui PROPERTIES
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS NO
-    OUTPUT_NAME "llavon-ime-candidate-ui"
-)
-target_compile_definitions(llavon-ime-service PRIVATE
-    LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
-    LLAVON_IME_BUILD_COMMIT="${IME_WINDOWS_SERVICE_BUILD_COMMIT}"
-    LLAVON_IME_BUILD_NUMBER=${IME_WINDOWS_SERVICE_BUILD_NUMBER}
-    LLAVON_LORA_SUBMODULE_COMMIT="${LLAVON_LORA_SUBMODULE_COMMIT}"
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-    UNICODE
-    _UNICODE
-    WINVER=0x0A00
-    _WIN32_WINNT=0x0A00
-)
-target_link_libraries(llavon-ime-service PRIVATE bcrypt)
-target_compile_definitions(llavon-ime-settings-ui PRIVATE
-    LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
-    LLAVON_IME_BUILD_COMMIT="${IME_WINDOWS_SERVICE_BUILD_COMMIT}"
-    LLAVON_IME_BUILD_NUMBER=${IME_WINDOWS_SERVICE_BUILD_NUMBER}
-    LLAVON_SETTINGS_UI_EXPORTS
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-    UNICODE
-    _UNICODE
-    WINVER=0x0A00
-    _WIN32_WINNT=0x0A00
-)
-target_compile_definitions(llavon-ime-candidate-ui PRIVATE
-    LLAVON_CANDIDATE_UI_EXPORTS
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-    UNICODE
-    _UNICODE
-    WINVER=0x0A00
-    _WIN32_WINNT=0x0A00
-)
-target_compile_options(llavon-ime-service PRIVATE
-    /W4
-    /WX
-    /utf-8
-    /await:strict
-)
-target_compile_options(llavon-ime-settings-ui PRIVATE
-    /W4
-    /WX
-    /utf-8
-    /permissive-
-    /FI"${CMAKE_CURRENT_SOURCE_DIR}/src/ui/winui_platform.hpp"
-)
-target_compile_options(llavon-ime-candidate-ui PRIVATE
-    /W4
-    /WX
-    /utf-8
-    /permissive-
-    /FI"${CMAKE_CURRENT_SOURCE_DIR}/src/ui/winui_platform.hpp"
-)
-target_link_options(llavon-ime-service PRIVATE /MANIFEST:NO)
-target_include_directories(llavon-ime-service PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_include_directories(llavon-ime-settings-ui PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/settings"
-)
-target_include_directories(llavon-ime-candidate-ui PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/candidate"
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../ime-core/include"
-)
+foreach(target llavon-ime-ui llavon-ime-service)
+    target_compile_features(${target} PRIVATE cxx_std_23)
+    set_target_properties(${target} PROPERTIES CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+    target_compile_definitions(${target} PRIVATE
+        LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
+        LLAVON_IME_BUILD_COMMIT="${IME_WINDOWS_SERVICE_BUILD_COMMIT}"
+        LLAVON_IME_BUILD_NUMBER=${IME_WINDOWS_SERVICE_BUILD_NUMBER}
+        LLAVON_LORA_SUBMODULE_COMMIT="${LLAVON_LORA_SUBMODULE_COMMIT}"
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(${target} PRIVATE /W4 /WX /utf-8 /permissive-
+        /FI"${CMAKE_CURRENT_SOURCE_DIR}/src/ui/winui_platform.hpp")
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+endforeach()
+
+target_link_libraries(llavon-ime-ui PUBLIC
+    ime-core::ime-core llavon::debug-client Microsoft::CppWinRT WindowsApp
+    reflectcpp::reflectcpp utf8cpp::utf8cpp unofficial-sodium::sodium
+    comctl32 dwmapi ole32 runtimeobject shell32)
+
 target_link_libraries(llavon-ime-service PRIVATE
-    ime-core::ime-core
-    llavon::debug-client
-    llavon::ipc
-    Microsoft::CppWinRT
-    WindowsApp
-    asio::asio
-    Vulkan::Headers
-    reflectcpp::reflectcpp
-    utf8cpp::utf8cpp
-    unofficial-sodium::sodium
-    unofficial::sqlite3::sqlite3
-    advapi32
-    d3d11
-    dxgi
-    gdi32
-    ole32
-    oleaut32
-    runtimeobject
-    shell32
-    ws2_32
-)
-target_link_libraries(llavon-ime-settings-ui PRIVATE
-    WindowsApp
-    reflectcpp::reflectcpp
-    utf8cpp::utf8cpp
-    comctl32
-    dwmapi
-    ole32
-    runtimeobject
-    shell32
-    unofficial-sodium::sodium
-)
-target_link_libraries(llavon-ime-candidate-ui PRIVATE
-    llavon::debug-client
-    Microsoft::CppWinRT
-    WindowsApp
-    dwmapi
-    ole32
-    runtimeobject
-)
+    llavon-ime-ui ime-core::ime-core llavon::debug-client llavon::ipc
+    Microsoft::CppWinRT WindowsApp asio::asio Vulkan::Headers
+    reflectcpp::reflectcpp utf8cpp::utf8cpp unofficial-sodium::sodium
+    unofficial::sqlite3::sqlite3 advapi32 bcrypt comctl32 d3d11 dwmapi dxgi
+    gdi32 ole32 oleaut32 runtimeobject shell32 ws2_32)
 
 if(BUILD_TESTING)
     add_executable(prediction-display-settings-tests
@@ -294,13 +140,17 @@ if(BUILD_TESTING)
 
     option(LLAVON_IME_ENABLE_UI_TESTS "Run WinUI integration tests on an interactive Windows desktop" OFF)
     if(LLAVON_IME_ENABLE_UI_TESTS)
-        add_executable(candidate-ui-tests tests/candidate_ui_tests.cpp tests/candidate_ui_tests.rc)
+        add_executable(candidate-ui-tests tests/candidate_ui_tests.cpp src/service.rc src/service.manifest)
+        # The service deploys the shared framework assets before this test host runs.
+        add_dependencies(candidate-ui-tests llavon-ime-service)
         target_compile_features(candidate-ui-tests PRIVATE cxx_std_23)
         target_compile_definitions(candidate-ui-tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
         target_compile_options(candidate-ui-tests PRIVATE /W4 /WX /utf-8 /permissive-)
-        target_link_options(candidate-ui-tests PRIVATE /MANIFEST:NO)
         target_include_directories(candidate-ui-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-        target_link_libraries(candidate-ui-tests PRIVATE llavon-ime-candidate-ui llavon-ime-settings-ui llavon-ime-ui-runtime gdiplus ole32 oleaut32 uiautomationcore)
+        llavon_target_winui3(candidate-ui-tests NO_DEPLOY)
+        target_sources(candidate-ui-tests PRIVATE src/ui_resources.rc)
+        target_compile_options(candidate-ui-tests PRIVATE /FI"${CMAKE_CURRENT_SOURCE_DIR}/src/ui/winui_platform.hpp")
+        target_link_libraries(candidate-ui-tests PRIVATE llavon-ime-ui gdiplus ole32 oleaut32 uiautomationcore)
         add_test(NAME candidate-ui-candidate-first COMMAND candidate-ui-tests candidate-first)
         add_test(NAME candidate-ui-settings-first COMMAND candidate-ui-tests settings-first)
         add_test(NAME settings-ui-first-show COMMAND candidate-ui-tests settings-window-first)
@@ -451,9 +301,6 @@ endif()
 
 install(TARGETS
     llavon-ime-service
-    llavon-ime-ui-runtime
-    llavon-ime-candidate-ui
-    llavon-ime-settings-ui
     RUNTIME DESTINATION bin
     COMPONENT Runtime
 )

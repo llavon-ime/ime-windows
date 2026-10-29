@@ -50,8 +50,8 @@ function(llavon_target_winui3 target)
         Microsoft.WindowsAppSDK.InteractiveExperiences_SelfContained
         Microsoft.WindowsAppSDK.DWrite_SelfContained
         Microsoft.WindowsAppSDK.WinUI_SelfContained)
-    # UI clients share the runtime DLL's deployment directory. Deploy these
-    # assets once to avoid concurrent copy_directory operations to the same files.
+    # Deploy framework assets from the service target. Internal UI objects and
+    # test hosts share its output directory and must not race these copies.
     if(ARGV1 STREQUAL "NO_DEPLOY")
         return()
     endif()
