@@ -278,6 +278,14 @@ struct BopomofoPos {
         } else if (Bopomofo::tone.contains(c)) {
             tone = c;
             std::vector<char32_t>* candi = HanziMapEngine::instance().lookup_all(to_bopomofo_string());
+            if (const auto literal = single_reading_literal(); literal &&
+                (candi == nullptr || std::ranges::none_of(*candi, [literal](char32_t candidate) {
+                    return candidate != *literal;
+                }))) {
+                // Only readings with an actual character candidate need model conversion.
+                set_chosen_candidate(*literal);
+                return true;
+            }
             if (candi == nullptr) {
                 invalid = true;
                 return true;
@@ -330,6 +338,12 @@ public:
     bool is_invalid() const {
         return invalid;
     }
+    std::optional<char32_t> single_reading_literal() const {
+        if (tone != u' ') return std::nullopt;
+        const auto reading = to_toneless_bopomofo_string();
+        if (reading.size() != 1) return std::nullopt;
+        return reading.front();
+    }
     void set_chosen_candidate(char32_t ch) {
         initial = 0;
         medial = 0;
@@ -346,10 +360,13 @@ public:
         candidates = {ch};
     }
     void set_choose_index(int idx) {
-        choose_index = idx;
-        chosen = true;
-        predicted = true;
-        conversion_pending = false;
+        const auto selected = get_candidates().at(idx);
+        if (single_reading_literal() == selected) {
+            // A manually selected reading becomes ordinary composition text.
+            set_chosen_candidate(selected);
+        } else {
+            choose_candidate(selected);
+        }
         manually_selected = true;
     }
     void choose_candidate(char32_t ch) {
@@ -364,11 +381,18 @@ public:
         predicted = true;
         conversion_pending = false;
     }
-    const std::vector<char32_t>& get_candidates() const {
+    std::vector<char32_t> get_candidates() const {
         if (!is_compositable()) {
             throw std::runtime_error("No candidates available");
         }
-        return candidates;
+        auto displayed = candidates;
+        if (const auto literal = single_reading_literal()) {
+            // Display-only: preserve model candidates and the default selection.
+            std::erase(displayed, *literal);
+            const auto offset = std::min<std::size_t>(8, displayed.size());
+            displayed.insert(displayed.begin() + offset, *literal);
+        }
+        return displayed;
     }
     bool was_manually_selected() const noexcept {
         return manually_selected;

@@ -1386,6 +1386,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     }
 
     if (wParam == VK_RETURN && !compositionBuffer.empty()) {
+        if (compositionBuffer.has_uncomposed_reading()) {
+            *pfEaten = TRUE;
+            return S_OK;
+        }
         if (compositionBuffer.commit_requires_prediction()) {
             candidate_ui_->hide();
             // Reuse current work, or retry a failed/superseded prediction.
@@ -1755,7 +1759,7 @@ HRESULT TextService::start_composition(ITfContext* pContext) {
  */
 HRESULT TextService::end_composition(ITfContext* pContext) {
     if (!pContext) return E_INVALIDARG;
-    if (compositionBuffer.waiting_for_prediction()) return S_FALSE;
+    if (compositionBuffer.has_uncomposed_reading() || compositionBuffer.waiting_for_prediction()) return S_FALSE;
     candidate_ui_->hide();
     if (!itfComposition) {
         clear_composition_state();

@@ -59,6 +59,13 @@ public:
             padding.front().candidates = {U'錯'};
             throw std::runtime_error("fake transport failure");
         }
+        if (context == u"no-candidates") {
+            for (auto& entry : padding) {
+                entry.candidates.clear();
+                entry.predicted = true;
+            }
+            return;
+        }
         for (auto& entry : padding) {
             entry.candidates = {U'新', U'舊'};
             entry.predicted = true;
@@ -185,6 +192,173 @@ void discard_reading_test() {
     buffer.pre();
     require(!buffer.discard_current_reading() && buffer.to_string() == u"你！",
             "discarding at the start of composition changed the text");
+}
+
+void uncomposed_reading_test() {
+    tsf::CompositionBuffer buffer;
+    require(!buffer.has_uncomposed_reading(), "empty composition blocked commit");
+    buffer.add_chosen_candidate(U'你');
+    buffer.add_chosen_candidate(U'好');
+    require(!buffer.has_uncomposed_reading(), "converted text blocked commit");
+    buffer.add(u'ㄅ');
+    require(buffer.has_uncomposed_reading(), "single unfinished symbol allowed commit");
+    buffer.add(u'ㄚ');
+    require(buffer.has_uncomposed_reading(), "unfinished syllable allowed commit");
+    buffer.add_chosen_candidate(U'！');
+    require(buffer.current_compositable() && buffer.has_uncomposed_reading(),
+            "unfinished input away from the caret allowed commit");
+    buffer.pre();
+    buffer.add(u'ˊ');
+    require(!buffer.has_uncomposed_reading() && buffer.waiting_for_prediction(),
+            "completed syllable did not retain the existing prediction waiting behavior");
+    buffer.clear();
+    buffer.add(u'ㄅ');
+    buffer.add(u'ㄦ');
+    buffer.add(u' ');
+    require(buffer.current_invalid() && buffer.has_uncomposed_reading(),
+            "invalid reading allowed commit");
+}
+
+void single_reading_candidate_test() {
+    tsf::CompositionBuffer buffer;
+    const std::u32string ranked = U"一衣依醫伊揖壹噫咿禕漪猗";
+    for (const std::size_t count : {1u, 8u, 9u, 12u}) {
+        buffer.clear();
+        buffer.add(u'ㄧ');
+        require(buffer.has_uncomposed_reading(), "single reading bypassed commit blocking");
+        buffer.add(u' ');
+        require(buffer.waiting_for_prediction() && !buffer.current_has_candidate_list(),
+                "single reading bypassed model prediction");
+        const auto snapshot = buffer.prediction_snapshot();
+        require(snapshot && !snapshot->front().chosen && snapshot->front().to_bopomofo_string() == u"ㄧ ",
+                "single reading was sent as a fixed literal instead of a first-tone syllable");
+        auto result = *snapshot;
+        const std::vector<char32_t> model_candidates(ranked.begin(), ranked.begin() + count);
+        result.front().candidates = model_candidates;
+        result.front().predicted = true;
+        if (count == 1) result.front().choose_candidate(model_candidates.front());
+        require(buffer.apply_prediction(*snapshot, std::move(result)), "single reading prediction rejected");
+        const auto& entry = buffer.cur();
+        require(buffer.to_string() == u"一" && entry.candidates == model_candidates,
+                "display-only literal changed the model default or model candidates");
+        auto expected = model_candidates;
+        expected.insert(expected.begin() + std::min<std::size_t>(8, count), U'ㄧ');
+        const auto displayed = entry.get_candidates();
+        require(displayed == expected && buffer.current_has_candidate_list(),
+                "literal was not at the end of the first page or displaced candidate order");
+        for (std::size_t index = 0; index < displayed.size(); ++index) {
+            auto selected = entry;
+            selected.set_choose_index(static_cast<int>(index));
+            require(selected.current32() == displayed[index], "displayed selection mapped to the wrong candidate");
+        }
+        const auto next_snapshot = [&] {
+            buffer.invalidate_all_predictions();
+            return buffer.prediction_snapshot();
+        }();
+        require(next_snapshot && next_snapshot->front().candidates == model_candidates,
+                "display-only literal leaked into a later engine request");
+    }
+
+    auto duplicate = buffer.cur();
+    duplicate.candidates.insert(duplicate.candidates.begin(), U'ㄧ');
+    duplicate.candidates.push_back(U'ㄧ');
+    const auto displayed = duplicate.get_candidates();
+    require(std::ranges::count(displayed, U'ㄧ') == 1 && displayed[8] == U'ㄧ',
+            "existing literal was duplicated or placed outside the first page");
+
+    buffer.clear();
+    buffer.add_chosen_candidate(U'你');
+    buffer.add_chosen_candidate(U'好');
+    buffer.add(u'ㄧ');
+    buffer.add(u' ');
+    const auto snapshot = buffer.prediction_snapshot();
+    auto result = *snapshot;
+    for (auto& item : result) item.predicted = true;
+    result.back().candidates = {U'一', U'衣'};
+    require(buffer.apply_prediction(*snapshot, std::move(result)), "mixed composition prediction rejected");
+    buffer.add_chosen_candidate(U'！');
+    buffer.pre();
+    buffer.cur().set_choose_index(2);
+    require(buffer.to_string() == u"你好ㄧ！" && buffer.caret_offset() == 3 &&
+                !buffer.has_uncomposed_reading(),
+            "selecting a literal cleared composition or changed surrounding text or caret");
+    const auto sample = buffer.commit_sample(u"");
+    require(sample.input[2].reading.empty() && sample.input[2].output == u"ㄧ" &&
+                sample.input[2].manually_selected,
+            "selected literal did not become ordinary composition text");
+    buffer.add(u'ㄋ');
+    require(buffer.to_string() == u"你好ㄧㄋ！" && buffer.has_uncomposed_reading(),
+            "further input merged with the selected literal");
+
+    buffer.clear();
+    buffer.add(u'ㄋ');
+    buffer.add(u'ㄧ');
+    buffer.add(u'ˇ');
+    require(buffer.cur().get_candidates() == buffer.cur().candidates,
+            "multi-symbol syllable gained a literal candidate");
+}
+
+void literal_only_reading_test() {
+    for (const char16_t symbol : u"ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄖㄝㄟ"sv) {
+        tsf::CompositionBuffer buffer;
+        buffer.add(symbol);
+        require(buffer.has_uncomposed_reading(), "unfinished single reading allowed commit");
+        buffer.add(u' ');
+        require(buffer.to_string() == std::u16string(1, symbol) && buffer.caret_offset() == 1 &&
+                    !buffer.empty() && !buffer.has_uncomposed_reading() &&
+                    !buffer.waiting_for_prediction() && !buffer.commit_requires_prediction() &&
+                    !buffer.prediction_snapshot(),
+                "literal-only reading waited for the model or did not stay in composition");
+        const auto sample = buffer.commit_sample(u"");
+        require(sample.input.size() == 1 && sample.input[0].reading.empty() &&
+                    sample.input[0].output == std::u16string(1, symbol),
+                "literal-only reading was not ordinary composition text");
+        buffer.add(u'ㄧ');
+        require(buffer.to_string() == std::u16string(1, symbol) + u"ㄧ" &&
+                    buffer.has_uncomposed_reading(),
+                "next input merged into the literal-only reading");
+    }
+
+    tsf::CompositionBuffer buffer;
+    buffer.add_chosen_candidate(U'你');
+    buffer.add_chosen_candidate(U'好');
+    buffer.add(u'ㄅ');
+    buffer.add_chosen_candidate(U'！');
+    buffer.pre();
+    buffer.add(u' ');
+    require(buffer.to_string() == u"你好ㄅ！" && buffer.caret_offset() == 3 &&
+                !buffer.has_uncomposed_reading() && !buffer.waiting_for_prediction(),
+            "literal-only conversion changed surrounding text or caret");
+
+    for (const char16_t symbol : u"ㄓㄔㄕㄗㄘㄙㄧㄨㄩㄚㄛㄜㄞㄠㄡㄢㄣㄤㄥㄦ"sv) {
+        buffer.clear();
+        buffer.add(symbol);
+        buffer.add(u' ');
+        const auto snapshot = buffer.prediction_snapshot();
+        require(buffer.waiting_for_prediction() && snapshot && !snapshot->front().chosen &&
+                    snapshot->front().to_bopomofo_string() == std::u16string(1, symbol) + u" ",
+                "a single-symbol syllable with character candidates bypassed the model");
+    }
+}
+
+void single_reading_failed_model_test() {
+    auto state = std::make_shared<State>();
+    Event notified;
+    tsf::EngineWorker worker([state] { return std::make_unique<FakeEngine>(state); },
+                             [&] { notified.signal(); });
+    tsf::CompositionBuffer buffer;
+    buffer.add(u'ㄧ');
+    buffer.add(u' ');
+    const auto snapshot = buffer.prediction_snapshot();
+    worker.predict(1, u"no-candidates", *snapshot);
+    notified.wait();
+    auto result = worker.take_prediction();
+    require(result && !result->succeeded &&
+                !buffer.apply_prediction(*snapshot, std::move(result->padding)),
+            "empty model result was replaced by an unrequested literal fallback");
+    require(buffer.to_string() == u"ㄧ" && buffer.waiting_for_prediction() &&
+                buffer.commit_requires_prediction() && buffer.cur().to_bopomofo_string() == u"ㄧ ",
+            "failed model conversion changed a valid single-symbol syllable into ordinary text");
 }
 
 void prediction_display_test() {
@@ -327,6 +501,10 @@ int main() {
     try {
         queue_and_snapshot_test();
         discard_reading_test();
+        uncomposed_reading_test();
+        single_reading_candidate_test();
+        literal_only_reading_test();
+        single_reading_failed_model_test();
         prediction_display_test();
         cancellation_test();
         return 0;
