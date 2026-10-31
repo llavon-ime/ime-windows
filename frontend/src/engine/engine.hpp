@@ -2,11 +2,10 @@
 
 #include <memory>
 
-#include "impl/pipeEngine.hpp"
-
 namespace tsf {
 
-inline std::unique_ptr<IEngine> get_engine() {
-    return std::make_unique<PipeEngine>();
-}
+class IEngine;
+
+std::unique_ptr<IEngine> make_pipe_engine();
+
 }  // namespace tsf

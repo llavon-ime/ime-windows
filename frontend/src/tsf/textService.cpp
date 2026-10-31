@@ -19,8 +19,10 @@
 #include "editSession.hpp"
 #include "engine/engine.hpp"
 #include "engine/engine_worker.hpp"
+#include "engine/impl/engine.h"
 #include "inputModeLangBarItem.hpp"
 #include "system/globals.h"
+#include "system/ui_dispatcher.hpp"
 #include "utils/healper.hpp"
 
 using namespace std::literals;
@@ -137,21 +139,6 @@ void request_settings_menu(POINT location) noexcept {
     PostMessageW(service_window, message,
                  static_cast<WPARAM>(static_cast<std::uint32_t>(location.x)),
                  static_cast<LPARAM>(static_cast<std::uint32_t>(location.y)));
-}
-
-std::u16string to_full_width_ascii(std::u16string_view text) {
-    std::u16string result;
-    result.reserve(text.size());
-    for (char16_t character : text) {
-        if (character == u' ') {
-            result.push_back(u'\u3000');
-        } else if (character >= u'!' && character <= u'~') {
-            result.push_back(static_cast<char16_t>(character + 0xfee0));
-        } else {
-            result.push_back(character);
-        }
-    }
-    return result;
 }
 
 inline constexpr winrt::guid kCompositionDisplayAttributeGuid = {
@@ -332,41 +319,10 @@ bool key_down(int virtual_key) {
     return (GetKeyState(virtual_key) & 0x8000) != 0 || (GetAsyncKeyState(virtual_key) & 0x8000) != 0;
 }
 
-bool shift_key(WPARAM wParam) {
-    return wParam == VK_SHIFT || wParam == VK_LSHIFT || wParam == VK_RSHIFT;
-}
-
-bool modifier_key(WPARAM wParam) {
-    return shift_key(wParam) || wParam == VK_CONTROL || wParam == VK_LCONTROL || wParam == VK_RCONTROL ||
-           wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU;
-}
-
-bool backtick_shortcut_key(WPARAM wParam) {
-    return wParam == VK_OEM_3 && !key_down(VK_SHIFT) && !key_down(VK_CONTROL) && !key_down(VK_MENU);
-}
-
-bool full_width_toggle_key(WPARAM wParam) {
-    return wParam == VK_SPACE && key_down(VK_SHIFT) && !key_down(VK_CONTROL) &&
-           !key_down(VK_MENU);
-}
-
-bool unmodified_space_key(WPARAM wParam) {
-    return wParam == VK_SPACE && !key_down(VK_SHIFT) && !key_down(VK_CONTROL) &&
-           !key_down(VK_MENU);
-}
-
-bool modified_passthrough_key(WPARAM wParam) {
-    if (modifier_key(wParam)) {
-        return true;
-    }
-
-    return key_down(VK_CONTROL) || key_down(VK_MENU) || key_down(VK_SHIFT);
-}
-
-bool composition_editing_key(WPARAM wParam) {
-    return (wParam == VK_BACK || wParam == VK_RETURN) &&
-           !key_down(VK_CONTROL) && !key_down(VK_MENU);
-}
+template <typename... Handlers>
+struct overloaded : Handlers... {
+    using Handlers::operator()...;
+};
 
 bool same_com_object(IUnknown* left, IUnknown* right) {
     if (!left || !right) {
@@ -408,47 +364,8 @@ bool context_compartment_flag(ITfContext* context, REFGUID guid) {
     return enabled;
 }
 
-bool english_printable_key(WPARAM wParam) {
-    if (modifier_key(wParam) || key_down(VK_CONTROL) || key_down(VK_MENU)) {
-        return false;
-    }
-
-    if (wParam == VK_SPACE || (wParam >= '0' && wParam <= '9') || (wParam >= 'A' && wParam <= 'Z') ||
-        (wParam >= VK_NUMPAD0 && wParam <= VK_NUMPAD9)) {
-        return true;
-    }
-
-    switch (wParam) {
-        case VK_OEM_1:
-        case VK_OEM_PLUS:
-        case VK_OEM_COMMA:
-        case VK_OEM_MINUS:
-        case VK_OEM_PERIOD:
-        case VK_OEM_2:
-        case VK_OEM_3:
-        case VK_OEM_4:
-        case VK_OEM_5:
-        case VK_OEM_6:
-        case VK_OEM_7:
-        case VK_OEM_8:
-        case VK_OEM_102:
-        case VK_MULTIPLY:
-        case VK_ADD:
-        case VK_SEPARATOR:
-        case VK_SUBTRACT:
-        case VK_DECIMAL:
-        case VK_DIVIDE:
-            return true;
-        default:
-            return false;
-    }
-}
-
-std::optional<std::u16string> printable_key_text(WPARAM wParam, LPARAM lParam) {
-    if (!english_printable_key(wParam)) {
-        return std::nullopt;
-    }
-
+// What the key types on the current keyboard layout.
+std::optional<std::u16string> layout_text(WPARAM wParam, LPARAM lParam) {
     BYTE keyboard_state[256] = {};
     if (!GetKeyboardState(keyboard_state)) {
         return std::nullopt;
@@ -479,76 +396,6 @@ std::optional<std::u16string> printable_key_text(WPARAM wParam, LPARAM lParam) {
     return text.empty() ? std::nullopt : std::optional{text};
 }
 
-std::optional<std::u16string> shifted_printable_symbol_text(WPARAM wParam, LPARAM lParam) {
-    if (!key_down(VK_SHIFT) || key_down(VK_CONTROL) || key_down(VK_MENU) || modifier_key(wParam)) {
-        return std::nullopt;
-    }
-
-    if ((wParam >= 'A' && wParam <= 'Z') || wParam == VK_SPACE || (wParam >= VK_NUMPAD0 && wParam <= VK_DIVIDE)) {
-        return std::nullopt;
-    }
-
-    return printable_key_text(wParam, lParam);
-}
-
-std::optional<std::u16string> punctuation_shortcut(WPARAM wParam) {
-    if (!key_down(VK_CONTROL) || key_down(VK_MENU) || modifier_key(wParam)) {
-        return std::nullopt;
-    }
-
-    // Follow the common Traditional Chinese IME punctuation layout used by
-    // Microsoft Bopomofo/Chewing-like tables: Ctrl selects punctuation for
-    // keys that are otherwise occupied by Bopomofo symbols.
-    // Leave Ctrl+/ available to applications (for example, toggling
-    // comments), while Ctrl+Shift+/ keeps the Microsoft Bopomofo Ctrl+?
-    // shortcut for a full-width question mark.
-    if (key_down(VK_SHIFT)) {
-        switch (wParam) {
-            case VK_OEM_COMMA:
-                return u"《";
-            case VK_OEM_PERIOD:
-                return u"》";
-            case VK_OEM_1:
-                return u"：";
-            case VK_OEM_7:
-                return u"＂";
-            case VK_OEM_4:
-                return u"『";
-            case VK_OEM_6:
-                return u"』";
-            case '1':
-                return u"！";
-            case '9':
-                return u"（";
-            case '0':
-                return u"）";
-            case VK_OEM_2:
-                return u"？";
-            default:
-                return std::nullopt;
-        }
-    }
-
-    switch (wParam) {
-        case VK_OEM_COMMA:
-            return u"，";
-        case VK_OEM_PERIOD:
-            return u"。";
-        case VK_OEM_1:
-            return u"；";
-        case VK_OEM_7:
-            return u"、";
-        case VK_OEM_MINUS:
-            return u"—";
-        case VK_OEM_4:
-            return u"「";
-        case VK_OEM_6:
-            return u"」";
-        default:
-            return std::nullopt;
-    }
-}
-
 }  // namespace
 
 namespace tsf {
@@ -561,21 +408,32 @@ TextService::~TextService() {
     deactivate();
 }
 
+bool append_range_text(TfEditCookie ec, ITfRange* range, std::u16string& context);
+
 void TextService::start_engine_worker() {
     if (engine_worker_) return;
-    engine_window_class_ = std::format(L"LlavonIme.Engine.{}", reinterpret_cast<std::uintptr_t>(this));
-    WNDCLASSW window_class{};
-    window_class.lpfnWndProc = &TextService::engine_window_proc;
-    window_class.hInstance = Globals::hinstance;
-    window_class.lpszClassName = engine_window_class_.c_str();
-    winrt::check_bool(RegisterClassW(&window_class));
+    ui_dispatcher_ = std::make_unique<UiDispatcher>(Globals::hinstance);
     try {
-        engine_window_ = CreateWindowExW(0, engine_window_class_.c_str(), L"", 0,
-            0, 0, 0, 0, HWND_MESSAGE, nullptr, Globals::hinstance, this);
-        winrt::check_bool(engine_window_ != nullptr);
         engine_worker_ = std::make_unique<EngineWorker>(
-            [] { return get_engine(); },
-            [window = engine_window_] { PostMessageW(window, WM_APP + 1, 0, 0); });
+            &make_pipe_engine,
+            [dispatcher = ui_dispatcher_.get()](EngineWorker::UiTask task) {
+                dispatcher->post(std::move(task));
+            },
+            EngineWorker::Callbacks{
+                .prediction =
+                    [this](ConversionResult result) {
+                        auto lifetime = get_strong();
+                        try { controller_.on_conversion(std::move(result)); }
+                        catch (...) { handle_com_exception(); }
+                    },
+                .input_mode_changed =
+                    [this](InputMode) {
+                        auto lifetime = get_strong();
+                        try { refresh_input_mode_indicator(false); }
+                        catch (...) { handle_com_exception(); }
+                    },
+            });
+        controller_.set_backend(engine_worker_.get());
         engine_worker_->refresh_input_mode();
     } catch (...) {
         stop_engine_worker();
@@ -584,142 +442,271 @@ void TextService::start_engine_worker() {
 }
 
 void TextService::stop_engine_worker() noexcept {
-    // Join before destroying the notification target; callbacks own no TSF state.
+    controller_.set_backend(nullptr);
+    // Results still queued for this thread must not run against a stopped worker.
+    if (ui_dispatcher_) ui_dispatcher_->close();
     engine_worker_.reset();
-    if (engine_window_) {
-        DestroyWindow(engine_window_);
-        engine_window_ = nullptr;
+    ui_dispatcher_.reset();
+}
+
+DocumentId TextService::document_of(ITfContext* context) {
+    winrt::com_ptr<IUnknown> identity;
+    if (!context || FAILED(context->QueryInterface(IID_PPV_ARGS(identity.put())))) return 0;
+    const auto document = reinterpret_cast<DocumentId>(identity.get());
+    auto& known = documents_[document];
+    if (!known) known.copy_from(context);
+    return document;
+}
+
+winrt::com_ptr<ITfContext> TextService::context_of(DocumentId document) const {
+    const auto known = documents_.find(document);
+    return known == documents_.end() ? nullptr : known->second;
+}
+
+bool TextService::composing_in(ITfContext* context) const {
+    winrt::com_ptr<IUnknown> identity;
+    if (!context || !controller_.active() ||
+        FAILED(context->QueryInterface(IID_PPV_ARGS(identity.put())))) {
+        return false;
     }
-    if (!engine_window_class_.empty()) {
-        UnregisterClassW(engine_window_class_.c_str(), Globals::hinstance);
-        engine_window_class_.clear();
+    return controller_.owns(reinterpret_cast<DocumentId>(identity.get()));
+}
+
+// Keys arrived in another document while a composition is open elsewhere:
+// it is finished in its own document, and this key is handled normally.
+void TextService::leave_other_document(DocumentId document) {
+    if (controller_.active() && !controller_.owns(document)) {
+        candidate_ui_->hide();
+        controller_.seal();
     }
+    if (!controller_.active()) drop_composition();
 }
 
-LRESULT CALLBACK TextService::engine_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
-    if (message == WM_NCCREATE) {
-        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
-        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+InputMode TextService::cached_input_mode() const {
+    return engine_worker_ ? engine_worker_->cached_input_mode() : InputMode::English;
+}
+
+// ---- CompositionHost -----------------------------------------------------
+
+std::u16string TextService::preceding_text(DocumentId document) {
+    const auto context = context_of(document);
+    return context ? get_pre_composit_context(context.get()) : std::u16string{};
+}
+
+void TextService::with_edit_cookie(ITfContext* context, const std::function<void(TfEditCookie)>& edit) {
+    if (edit_cookie_) {
+        edit(*edit_cookie_);
+        return;
     }
-    if (message == WM_APP + 1) {
-        auto* service = reinterpret_cast<TextService*>(GetWindowLongPtrW(window, GWLP_USERDATA));
-        if (service) {
-            auto lifetime = service->get_strong();
-            try { service->on_engine_result(); }
-            catch (...) { service->handle_com_exception(); }
-        }
-        return 0;
-    }
-    return DefWindowProcW(window, message, wparam, lparam);
-}
-
-void TextService::invalidate_prediction() {
-    ++prediction_sequence_;
-    pending_prediction_.reset();
-    pending_commit_sequence_.reset();
-}
-
-void TextService::queue_prediction(ITfContext* context, std::u16string preceding, E2eTrace trace) {
-    if (!engine_worker_ || !context) return;
-    auto snapshot = compositionBuffer.prediction_snapshot();
-    if (!snapshot) return;
-    if (compositionBuffer.waiting_for_prediction()) candidate_ui_->hide();
-    trace.predict_started = std::chrono::steady_clock::now();
-    PendingPrediction request{.sequence = ++prediction_sequence_,
-                              .snapshot = std::move(*snapshot), .trace = trace};
-    request.context.copy_from(context);
-    engine_worker_->predict(request.sequence, std::move(preceding), request.snapshot);
-    pending_prediction_ = std::move(request);
-}
-
-bool TextService::prediction_is_current(const PendingPrediction& request) const {
-    if (!engine_worker_ || request.sequence != prediction_sequence_ ||
-        !composition_belongs_to(request.context.get()) ||
-        !compositionBuffer.matches_prediction(request.snapshot) || candidate_ui_->is_active() ||
-        !context_accepts_input(request.context.get())) return false;
-    winrt::com_ptr<ITfDocumentMgr> document;
-    winrt::com_ptr<ITfContext> focused;
-    return threadMgr && SUCCEEDED(threadMgr->GetFocus(document.put())) && document &&
-        SUCCEEDED(document->GetTop(focused.put())) &&
-        same_com_object(focused.get(), request.context.get());
-}
-
-void TextService::on_engine_result() {
-    if (!engine_worker_) return;
-    refresh_input_mode_indicator(false);
-    if (!engine_worker_) return;
-    auto result = engine_worker_->take_prediction();
-    if (!result || !pending_prediction_ || result->sequence != pending_prediction_->sequence) return;
-    auto request = std::move(*pending_prediction_);
-    pending_prediction_.reset();
-    if (!result->succeeded || !prediction_is_current(request)) return;
-    request.trace.predict_finished = result->finished;
-    const auto context = request.context;
-    const HRESULT sink_hr = ensure_text_edit_sink(context.get());
-    if (FAILED(sink_hr)) return;
     auto session = winrt::make_self<EditSession>();
-    session->set_operation(
-        [self = get_strong(), request = std::move(request), padding = std::move(result->padding),
-         requested = std::chrono::steady_clock::now()](TfEditCookie cookie) mutable {
-            // TSF may defer this callback past another key, focus change or Deactivate.
-            try {
-                if (!self->prediction_is_current(request)) return;
-                if (!self->compositionBuffer.apply_prediction(request.snapshot, std::move(padding))) return;
-                self->write_composition_text(request.context.get(), cookie,
-                    self->compositionBuffer.to_string(), std::u16string::npos, 0,
-                    request.trace, requested);
-                if (self->pending_commit_sequence_ == request.sequence) {
-                    auto sample = self->compositionBuffer.commit_sample(self->collection_context_);
-                    bool private_input_scope = self->private_input_scope_;
-                    self->commit_reported_ = true;
-                    self->finish_composition(request.context.get(), cookie, private_input_scope);
-                    self->record_commit(std::move(sample), private_input_scope, request.context.get());
-                }
-            } catch (...) {
-                self->handle_com_exception();
-                throw;
-            }
-        });
+    session->set_operation([&edit](TfEditCookie cookie) { edit(cookie); });
     HRESULT session_hr = E_FAIL;
-    const HRESULT request_hr = context->RequestEditSession(
-        _tfClientId, session.get(), TF_ES_READWRITE | TF_ES_ASYNC, &session_hr);
-    winrt::check_hresult(request_hr);
-    winrt::check_hresult(session_hr);
+    context->RequestEditSession(_tfClientId, session.get(), TF_ES_READWRITE | TF_ES_SYNC, &session_hr) |
+        win::check();
+    session_hr | win::check();
+}
+
+void TextService::render(DocumentId document, const Rendering& rendering, const E2eTrace* trace) {
+    const auto context = context_of(document);
+    if (!context) return;
+    const auto requested = std::chrono::steady_clock::now();
+    if (trace) ensure_text_edit_sink(context.get());
+    with_edit_cookie(context.get(), [&](TfEditCookie cookie) {
+        write_composition_text(context.get(), cookie, rendering, trace, requested);
+    });
+}
+
+void TextService::commit(DocumentId document) {
+    candidate_ui_->hide();
+    if (termination_) {
+        // Already ended by the host; only our display attribute remains.
+        if (const auto context = context_of(document); context && termination_->range) {
+            winrt::com_ptr<ITfProperty> attribute_property;
+            if (SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, attribute_property.put()))) {
+                attribute_property->Clear(termination_->cookie, termination_->range);
+            }
+        }
+        drop_composition();
+        return;
+    }
+    const auto context = context_of(document);
+    if (!context || !itfComposition) {
+        drop_composition();
+        return;
+    }
+    with_edit_cookie(context.get(), [&](TfEditCookie cookie) { finish_composition(context.get(), cookie); });
+}
+
+void TextService::discard(DocumentId document) {
+    candidate_ui_->hide();
+    const auto context = context_of(document);
+    if (!context || !itfComposition || termination_) {
+        drop_composition();
+        return;
+    }
+    with_edit_cookie(context.get(), [&](TfEditCookie cookie) { erase_composition(context.get(), cookie); });
+}
+
+void TextService::seal(DocumentId document, std::uint64_t epoch) {
+    candidate_ui_->hide();
+    const auto context = context_of(document);
+    const auto composition = itfComposition;
+    drop_composition();
+    if (!context) return;
+
+    const auto clear_attribute = [context](TfEditCookie cookie, ITfRange* range) {
+        winrt::com_ptr<ITfProperty> attribute_property;
+        if (range && SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, attribute_property.put()))) {
+            attribute_property->Clear(cookie, range);
+        }
+    };
+
+    if (termination_) {
+        clear_attribute(termination_->cookie, termination_->range);
+        SealedRange kept{.context = context};
+        if (termination_->range && SUCCEEDED(termination_->range->Clone(kept.range.put()))) {
+            kept.range->SetGravity(termination_->cookie, TF_GRAVITY_FORWARD, TF_GRAVITY_BACKWARD);
+            sealed_ranges_[epoch] = std::move(kept);
+        }
+        return;
+    }
+    if (!composition) return;
+
+    // Ends the composition where it is, without touching its text, and puts
+    // the caret after it so typing continues there. The edit that later
+    // replaces the text runs after this one.
+    auto session = winrt::make_self<EditSession>();
+    session->set_operation([self = get_strong(), context, composition, clear_attribute, epoch](TfEditCookie cookie) {
+        winrt::com_ptr<ITfRange> range;
+        if (SUCCEEDED(composition->GetRange(range.put()))) {
+            clear_attribute(cookie, range.get());
+            SealedRange kept{.context = context};
+            if (SUCCEEDED(range->Clone(kept.range.put()))) {
+                kept.range->SetGravity(cookie, TF_GRAVITY_FORWARD, TF_GRAVITY_BACKWARD);
+                self->sealed_ranges_[epoch] = std::move(kept);
+            }
+            winrt::com_ptr<ITfRange> caret;
+            if (SUCCEEDED(range->Clone(caret.put())) && SUCCEEDED(caret->Collapse(cookie, TF_ANCHOR_END))) {
+                TF_SELECTION selection = {};
+                selection.range = caret.get();
+                selection.style.ase = TF_AE_END;
+                selection.style.fInterimChar = FALSE;
+                context->SetSelection(cookie, 1, &selection);
+            }
+        }
+        composition->EndComposition(cookie);
+    });
+    HRESULT session_hr = E_FAIL;
+    if (FAILED(context->RequestEditSession(_tfClientId, session.get(), TF_ES_READWRITE | TF_ES_ASYNCDONTCARE,
+                                           &session_hr))) {
+        composition->EndComposition(TF_INVALID_COOKIE);
+    }
+}
+
+std::optional<std::u16string> TextService::sealed_text(DocumentId /*document*/, std::uint64_t epoch) {
+    const auto found = sealed_ranges_.find(epoch);
+    if (found == sealed_ranges_.end() || !edit_cookie_) return std::nullopt;
+    winrt::com_ptr<ITfRange> reader;
+    std::u16string text;
+    if (FAILED(found->second.range->Clone(reader.put())) || !append_range_text(*edit_cookie_, reader.get(), text)) {
+        return std::nullopt;
+    }
+    return text;
+}
+
+void TextService::write_sealed(DocumentId /*document*/, std::uint64_t epoch, const std::u16string& text) {
+    const auto found = sealed_ranges_.find(epoch);
+    if (found == sealed_ranges_.end() || !edit_cookie_) return;
+    found->second.range->SetText(*edit_cookie_, 0, convu16(text).data(), static_cast<LONG>(text.size())) |
+        win::check();
+}
+
+void TextService::erase_before_sealed(DocumentId /*document*/, std::uint64_t epoch, std::size_t count) {
+    const auto found = sealed_ranges_.find(epoch);
+    if (found == sealed_ranges_.end() || !edit_cookie_) return;
+    const auto cookie = *edit_cookie_;
+    winrt::com_ptr<ITfRange> before;
+    found->second.range->Clone(before.put()) | win::check();
+    before->Collapse(cookie, TF_ANCHOR_START) | win::check();
+    for (std::size_t erased = 0; erased < count; ++erased) {
+        LONG moved = 0;
+        if (FAILED(before->ShiftStart(cookie, -1, &moved, nullptr)) || moved == 0) break;
+        WCHAR first = 0;
+        ULONG fetched = 0;
+        if (SUCCEEDED(before->GetText(cookie, 0, &first, 1, &fetched)) && fetched == 1 && first >= 0xDC00 &&
+            first <= 0xDFFF) {
+            before->ShiftStart(cookie, -1, &moved, nullptr);
+        }
+    }
+    before->SetText(cookie, 0, L"", 0) | win::check();
+}
+
+void TextService::release_sealed(DocumentId /*document*/, std::uint64_t epoch) {
+    sealed_ranges_.erase(epoch);
+}
+
+bool TextService::caret_after_sealed(DocumentId document, std::uint64_t epoch) {
+    const auto found = sealed_ranges_.find(epoch);
+    const auto context = context_of(document);
+    if (found == sealed_ranges_.end() || !context) return false;
+    const auto range = found->second.range;
+
+    std::optional<bool> after;
+    const auto read = [&](TfEditCookie cookie) {
+        TF_SELECTION selection = {};
+        ULONG fetched = 0;
+        if (FAILED(context->GetSelection(cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched == 0 ||
+            !selection.range) {
+            return;
+        }
+        winrt::com_ptr<ITfRange> caret;
+        caret.attach(selection.range);
+        BOOL empty = FALSE;
+        LONG order = 0;
+        after = SUCCEEDED(caret->IsEmpty(cookie, &empty)) && empty &&
+                SUCCEEDED(caret->CompareStart(cookie, range.get(), TF_ANCHOR_END, &order)) && order == 0;
+    };
+    if (edit_cookie_) {
+        read(*edit_cookie_);
+    } else {
+        auto session = winrt::make_self<EditSession>();
+        session->set_operation(read);
+        HRESULT session_hr = E_FAIL;
+        context->RequestEditSession(_tfClientId, session.get(), TF_ES_READ | TF_ES_SYNC, &session_hr);
+    }
+    // TODO: when the document refuses a synchronous read the caret is assumed
+    // to still be where sealing put it.
+    return after.value_or(true);
+}
+
+bool TextService::run_edit(DocumentId document, std::function<void()> edit) {
+    const auto context = context_of(document);
+    if (!context || _tfClientId == TF_CLIENTID_NULL) return false;
+    auto session = winrt::make_self<EditSession>();
+    session->set_operation([self = get_strong(), edit = std::move(edit)](TfEditCookie cookie) {
+        const auto outer = std::exchange(self->edit_cookie_, cookie);
+        before_return restore([&] { self->edit_cookie_ = outer; });
+        try {
+            edit();
+        } catch (...) {
+            self->handle_com_exception();
+            throw;
+        }
+    });
+    HRESULT session_hr = E_FAIL;
+    return SUCCEEDED(context->RequestEditSession(_tfClientId, session.get(),
+                                                 TF_ES_READWRITE | TF_ES_ASYNCDONTCARE, &session_hr)) &&
+           SUCCEEDED(session_hr);
+}
+
+void TextService::record_commit(DocumentId document, std::uint64_t epoch, CommitSample sample) {
+    const auto scope = private_scopes_.extract(epoch);
+    const bool private_input_scope = !scope.empty() && scope.mapped();
+    record_commit(std::move(sample), private_input_scope, context_of(document).get());
 }
 
 HRESULT TextService::handle_com_exception(std::source_location location) noexcept {
     return tsf::handle_com_exception(logger_, location);
-}
-
-//FIXME: shouldn't be in tsf?
-std::optional<std::u16string> TextService::multifuntional_shortcut(WPARAM wParam) {
-    if (!backtick_used_as_modifier_ || key_down(VK_MENU) || modifier_key(wParam)) {
-        return std::nullopt;
-    }
-    backtick_used_as_modifier_ = false;
-    //TODO: a UI and more keys(and user-defined?)
-    switch (wParam) {
-        case VK_OEM_COMMA:
-            return u"，";
-        case VK_OEM_PERIOD:
-            return u"。";
-        case VK_OEM_1:
-            return u"；";
-        case VK_OEM_2:
-            return u"？";
-        case VK_OEM_3:
-            return u"‵";
-        case VK_OEM_7:
-            return u"、";
-        case VK_OEM_MINUS:
-            return u"—";
-        case VK_OEM_4:
-            return u"「";
-        case VK_OEM_6:
-            return u"」";
-        default:
-            return std::nullopt;
-    }
 }
 
 /**
@@ -816,21 +803,18 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
  * Releases TSF sinks, clears composition state, and stops debug logging.
  */
 void TextService::deactivate() {
-    invalidate_prediction();
-    stop_engine_worker();
-    unadvise_text_edit_sink();
     candidate_ui_->hide();
-
-    if (itfComposition) {
-        if (compositionBuffer.waiting_for_prediction() && composition_context_) {
-            const auto context = composition_context_;
-            discard_composition(context.get()) | win::check();
-        } else {
-            itfComposition->EndComposition(TF_INVALID_COOKIE);
-            itfComposition = nullptr;
-        }
+    if (_tfClientId != TF_CLIENTID_NULL) {
+        // Without a backend from here on, text still converting is finished
+        // with the local table, the last resort.
+        stop_engine_worker();
+        controller_.shutdown();
+    } else {
+        stop_engine_worker();
+        controller_.reset();
     }
     clear_composition_state();
+    unadvise_text_edit_sink();
 
     if (threadMgr) {
         if (input_mode_lang_bar_item_) {
@@ -864,9 +848,7 @@ InputMode TextService::read_backend_input_mode() {
 InputMode TextService::refresh_input_mode_indicator(bool query_backend) {
     if (engine_worker_ && query_backend) engine_worker_->refresh_input_mode();
     const InputMode mode = engine_worker_ ? engine_worker_->cached_input_mode() : InputMode::English;
-    if (mode == InputMode::English) {
-        backtick_used_as_modifier_ = false;
-    }
+    key_state_.mode_changed(mode);
     if (input_mode_lang_bar_item_) {
         input_mode_lang_bar_item_->set_mode(mode);
     }
@@ -905,7 +887,7 @@ void TextService::sync_input_mode_compartments(InputMode mode) {
 
 void TextService::refresh_input_settings() {
     const auto settings = load_input_settings();
-    compositionBuffer.set_immediate_conversion(settings.immediate_conversion_enabled);
+    controller_.set_immediate_conversion(settings.immediate_conversion_enabled);
     const bool enabled = settings.shift_space_width_toggle_enabled;
     if (!enabled && shift_space_width_toggle_enabled_ && full_width_mode_) {
         full_width_mode_ = false;
@@ -930,23 +912,20 @@ bool TextService::context_accepts_input(ITfContext* context) const {
     return FAILED(hr) || (status.dwDynamicFlags & TF_SD_READONLY) == 0;
 }
 
-bool TextService::composition_belongs_to(ITfContext* context) const {
-    return itfComposition && composition_context_ && same_com_object(composition_context_.get(), context);
+bool TextService::has_composition_state() const {
+    return itfComposition || composition_context_ || controller_.active() || candidate_ui_->is_active();
 }
 
-bool TextService::has_composition_state() const {
-    return itfComposition || composition_context_ || !compositionBuffer.empty() || candidate_ui_->is_active();
+// Forgets the TSF side of the live composition.
+void TextService::drop_composition() noexcept {
+    itfComposition = nullptr;
+    composition_context_ = nullptr;
 }
 
 void TextService::clear_composition_state() {
-    invalidate_prediction();
     candidate_ui_->hide();
-    itfComposition = nullptr;
-    composition_context_ = nullptr;
-    compositionBuffer.clear();
-    collection_context_.clear();
-    commit_reported_ = false;
-    private_input_scope_ = false;
+    drop_composition();
+    controller_.reset();
 }
 
 void TextService::record_commit(CommitSample sample, bool private_input_scope,
@@ -1020,7 +999,8 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* /*pDocMgr*/) try {
  * Receives document focus changes but does not react to them yet.
  */
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocumentMgr* /*pDocMgrPrevFocus*/) try {
-    invalidate_prediction();
+    // Conversions keep running: their results land in the composition's own
+    // context, wherever focus is now.
     forget_recent_commit();
     refresh_input_settings();
     refresh_input_mode_indicator();
@@ -1035,7 +1015,6 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocume
  * Accepts new contexts without additional bookkeeping.
  */
 STDMETHODIMP TextService::OnPushContext(ITfContext* /*pContext*/) try {
-    invalidate_prediction();
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -1047,9 +1026,14 @@ STDMETHODIMP TextService::OnPushContext(ITfContext* /*pContext*/) try {
  * Releases contexts without additional cleanup.
  */
 STDMETHODIMP TextService::OnPopContext(ITfContext* pContext) try {
-    if (composition_belongs_to(pContext) ||
-        (pending_prediction_ && same_com_object(pending_prediction_->context.get(), pContext)))
-        invalidate_prediction();
+    // The context is going away together with any text in it.
+    const auto document = document_of(pContext);
+    if (controller_.owns(document)) clear_composition_state();
+    controller_.document_closed(document);
+    std::erase_if(sealed_ranges_, [pContext](const auto& entry) {
+        return same_com_object(entry.second.context.get(), pContext);
+    });
+    documents_.erase(document);
     if (recent_commit_context_ &&
         same_com_object(recent_commit_context_.get(), pContext)) {
         forget_recent_commit();
@@ -1069,7 +1053,6 @@ STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
         refresh_input_settings();
         refresh_input_mode_indicator();
     } else {
-        invalidate_prediction();
         forget_recent_commit();
     }
     return S_OK;
@@ -1077,116 +1060,136 @@ STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
     return handle_com_exception();
 }
 
+keys::KeyPress TextService::key_press(WPARAM wParam, LPARAM lParam) const {
+    keys::KeyPress press{
+        .key = wParam,
+        .modifiers = {.shift = key_down(VK_SHIFT), .ctrl = key_down(VK_CONTROL), .alt = key_down(VK_MENU)},
+        .repeated = (lParam & (1LL << 30)) != 0};
+    if (keys::printable(wParam, press.modifiers)) press.text = layout_text(wParam, lParam);
+    return press;
+}
+
+keys::KeyContext TextService::key_context(ITfContext* context, WPARAM wParam, InputMode mode) {
+    const auto document = document_of(context);
+    const bool composing = controller_.owns(document);
+    return {.mode = mode,
+            .composing = composing,
+            .reading_complete = composing && controller_.buffer().current_compositable(),
+            .candidates_open = candidate_ui_->is_active(),
+            .candidates_take_key = candidate_ui_->can_handle_key(wParam),
+            .sealed_text_at_caret = wParam == VK_BACK && controller_.sealed_at_caret(document),
+            .full_width = full_width_mode_,
+            .width_toggle_enabled = shift_space_width_toggle_enabled_,
+            .backtick_prefix = key_state_.backtick_prefix()};
+}
+
+bool TextService::perform(ITfContext* context, DocumentId document, const keys::KeyPress& press,
+                          const keys::KeyAction& action, E2eTrace& trace) {
+    namespace act = keys::action;
+    return std::visit(
+        overloaded{
+            [](const act::PassThrough&) { return false; },
+            [](const act::ShiftDown&) { return true; },
+            [&](const act::ToggleWidth&) {
+                if (!press.repeated) full_width_mode_ = !full_width_mode_;
+                sync_input_mode_compartments(cached_input_mode());
+                return true;
+            },
+            [](const act::ArmBacktick&) { return true; },
+            [&](const act::Insert& insert) {
+                candidate_ui_->hide();
+                insert_text(context, insert.text);
+                return true;
+            },
+            [&](const act::Compose& compose) {
+                candidate_ui_->hide();
+                controller_.type_text(document, compose.text, trace);
+                return true;
+            },
+            [&](const act::ComposeEnglish& compose) {
+                candidate_ui_->hide();
+                controller_.discard_reading(document);
+                controller_.type_text(document, compose.text, trace);
+                return true;
+            },
+            [&](const act::Reading& reading) {
+                candidate_ui_->hide();
+                if (!Bopomofo::tone.contains(reading.symbol)) {
+                    trace.ready_started = std::chrono::steady_clock::now();
+                    if (engine_worker_) engine_worker_->ready();
+                    trace.ready_finished = std::chrono::steady_clock::now();
+                }
+                trace.pre_context_started = std::chrono::steady_clock::now();
+                trace.pre_context_finished = trace.pre_context_started;
+                controller_.type_reading(document, reading.symbol, trace);
+                return true;
+            },
+            [&](const act::Candidates&) { return perform_candidate_key(context, document, press, trace); },
+            [&](const act::OpenCandidates&) {
+                show_candidate_list_for_current_input(context, false);
+                return true;
+            },
+            [&](const act::MoveCaret& move) {
+                candidate_ui_->hide();
+                controller_.move_caret(document, move.forward);
+                return true;
+            },
+            [&](const act::Backspace&) {
+                candidate_ui_->hide();
+                controller_.backspace(document, trace);
+                return true;
+            },
+            [&](const act::EraseSealed&) { return controller_.erase_sealed(document); },
+            [&](const act::Enter&) {
+                candidate_ui_->hide();
+                controller_.enter(document, trace);
+                return true;
+            },
+            [&](const act::Escape&) {
+                controller_.escape(document);
+                return true;
+            },
+        },
+        action);
+}
+
+bool TextService::perform_candidate_key(ITfContext* context, DocumentId document, const keys::KeyPress& press,
+                                        E2eTrace& trace) {
+    switch (candidate_ui_->handle_key(press.key)) {
+        case CandidateKeyResult::navigated:
+        case CandidateKeyResult::aborted:
+            return true;
+        case CandidateKeyResult::finalized:
+            // The selection is fixed; the rest converts again around it.
+            controller_.candidate_finalized(document, trace);
+            return true;
+        case CandidateKeyResult::not_handled:
+        default:
+            break;
+    }
+    auto without_list = key_context(context, press.key, cached_input_mode());
+    without_list.candidates_open = false;
+    return perform(context, document, press, keys::route(press, without_list), trace);
+}
+
 /**
  * @brief Implements ITfKeyEventSink::OnTestKeyDown.
  *
- * Reports whether the service intends to consume the key-down event.
+ * Decides the key once; OnKeyDown carries out the same decision.
  */
 STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) try {
     if (!pfEaten) return E_INVALIDARG;
     key_down_started_at_ = std::chrono::steady_clock::now();
     key_down_started_key_ = wParam;
+    tested_key_.reset();
+    *pfEaten = FALSE;
+    if (!context_accepts_input(pContext)) return S_OK;
 
-    if (!context_accepts_input(pContext)) {
-        *pfEaten = FALSE;
-        return S_OK;
-    }
-
-    if (shift_key(wParam)) {
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (shift_space_width_toggle_enabled_ && full_width_toggle_key(wParam)) {
-        shift_toggle_pending_ = false;
-        shift_used_as_modifier_ = true;
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (key_down(VK_SHIFT)) {
-        shift_toggle_pending_ = false;
-        shift_used_as_modifier_ = true;
-    }
-
-    // Holding Shift in Chinese mode is temporary English input. Treat it as
-    // the regular English mode so both cases follow the same key path.
-    const bool english_mode =
-        read_backend_input_mode() == InputMode::English || key_down(VK_SHIFT);
-    if (!english_mode && backtick_shortcut_key(wParam)) {
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    const bool active_composition = composition_belongs_to(pContext) && !compositionBuffer.empty();
-    const bool is_bopomofo_key = Bopomofo::lookup(static_cast<int>(wParam)) != std::nullopt;
-    if (english_mode && !active_composition) {
-        *pfEaten = (punctuation_shortcut(wParam) || english_printable_key(wParam))
-                       ? TRUE
-                       : FALSE;
-        return S_OK;
-    }
-
-    if (punctuation_shortcut(wParam)) {
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (!english_mode && multifuntional_shortcut(wParam)) {
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (shifted_printable_symbol_text(wParam, lParam)) {
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (full_width_mode_ && !active_composition && !english_mode &&
-        (unmodified_space_key(wParam) ||
-         (!is_bopomofo_key && printable_key_text(wParam, lParam)))) {
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (active_composition && !is_bopomofo_key && printable_key_text(wParam, lParam)) {
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (english_mode && english_printable_key(wParam)) {
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    // Shift+Backspace and Shift+Enter have the same editing meaning as their
-    // unmodified forms while composing. Do not pass them to the host, which
-    // cannot reliably edit or commit the active TSF composition range.
-    // Ctrl/Alt combinations remain host shortcuts.
-    if (modified_passthrough_key(wParam) &&
-        !(active_composition && composition_editing_key(wParam))) {
-        *pfEaten = FALSE;
-        return S_OK;
-    }
-
-    if (active_composition && candidate_ui_->is_active()) {
-        const bool backspace_composition = (wParam == VK_BACK);
-        *pfEaten = (candidate_ui_->can_handle_key(wParam) || backspace_composition) ? TRUE : FALSE;
-        return S_OK;
-    }
-
-    if (active_composition) {
-        const bool editing_key = (wParam == VK_RETURN || wParam == VK_ESCAPE || wParam == VK_BACK ||
-                                  wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_DOWN ||
-                                  wParam == VK_SPACE);
-        if (editing_key) {
-            *pfEaten = TRUE;
-            return S_OK;
-        }
-    }
-
-    const bool starts_composition = is_bopomofo_key && wParam != VK_SPACE;
-    *pfEaten = starts_composition ? TRUE : FALSE;
+    const auto press = key_press(wParam, lParam);
+    key_state_.observe(press);
+    auto action = keys::route(press, key_context(pContext, wParam, read_backend_input_mode()));
+    *pfEaten = keys::eaten(action) ? TRUE : FALSE;
+    tested_key_ = TestedKey{wParam, std::move(action)};
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -1195,11 +1198,11 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPA
 /**
  * @brief Implements ITfKeyEventSink::OnTestKeyUp.
  *
- * Leaves key-up events unhandled by default.
+ * Eats the release of a Shift tap, which switches the input mode.
  */
 STDMETHODIMP TextService::OnTestKeyUp(ITfContext* /*pContext*/, WPARAM wParam, LPARAM /*lParam*/, BOOL* pfEaten) try {
     if (!pfEaten) return E_INVALIDARG;
-    *pfEaten = shift_key(wParam) && shift_toggle_pending_ ? TRUE : FALSE;
+    *pfEaten = keys::is_shift(wParam) && key_state_.shift_tap_pending() ? TRUE : FALSE;
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -1208,7 +1211,7 @@ STDMETHODIMP TextService::OnTestKeyUp(ITfContext* /*pContext*/, WPARAM wParam, L
 /**
  * @brief Implements ITfKeyEventSink::OnKeyDown.
  *
- * Updates the active composition or handles commit and cancel keys.
+ * Carries out the decision made for the key.
  */
 STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten) try {
     if (!pfEaten) return E_INVALIDARG;
@@ -1224,281 +1227,31 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     e2e_trace.sequence = next_e2e_sequence_++;
     e2e_trace.started_at_on_test = started_at_on_test;
 
-    if (!context_accepts_input(pContext)) {
-        return S_OK;
-    }
+    auto tested = std::exchange(tested_key_, std::nullopt);
+    if (!context_accepts_input(pContext)) return S_OK;
 
-    // Further input cancels the deferred Enter, so it cannot commit later edits.
-    if (wParam != VK_RETURN) pending_commit_sequence_.reset();
+    const auto document = document_of(pContext);
+    leave_other_document(document);
+    // A result held back while the candidate list was open lands once it closes.
+    before_return after_key([this, document] {
+        if (!candidate_ui_->is_active()) controller_.candidates_closed(document);
+    });
 
-    if (compositionBuffer.waiting_for_prediction()) candidate_ui_->hide();
-
-    if (has_composition_state() && !composition_belongs_to(pContext)) {
-        if (itfComposition && composition_context_) {
-            const HRESULT hr = end_composition(composition_context_.get());
-            if (hr == S_FALSE) {
-                *pfEaten = TRUE;
-                return S_OK;
-            }
-            if (FAILED(hr)) {
-                clear_composition_state();
-            }
-        } else {
-            clear_composition_state();
-        }
-    }
-
-    if (wParam == VK_BACK && !has_composition_state()) {
-        discard_recent_commit(pContext);
-    }
-
-    if (shift_key(wParam)) {
-        const bool repeated_keydown = (lParam & (1LL << 30)) != 0;
-        if (!repeated_keydown) {
-            shift_toggle_pending_ = true;
-            shift_used_as_modifier_ = false;
-        }
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (shift_space_width_toggle_enabled_ && full_width_toggle_key(wParam)) {
-        shift_toggle_pending_ = false;
-        shift_used_as_modifier_ = true;
-        const bool repeated_keydown = (lParam & (1LL << 30)) != 0;
-        if (!repeated_keydown) full_width_mode_ = !full_width_mode_;
-        sync_input_mode_compartments(engine_worker_ ? engine_worker_->cached_input_mode() : InputMode::English);
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (key_down(VK_SHIFT)) {
-        shift_toggle_pending_ = false;
-        shift_used_as_modifier_ = true;
-    }
+    const auto press = key_press(wParam, lParam);
     e2e_trace.mode_started = std::chrono::steady_clock::now();
-    // Keep this in sync with OnTestKeyDown: temporary Shift-English input must
-    // take exactly the same handling path as the regular English mode.
-    const auto input_mode = read_backend_input_mode();
-    const bool temporary_english = input_mode == InputMode::Chinese && key_down(VK_SHIFT);
-    const bool english_mode = input_mode == InputMode::English || temporary_english;
+    auto action = tested && tested->key == wParam
+                      ? std::move(tested->action)
+                      : keys::route(press, key_context(pContext, wParam, refresh_input_mode_indicator(false)));
     e2e_trace.mode_finished = std::chrono::steady_clock::now();
-    if (!english_mode && backtick_shortcut_key(wParam) && !backtick_used_as_modifier_) {
-        backtick_used_as_modifier_ = true;
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
     e2e_trace.ready_started = e2e_trace.mode_finished;
     e2e_trace.ready_finished = e2e_trace.mode_finished;
-    auto punctuation = punctuation_shortcut(wParam);
-    if (!punctuation && !english_mode) punctuation = multifuntional_shortcut(wParam);
-    if (punctuation) {
-        compositionBuffer.add_chosen_candidate((*punctuation)[0]);
-        set_composition_text(pContext, compositionBuffer.to_string());
-        *pfEaten = TRUE;
-        return S_OK;
-    }
 
-    if (english_mode) {
-        if (const auto text = printable_key_text(wParam, lParam)) {
-            candidate_ui_->hide();
-            const bool discarded_reading = temporary_english && compositionBuffer.discard_current_reading();
-            const auto output = full_width_mode_ ? to_full_width_ascii(*text) : *text;
-            if (compositionBuffer.empty()) {
-                if (discarded_reading && itfComposition) discard_composition(pContext);
-                insert_text(pContext, output);
-            } else {
-                for (const char16_t ch : output) {
-                    compositionBuffer.add_chosen_candidate(ch);
-                }
-                set_composition_text(pContext, compositionBuffer.to_string());
-            }
-            *pfEaten = TRUE;
-            return S_OK;
-        }
-
-        if (compositionBuffer.empty()) return S_OK;
+    if (wParam == VK_BACK && !has_composition_state() &&
+        !std::holds_alternative<keys::action::EraseSealed>(action)) {
+        discard_recent_commit(pContext);
     }
-
-    auto symbol = shifted_printable_symbol_text(wParam, lParam);
-    if (!symbol && !compositionBuffer.empty() &&
-        Bopomofo::lookup(static_cast<int>(wParam)) == std::nullopt) {
-        symbol = printable_key_text(wParam, lParam);
-    }
-    if (symbol) {
-        if (full_width_mode_) symbol = to_full_width_ascii(*symbol);
-        if (compositionBuffer.empty()) {
-            insert_text(pContext, *symbol);
-            *pfEaten = TRUE;
-            return S_OK;
-        }
-
-        for (const char16_t ch : *symbol) {
-            compositionBuffer.add_chosen_candidate(ch);
-        }
-        set_composition_text(pContext, compositionBuffer.to_string());
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (full_width_mode_ && compositionBuffer.empty() && !english_mode) {
-        if (unmodified_space_key(wParam)) {
-            insert_text(pContext, u"\u3000");
-            *pfEaten = TRUE;
-            return S_OK;
-        }
-        if (Bopomofo::lookup(static_cast<int>(wParam)) == std::nullopt) {
-            if (const auto text = printable_key_text(wParam, lParam)) {
-                insert_text(pContext, to_full_width_ascii(*text));
-                *pfEaten = TRUE;
-                return S_OK;
-            }
-        }
-    }
-
-    // Keep this exception in sync with OnTestKeyDown so TSF's test result and
-    // the actual key handler agree for Shift+Backspace and Shift+Enter during
-    // composition.
-    if (modified_passthrough_key(wParam) &&
-        !(composition_editing_key(wParam) && !compositionBuffer.empty())) {
-        return S_OK;
-    }
-
-    if (candidate_ui_->is_active()) {
-        const CandidateKeyResult result = candidate_ui_->handle_key(wParam);
-        switch (result) {
-            case CandidateKeyResult::navigated:
-                *pfEaten = TRUE;
-                return S_OK;
-            case CandidateKeyResult::finalized:
-                compositionBuffer.next();
-                refresh_composition_after_candidate_finalize(pContext, e2e_trace);
-                *pfEaten = TRUE;
-                return S_OK;
-            case CandidateKeyResult::aborted:
-                *pfEaten = TRUE;
-                return S_OK;
-            case CandidateKeyResult::not_handled:
-            default:
-                break;
-        }
-    }
-
-    if (wParam == VK_RETURN && !compositionBuffer.empty()) {
-        if (compositionBuffer.has_uncomposed_reading()) {
-            *pfEaten = TRUE;
-            return S_OK;
-        }
-        if (compositionBuffer.commit_requires_prediction()) {
-            candidate_ui_->hide();
-            // Reuse current work, or retry a failed/superseded prediction.
-            if (!pending_prediction_ || !prediction_is_current(*pending_prediction_)) {
-                e2e_trace.pre_context_started = std::chrono::steady_clock::now();
-                auto pre_context = get_pre_composit_context(pContext);
-                collection_context_ = pre_context;
-                e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
-                queue_prediction(pContext, std::move(pre_context), e2e_trace);
-            }
-            if (pending_prediction_ && prediction_is_current(*pending_prediction_)) {
-                pending_commit_sequence_ = pending_prediction_->sequence;
-            }
-            *pfEaten = TRUE;
-            return S_OK;
-        }
-        end_composition(pContext);
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (wParam == VK_ESCAPE && itfComposition) {
-        discard_composition(pContext);
-
-        //used in multifunctional shortcut handling
-        backtick_used_as_modifier_ = false;
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (wParam == VK_BACK && !compositionBuffer.empty()) {
-        if (!compositionBuffer.remove_last()) {
-            candidate_ui_->hide();
-            *pfEaten = TRUE;
-            return S_OK;
-        }
-        if (compositionBuffer.empty()) {
-            discard_composition(pContext);
-        } else {
-            set_composition_text(pContext, compositionBuffer.to_string());
-        }
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (wParam == VK_DOWN && !compositionBuffer.empty()) {
-        show_candidate_list_for_current_input(pContext, false);
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (wParam == VK_LEFT && !compositionBuffer.empty()) {
-        candidate_ui_->hide();
-        compositionBuffer.pre();
-        set_composition_text(pContext, compositionBuffer.to_string());
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (wParam == VK_RIGHT && !compositionBuffer.empty()) {
-        candidate_ui_->hide();
-        compositionBuffer.next();
-        set_composition_text(pContext, compositionBuffer.to_string());
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    if (wParam == VK_SPACE && !compositionBuffer.empty() && compositionBuffer.current_compositable()) {
-        const auto space = full_width_mode_ ? u'\u3000' : u' ';
-        compositionBuffer.add_chosen_candidate(space);
-        set_composition_text(pContext, compositionBuffer.to_string());
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
-    auto cur_char = Bopomofo::lookup(static_cast<int>(wParam));
-    if (cur_char == std::nullopt || (wParam == VK_SPACE && compositionBuffer.empty())) {
-        candidate_ui_->hide();
-        // TODO: Handle non-Bopomofo keys.
-        *pfEaten = FALSE;
-        return S_OK;
-    }
-
-    if (!Bopomofo::tone.contains(cur_char.value())) {
-        e2e_trace.ready_started = std::chrono::steady_clock::now();
-        if (engine_worker_) engine_worker_->ready();
-        e2e_trace.ready_finished = std::chrono::steady_clock::now();
-    }
-
-    // if (!itfComposition) {
-    //     start_composition(pContext);
-    // }
-    const bool composition_starting = compositionBuffer.empty();
-    compositionBuffer.add(cur_char.value());
-    const auto invalid_span = compositionBuffer.current_invalid_span();
-    if (!invalid_span) {
-        e2e_trace.pre_context_started = std::chrono::steady_clock::now();
-        auto pre_context = get_pre_composit_context(pContext);
-        collection_context_ = pre_context;
-        e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
-        if (composition_starting && engine_worker_) engine_worker_->prefill(pre_context);
-        queue_prediction(pContext, std::move(pre_context), e2e_trace);
-    }
-    if (invalid_span) {
-        set_composition_text(pContext, compositionBuffer.to_string(), invalid_span->first, invalid_span->second);
-    } else {
-        set_composition_text(pContext, compositionBuffer.to_string());
-    }
-    *pfEaten = TRUE;
+    key_state_.handled(press, action);
+    *pfEaten = perform(pContext, document, press, action, e2e_trace) ? TRUE : FALSE;
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -1507,36 +1260,23 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
 /**
  * @brief Implements ITfKeyEventSink::OnKeyUp.
  *
- * Leaves key-up events unconsumed after key-down handling.
+ * A Shift tap switches the input mode.
  */
 STDMETHODIMP TextService::OnKeyUp(ITfContext* pContext, WPARAM wParam, LPARAM /*lParam*/, BOOL* pfEaten) try {
     if (!pfEaten) return E_INVALIDARG;
-    if (shift_key(wParam) && shift_toggle_pending_) {
-        if (!shift_used_as_modifier_) {
-            const bool was_chinese = engine_worker_ &&
-                engine_worker_->cached_input_mode() == InputMode::Chinese;
-            if (engine_worker_) engine_worker_->toggle_input_mode();
-            const auto mode = refresh_input_mode_indicator();
-            // A Shift switch drops the unfinished reading, just like temporary
-            // Shift-English input. Keep converted text and pending syllables.
-            if (was_chinese && mode == InputMode::English &&
-                composition_belongs_to(pContext) && compositionBuffer.discard_current_reading()) {
-                candidate_ui_->hide();
-                if (compositionBuffer.empty()) {
-                    discard_composition(pContext);
-                } else {
-                    set_composition_text(pContext, compositionBuffer.to_string());
-                }
-            }
-        }
-
-        shift_toggle_pending_ = false;
-        shift_used_as_modifier_ = false;
-        *pfEaten = TRUE;
-        return S_OK;
-    }
-
     *pfEaten = FALSE;
+    if (!keys::is_shift(wParam) || !key_state_.shift_released()) return S_OK;
+
+    const bool was_chinese = cached_input_mode() == InputMode::Chinese;
+    if (engine_worker_) engine_worker_->toggle_input_mode();
+    const auto mode = refresh_input_mode_indicator();
+    // A Shift switch drops the unfinished reading, just like temporary
+    // Shift-English input. Keep converted text and pending syllables.
+    if (was_chinese && mode == InputMode::English && composing_in(pContext)) {
+        candidate_ui_->hide();
+        controller_.discard_reading(document_of(pContext));
+    }
+    *pfEaten = TRUE;
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -1564,30 +1304,18 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfCompo
     if (itfComposition && pComposition && !same_com_object(itfComposition.get(), pComposition)) {
         return S_OK;
     }
-    if (compositionBuffer.waiting_for_prediction()) {
-        // The host has already terminated composition; erase it instead of
-        // accepting unpredicted text or recording it as a training sample.
-        before_return cleanup([this]() { clear_composition_state(); });
-        if (pComposition) {
-            winrt::com_ptr<ITfRange> range;
-            pComposition->GetRange(range.put()) | win::check();
-            range->SetText(ecWrite, 0, L"", 0) | win::check();
-        }
-        return S_OK;
+    // The host ended the composition (focus change, click, its own commit).
+    // Keep what the user typed; text still converting is finished in place.
+    winrt::com_ptr<ITfRange> range;
+    if (pComposition && SUCCEEDED(pComposition->GetRange(range.put())) && composition_context_) {
+        private_scopes_[controller_.epoch()] |=
+            has_private_input_scope(composition_context_.get(), ecWrite, range.get());
     }
-    if (!commit_reported_ && !compositionBuffer.empty()) {
-        commit_reported_ = true;
-        if (composition_context_ && pComposition) {
-            winrt::com_ptr<ITfRange> range;
-            if (SUCCEEDED(pComposition->GetRange(range.put()))) {
-                private_input_scope_ |= has_private_input_scope(
-                    composition_context_.get(), ecWrite, range.get());
-            }
-        }
-        record_commit(compositionBuffer.commit_sample(collection_context_),
-                      private_input_scope_, composition_context_.get());
-    }
-    clear_composition_state();
+    termination_ = Termination{ecWrite, range.get()};
+    before_return terminated([this] { termination_.reset(); });
+    candidate_ui_->hide();
+    controller_.seal();
+    drop_composition();
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -1713,153 +1441,58 @@ TextService::GetDisplayAttributeInfo(REFGUID guid, ITfDisplayAttributeInfo** ppI
     return handle_com_exception();
 }
 
-/**
- * @brief Starts a new TSF composition session.
- *
- * Creates the TSF composition objects needed for a new input session.
- */
-HRESULT TextService::start_composition(ITfContext* pContext) {
-    if (!pContext) return E_INVALIDARG;
-    if (itfComposition) return S_OK;
+void TextService::finish_composition(ITfContext* pContext, TfEditCookie ec) {
+    before_return cleanup([this]() { drop_composition(); });
+    if (!itfComposition) return;
+    // The composition range already contains the final text. Rewriting it
+    // here makes Chromium treat the commit as a replacement operation,
+    // which can delete adjacent text around contenteditable boundaries.
+    winrt::com_ptr<ITfRange> range;
+    itfComposition->GetRange(range.put()) | win::check();
+    private_scopes_[controller_.epoch()] |= has_private_input_scope(pContext, ec, range.get());
 
-    winrt::com_ptr<ITfContextComposition> contextComposition;
-    HRESULT hr = pContext->QueryInterface<ITfContextComposition>(contextComposition.put());
-    if (FAILED(hr)) return hr;
+    winrt::com_ptr<ITfRange> caret_range;
+    range->Clone(caret_range.put()) | win::check();
+    caret_range->Collapse(ec, TF_ANCHOR_END) | win::check();
 
-    winrt::com_ptr<ITfInsertAtSelection> insertAtSelection;
-    hr = pContext->QueryInterface<ITfInsertAtSelection>(insertAtSelection.put());
-    if (FAILED(hr)) return hr;
+    TF_SELECTION selection = {};
+    selection.range = caret_range.get();
+    selection.style.ase = TF_AE_END;
+    selection.style.fInterimChar = FALSE;
+    pContext->SetSelection(ec, 1, &selection) | win::check();
 
-    winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
+    // EndComposition only clears GUID_PROP_COMPOSING. The display
+    // attribute is owned by this text service and must be removed here.
+    winrt::com_ptr<ITfProperty> attribute_property;
+    if (SUCCEEDED(pContext->GetProperty(GUID_PROP_ATTRIBUTE, attribute_property.put()))) {
+        attribute_property->Clear(ec, range.get());
+    }
 
-    editSession->set_operation([this, pContext, contextComposition, insertAtSelection](TfEditCookie ec) {
-        winrt::com_ptr<ITfRange> range;
-        if (FAILED(insertAtSelection->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, L"", 0, range.put()))) {
-            return;
-        }
-        if (FAILED(contextComposition->StartComposition(
-                ec, range.get(), static_cast<ITfCompositionSink*>(this), itfComposition.put()))) {
-            return;
-        }
-        composition_context_.copy_from(pContext);
-        private_input_scope_ |= has_private_input_scope(pContext, ec, range.get());
-    });
-
-    HRESULT hrSession;
-    pContext->RequestEditSession(_tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &hrSession) |
-        win::check();
-
-    return S_OK;
+    const auto composition = itfComposition;
+    composition->EndComposition(ec) | win::check();
 }
 
-/**
- * @brief Ends the active TSF composition session.
- *
- * Clears the current composition object and buffered text.
- */
-HRESULT TextService::end_composition(ITfContext* pContext) {
-    if (!pContext) return E_INVALIDARG;
-    if (compositionBuffer.has_uncomposed_reading() || compositionBuffer.waiting_for_prediction()) return S_FALSE;
-    candidate_ui_->hide();
-    if (!itfComposition) {
-        clear_composition_state();
-        return S_OK;
-    }
+void TextService::erase_composition(ITfContext* pContext, TfEditCookie ec) {
+    before_return cleanup([this]() { drop_composition(); });
+    private_scopes_.erase(controller_.epoch());
+    if (!itfComposition) return;
 
-    auto sample = compositionBuffer.commit_sample(get_pre_composit_context(pContext));
-    commit_reported_ = true;
-    bool private_input_scope = private_input_scope_;
+    winrt::com_ptr<ITfRange> range;
+    itfComposition->GetRange(range.put()) | win::check();
 
-    winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
-    editSession->set_operation([this, pContext, &private_input_scope](TfEditCookie ec) {
-        finish_composition(pContext, ec, private_input_scope);
-    });
+    winrt::com_ptr<ITfRange> caret_range;
+    range->Clone(caret_range.put()) | win::check();
+    caret_range->Collapse(ec, TF_ANCHOR_START) | win::check();
 
-    HRESULT session_hr = E_FAIL;
-    const HRESULT request_hr = pContext->RequestEditSession(
-        _tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &session_hr);
-    const HRESULT result = FAILED(request_hr) ? request_hr : session_hr;
-    if (SUCCEEDED(result)) {
-        record_commit(std::move(sample), private_input_scope, pContext);
-    } else {
-        commit_reported_ = false;
-    }
-    return result;
-}
+    range->SetText(ec, 0, L"", 0) | win::check();
+    const auto composition = itfComposition;
+    composition->EndComposition(ec) | win::check();
 
-void TextService::finish_composition(ITfContext* pContext, TfEditCookie ec,
-                                     bool& private_input_scope) {
-    before_return cleanup([this]() { clear_composition_state(); });
-    if (itfComposition) {
-        // The composition range already contains the final text. Rewriting it
-        // here makes Chromium treat the commit as a replacement operation,
-        // which can delete adjacent text around contenteditable boundaries.
-        winrt::com_ptr<ITfRange> range;
-        itfComposition->GetRange(range.put()) | win::check();
-        private_input_scope |= has_private_input_scope(pContext, ec, range.get());
-
-        winrt::com_ptr<ITfRange> caret_range;
-        range->Clone(caret_range.put()) | win::check();
-        caret_range->Collapse(ec, TF_ANCHOR_END) | win::check();
-
-        TF_SELECTION selection = {};
-        selection.range = caret_range.get();
-        selection.style.ase = TF_AE_END;
-        selection.style.fInterimChar = FALSE;
-        pContext->SetSelection(ec, 1, &selection) | win::check();
-
-        // EndComposition only clears GUID_PROP_COMPOSING. The display
-        // attribute is owned by this text service and must be removed here.
-        winrt::com_ptr<ITfProperty> attribute_property;
-        if (SUCCEEDED(pContext->GetProperty(GUID_PROP_ATTRIBUTE, attribute_property.put()))) {
-            attribute_property->Clear(ec, range.get());
-        }
-
-        auto composition = itfComposition;
-        composition->EndComposition(ec) | win::check();
-        itfComposition = nullptr;
-    }
-}
-
-HRESULT TextService::discard_composition(ITfContext* pContext) {
-    candidate_ui_->hide();
-    compositionBuffer.clear();
-    if (!pContext) return E_INVALIDARG;
-    if (!itfComposition) {
-        clear_composition_state();
-        return S_OK;
-    }
-
-    winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
-    editSession->set_operation([this, pContext](TfEditCookie ec) {
-        before_return cleanup([this]() { clear_composition_state(); });
-        if (!itfComposition) {
-            return;
-        }
-
-        winrt::com_ptr<ITfRange> range;
-        itfComposition->GetRange(range.put()) | win::check();
-
-        winrt::com_ptr<ITfRange> caret_range;
-        range->Clone(caret_range.put()) | win::check();
-        caret_range->Collapse(ec, TF_ANCHOR_START) | win::check();
-
-        range->SetText(ec, 0, L"", 0) | win::check();
-        itfComposition->EndComposition(ec) | win::check();
-        itfComposition = nullptr;
-
-        TF_SELECTION selection = {};
-        selection.range = caret_range.get();
-        selection.style.ase = TF_AE_END;
-        selection.style.fInterimChar = FALSE;
-        pContext->SetSelection(ec, 1, &selection) | win::check();
-    });
-
-    HRESULT hrSession;
-    pContext->RequestEditSession(_tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &hrSession) |
-        win::check();
-
-    return S_OK;
+    TF_SELECTION selection = {};
+    selection.range = caret_range.get();
+    selection.style.ase = TF_AE_END;
+    selection.style.fInterimChar = FALSE;
+    pContext->SetSelection(ec, 1, &selection) | win::check();
 }
 
 HRESULT TextService::insert_text(ITfContext* pContext, const std::u16string& text) {
@@ -1895,21 +1528,19 @@ HRESULT TextService::insert_text(ITfContext* pContext, const std::u16string& tex
 }
 
 /**
- * @brief Updates the active composition text.
- *
- * Applies the visible composition string to the current TSF context.
+ * @brief Updates the active composition text, starting the composition if needed.
  */
-void TextService::write_composition_text(ITfContext* pContext, TfEditCookie ec,
-                                         const std::u16string& text, size_t select_start,
-                                         size_t select_length, std::optional<E2eTrace> e2e_trace,
+void TextService::write_composition_text(ITfContext* pContext, TfEditCookie ec, const Rendering& rendering,
+                                         const E2eTrace* e2e_trace,
                                          std::chrono::steady_clock::time_point edit_request_started) {
-    winrt::com_ptr<ITfContextComposition> contextComposition;
-    pContext->QueryInterface<ITfContextComposition>(contextComposition.put()) | win::check();
-    winrt::com_ptr<ITfInsertAtSelection> insertAtSelection;
-    pContext->QueryInterface<ITfInsertAtSelection>(insertAtSelection.put()) | win::check();
+    const auto& text = rendering.text;
     const auto edit_operation_started = std::chrono::steady_clock::now();
     winrt::com_ptr<ITfRange> range;
     if (!itfComposition) {
+        winrt::com_ptr<ITfContextComposition> contextComposition;
+        pContext->QueryInterface<ITfContextComposition>(contextComposition.put()) | win::check();
+        winrt::com_ptr<ITfInsertAtSelection> insertAtSelection;
+        pContext->QueryInterface<ITfInsertAtSelection>(insertAtSelection.put()) | win::check();
         insertAtSelection->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, nullptr, 0, range.put()) | win::check();
         contextComposition->StartComposition(
             ec, range.get(), static_cast<ITfCompositionSink*>(this), itfComposition.put()) |
@@ -1926,20 +1557,18 @@ void TextService::write_composition_text(ITfContext* pContext, TfEditCookie ec,
     apply_composition_display_attribute(pContext, ec, range.get()) | win::check();
     const auto edit_attribute_finished = std::chrono::steady_clock::now();
 
-    const bool select_span = select_start != std::u16string::npos && select_length > 0;
+    const bool select_span = rendering.selection && rendering.selection->second > 0;
     winrt::com_ptr<ITfRange> selection_range;
     range->Clone(selection_range.put()) | win::check();
+    LONG shifted = 0;
+    selection_range->Collapse(ec, TF_ANCHOR_START) | win::check();
     if (select_span) {
-        const LONG start = static_cast<LONG>(select_start);
-        const LONG length = static_cast<LONG>(select_length);
-        LONG shifted = 0;
-        selection_range->Collapse(ec, TF_ANCHOR_START) | win::check();
+        const auto start = static_cast<LONG>(rendering.selection->first);
+        const auto length = static_cast<LONG>(rendering.selection->second);
         selection_range->ShiftEnd(ec, start + length, &shifted, nullptr) | win::check();
         selection_range->ShiftStart(ec, start, &shifted, nullptr) | win::check();
     } else {
-        const LONG caret = static_cast<LONG>(std::min(compositionBuffer.caret_offset(), text.size()));
-        LONG shifted = 0;
-        selection_range->Collapse(ec, TF_ANCHOR_START) | win::check();
+        const auto caret = static_cast<LONG>(std::min(rendering.caret, text.size()));
         selection_range->ShiftEnd(ec, caret, &shifted, nullptr) | win::check();
         selection_range->Collapse(ec, TF_ANCHOR_END) | win::check();
     }
@@ -1960,50 +1589,6 @@ void TextService::write_composition_text(ITfContext* pContext, TfEditCookie ec,
             .edit_operation_finished = std::chrono::steady_clock::now(),
         };
     }
-}
-
-HRESULT TextService::set_composition_text(ITfContext* pContext, const std::u16string& text,
-                                          size_t select_start, size_t select_length,
-                                          std::optional<E2eTrace> e2e_trace) {
-    if (!pContext) return E_INVALIDARG;
-
-    winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
-    std::chrono::steady_clock::time_point edit_request_started;
-    editSession->set_operation([=, this, &edit_request_started](TfEditCookie ec) {
-        write_composition_text(pContext, ec, text, select_start, select_length, e2e_trace, edit_request_started);
-    });
-    if (e2e_trace) {
-        const HRESULT sink_hr = ensure_text_edit_sink(pContext);
-        if (FAILED(sink_hr)) return sink_hr;
-        pending_e2e_trace_.reset();
-    }
-    HRESULT session_hr = E_FAIL;
-    edit_request_started = std::chrono::steady_clock::now();
-    const HRESULT request_hr = pContext->RequestEditSession(
-        _tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &session_hr);
-    if (FAILED(request_hr) || FAILED(session_hr)) {
-        if (e2e_trace && pending_e2e_trace_ &&
-            pending_e2e_trace_->trace.sequence == e2e_trace->sequence) {
-            pending_e2e_trace_.reset();
-        }
-        return FAILED(request_hr) ? request_hr : session_hr;
-    }
-    return S_OK;
-}
-
-void TextService::refresh_composition_after_candidate_finalize(
-    ITfContext* pContext, E2eTrace e2e_trace) {
-    if (!pContext || compositionBuffer.empty()) {
-        return;
-    }
-
-    compositionBuffer.invalidate_all_predictions();
-    e2e_trace.pre_context_started = std::chrono::steady_clock::now();
-    auto pre_context = get_pre_composit_context(pContext);
-    collection_context_ = pre_context;
-    e2e_trace.pre_context_finished = std::chrono::steady_clock::now();
-    queue_prediction(pContext, std::move(pre_context), e2e_trace);
-    set_composition_text(pContext, compositionBuffer.to_string());
 }
 
 HRESULT TextService::ensure_text_edit_sink(ITfContext* context) {
@@ -2040,13 +1625,12 @@ void TextService::unadvise_text_edit_sink() noexcept {
 }
 
 void TextService::show_candidate_list_for_current_input(ITfContext* pContext, bool expand) {
-    if (!pContext || compositionBuffer.empty() || !compositionBuffer.current_has_candidate_list()) {
+    if (!composing_in(pContext) || !controller_.buffer().current_has_candidate_list()) {
         candidate_ui_->hide();
         return;
     }
 
-    auto& target = compositionBuffer.candidate_target();
-    show_candidate_list(target, pContext);
+    show_candidate_list(controller_.buffer().candidate_target(), pContext);
     if (expand) {
         candidate_ui_->expand();
     }
@@ -2055,7 +1639,7 @@ void TextService::show_candidate_list_for_current_input(ITfContext* pContext, bo
 /**
  * @brief Displays the candidate list UI with the given candidates.
  */
-void TextService::show_candidate_list(BopomofoPos& bopomofoPos, ITfContext* pContext) {
+void TextService::show_candidate_list(const BopomofoPos& bopomofoPos, ITfContext* pContext) {
     // TODO
     std::shared_ptr<std::vector<std::wstring>> candidate_ptr = std::make_shared<std::vector<std::wstring>>();
     for (auto candi : bopomofoPos.get_candidates()) {
@@ -2065,13 +1649,14 @@ void TextService::show_candidate_list(BopomofoPos& bopomofoPos, ITfContext* pCon
         candidate_ptr->push_back(wstr);
     }
 
-    candidate_ui_->show(pContext, *candidate_ptr, [&bopomofoPos, candidate_ptr](std::wstring word) {
-        auto& candidate = *candidate_ptr;
-        for (int i = 0; i < candidate.size(); i++) {
-            if (word == candidate[i]) {
-                bopomofoPos.set_choose_index(i);
-                return;
-            }
+    // The list refers to its entry by id: the buffer may change while it is open.
+    const auto entry = bopomofoPos.id;
+    controller_.candidates_opened(entry);
+    candidate_ui_->show(pContext, *candidate_ptr, [this, entry, candidate_ptr](std::wstring word) {
+        const auto& candidate = *candidate_ptr;
+        const auto selected = std::ranges::find(candidate, word);
+        if (selected != candidate.end()) {
+            controller_.select_candidate(entry, static_cast<std::size_t>(selected - candidate.begin()));
         }
     });
 }
@@ -2186,7 +1771,7 @@ std::u16string TextService::get_pre_composit_context(ITfContext* pContext) {
             anchor_range.attach(selection.range);
         }
 
-        private_input_scope_ |= has_private_input_scope(pContext, ec, anchor_range.get());
+        private_scopes_[controller_.epoch()] |= has_private_input_scope(pContext, ec, anchor_range.get());
         anchor_range->Collapse(ec, TF_ANCHOR_START) | win::check();
         if (!read_pre_context_with_acp(ec, anchor_range.get(), context)) {
             read_pre_context_with_shift(ec, anchor_range.get(), context);
