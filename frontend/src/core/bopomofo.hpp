@@ -350,8 +350,12 @@ public:
         return invalid;
     }
     std::optional<char32_t> single_reading_literal() const {
-        if (tone != u' ') return std::nullopt;
         const auto reading = to_toneless_bopomofo_string();
+        // A tone pressed after a completed syllable is a literal symbol, not
+        // an empty syllable awaiting conversion. The table contains these
+        // symbols, but the inference tokenizer has no <tone-only> tokens.
+        if (reading.empty() && tone != 0 && tone != u' ') return tone;
+        if (tone != u' ') return std::nullopt;
         if (reading.size() != 1) return std::nullopt;
         return reading.front();
     }
