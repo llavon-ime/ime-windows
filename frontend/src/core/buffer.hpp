@@ -64,6 +64,11 @@ public:
     void set_immediate_conversion(bool enabled) noexcept {
         immediate_conversion_enabled_ = enabled;
     }
+    bool has_uncomposed_reading() const noexcept {
+        return std::ranges::any_of(buffer, [](const auto& item) {
+            return !item.is_compositable();
+        });
+    }
     bool waiting_for_prediction() const noexcept {
         return !immediate_conversion_enabled_ && std::ranges::any_of(buffer, [](const auto& item) {
             return item.conversion_pending;
