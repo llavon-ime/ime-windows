@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <iostream>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -234,8 +235,6 @@ int main(int argc, char* argv[]) {
 
         std::clog << "[SRV] IME Windows Service starting\n";
 
-        llavon::ui::UiThread ui_thread;
-
         auto config = parse_core_config(service_argc, argv);
         config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
         config.sessions_per_context =
@@ -251,13 +250,22 @@ int main(int argc, char* argv[]) {
         }
         config.inference_device = user_settings.inference;
 
-        std::vector<llavon::ime::core::InferenceDeviceInfo> inference_devices;
-        try {
-            inference_devices = llavon::ime::core::enumerate_inference_devices();
-        } catch (const std::exception& error) {
-            std::clog << "[WARN] unable to enumerate inference devices: " << error.what() << '\n';
-        }
-        auto core = std::make_shared<llavon::ime::core::Core>(config);
+        struct LoadedCore {
+            std::vector<llavon::ime::core::InferenceDeviceInfo> devices;
+            std::shared_ptr<llavon::ime::core::Core> core;
+        };
+        auto core_loading = std::async(std::launch::async, [config] {
+            LoadedCore loaded;
+            try {
+                loaded.devices = llavon::ime::core::enumerate_inference_devices();
+            } catch (const std::exception& error) {
+                std::clog << "[WARN] unable to enumerate inference devices: " << error.what() << '\n';
+            }
+            loaded.core = std::make_shared<llavon::ime::core::Core>(config);
+            return loaded;
+        });
+        llavon::ui::UiThread ui_thread;
+        auto [inference_devices, core] = core_loading.get();
         const auto active_inference = core->inference_runtime_info();
 
         llavon::candidate::CandidateUi candidate_ui(ui_thread);

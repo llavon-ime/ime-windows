@@ -399,21 +399,33 @@ LoraTrainingManager::LoraTrainingManager(
     if (!training_data_) throw std::invalid_argument("training data dependency is required");
     std::string revision;
     status_.model_available = installed_model_is_complete(&revision);
-    if (status_.model_available) {
+    if (status_.model_available) status_.model_revision = utf8::utf8to16(revision);
+    refresh_installed_trainer();
+    launch(&LoraTrainingManager::register_installed_models_worker);
+}
+
+void LoraTrainingManager::register_installed_models_worker() {
+    set_status(LoraOperationStage::checking_model, 0, u"正在確認基礎模型…");
+    std::string revision;
+    if (installed_model_is_complete(&revision)) {
         const auto directory = assets_root_ / model_repository_directory / widen(revision);
         const auto fingerprint = compute_base_model_fingerprint(directory);
+        const auto output_model_path =
+            assets_root_ / L"runs" / widen("base-" + fingerprint) / L"base-Q4_K_M.gguf";
         training_data_->migrate_legacy_base_model_fingerprint(fingerprint);
         training_data_->register_lora_base_model(LoraBaseModel{
             .fingerprint = fingerprint, .revision = revision,
-            .output_model_path = assets_root_ / L"runs" /
-                widen("base-" + fingerprint) / L"base-Q4_K_M.gguf"}, true);
+            .output_model_path = output_model_path}, true);
         training_data_->set_active_base_model_fingerprint(fingerprint);
+        std::lock_guard lock(status_mutex_);
+        status_.model_available = true;
         status_.model_revision = utf8::utf8to16(revision);
         status_.base_model_fingerprint = fingerprint;
-        status_.base_model_output_path = (assets_root_ / L"runs" /
-            widen("base-" + fingerprint) / L"base-Q4_K_M.gguf").u16string();
+        status_.base_model_output_path = output_model_path.u16string();
         status_.stage = LoraOperationStage::model_ready;
         status_.message = u"基礎模型已下載";
+    } else {
+        set_status(LoraOperationStage::idle, 0, {});
     }
     for (const auto& run : training_data_->lora_training_history()) {
         if (!run.base_model_fingerprint.empty() && !run.base_model_revision.empty()) {
@@ -445,7 +457,6 @@ LoraTrainingManager::LoraTrainingManager(
             // Incomplete downloads are registered after a successful publish.
         }
     }
-    refresh_installed_trainer();
 }
 
 void LoraTrainingManager::on_model_applied(

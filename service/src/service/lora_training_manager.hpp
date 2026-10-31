@@ -46,6 +46,7 @@ private:
     using Operation = void (LoraTrainingManager::*)();
 
     bool launch(Operation operation);
+    void register_installed_models_worker();
     void check_updates_worker();
     void download_model_worker();
     void install_trainer_worker();
