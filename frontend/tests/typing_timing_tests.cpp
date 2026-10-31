@@ -916,6 +916,8 @@ private:
         const auto& target = buffer.candidate_target();
         const auto entry = target.id;
         const auto shown = target.get_candidates();
+        // This stress test chooses a second character; a full reading is a UI string.
+        if (shown.size() < 2) return;
         controller_.candidates_opened(entry);
         const bool select = rng_.chance(0.7);
         steps_.push_front({rng_.between(ms(150), ms(400)), [this, document, entry, shown, select] {
@@ -1198,6 +1200,24 @@ public:
         after(delay, [this] { controller_.candidates_closed(1); });
     }
 
+    void pick_reading(Time delay, bool at_start) {
+        after(delay, [this, at_start] {
+            if (at_start) {
+                controller_.move_caret(1, false);
+                controller_.move_caret(1, false);
+            }
+            const auto& target = controller_.buffer().candidate_target();
+            const auto entry = target.id;
+            const auto displayed = target.get_candidate_texts();
+            require(displayed.back() == u"ㄋㄧˇ", "full reading missing from candidate UI strings");
+            controller_.candidates_opened(entry);
+            controller_.select_candidate(entry, displayed.size() - 1);
+            controller_.candidate_finalized(1);
+            controller_.candidates_closed(1);
+            require(controller_.buffer().caret_offset() == 3, "full reading selection left the caret inside it");
+        });
+    }
+
     char32_t picked() const noexcept { return picked_; }
 
     std::u16string run() {
@@ -1326,6 +1346,17 @@ void candidate_lists(bool immediate) {
             const auto text = script.run();
             require(text == oracle(sentence), "held reply: reads \"" + utf8(text) + "\"");
         }
+    }
+    for (const bool at_start : {false, true}) {
+        Script script(profile);
+        if (at_start) script.type({u"ㄋㄧˇ", u"ㄏㄠˇ"});
+        else script.type({u"ㄋㄧˇ"});
+        script.pick_reading(ms(300), at_start);
+        script.type({u"ㄇㄚˇ"});
+        script.enter(ms(300));
+        std::vector<Token> expected{{.fixed = U'ㄋ'}, {.fixed = U'ㄧ'}, {.fixed = U'ˇ'}, {.reading = u"ㄇㄚˇ"}};
+        if (at_start) expected.push_back({.reading = u"ㄏㄠˇ"});
+        require(script.run() == oracle(expected), "full reading selection changed later typing or surrounding text");
     }
     std::printf("  candidate lists (%s)%*sok\n", mode_name(immediate), immediate ? 6 : 8, "");
 }

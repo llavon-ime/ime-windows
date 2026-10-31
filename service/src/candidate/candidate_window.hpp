@@ -337,7 +337,7 @@ private:
 
     std::pair<int, int> client_size() const {
         if (!root_)
-            return {scale(114), scale(70)};
+            return {scale(142), scale(70)};
         constexpr float unlimited = std::numeric_limits<float>::infinity();
         root_.Measure({unlimited, unlimited});
         const auto desired = root_.DesiredSize();

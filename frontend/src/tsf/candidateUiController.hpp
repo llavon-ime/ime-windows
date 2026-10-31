@@ -3,8 +3,10 @@
 #include <msctf.h>
 #include <winrt/base.h>
 
+#include <cstddef>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "candidateListUI.hpp"
@@ -20,7 +22,8 @@ public:
     bool can_handle_key(WPARAM wParam) const;
     CandidateKeyResult handle_key(WPARAM wParam);
 
-    void show(ITfContext* context, const std::vector<std::wstring>& candidates,
+    void show(ITfContext* context, ITfRange* composition_range,
+              std::pair<std::size_t, std::size_t> target_span, const std::vector<std::wstring>& candidates,
               std::function<void(std::wstring)> on_finalize);
     void expand();
     void hide();
@@ -28,7 +31,8 @@ public:
 private:
     winrt::com_ptr<ITfUIElementMgr> get_ui_element_mgr() const;
     bool query_owner_window(ITfContext* context, HWND* owner_window) const;
-    bool query_anchor_rect(ITfContext* context, RECT* anchor_rect) const;
+    bool query_anchor_rect(ITfContext* context, ITfRange* composition_range,
+                           std::pair<std::size_t, std::size_t> target_span, RECT* anchor_rect) const;
     void dismiss_ui_element();
 
     winrt::com_ptr<ITfThreadMgr> thread_mgr_;

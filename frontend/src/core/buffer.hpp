@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -191,7 +192,7 @@ public:
         const auto& item = buffer[target];
         // A syllable still shown as its reading has no meaningful list yet.
         if (!immediate_conversion_enabled_ && item.conversion_pending && !item.chosen) return false;
-        return item.is_compositable() && item.get_candidates().size() > 1;
+        return item.is_compositable() && item.get_candidate_texts().size() > 1;
     }
     size_t caret_offset() const {
         size_t offset = 0;
@@ -227,8 +228,29 @@ public:
     // every later conversion.
     bool select_candidate(std::uint64_t id, std::size_t displayed_index) {
         auto* item = find(id);
-        if (!item || !item->is_compositable() || displayed_index >= item->get_candidates().size()) {
+        if (!item || !item->is_compositable() || displayed_index >= item->get_candidate_texts().size()) {
             return false;
+        }
+        if (const auto reading = item->multi_reading_literal();
+            reading && displayed_index == item->get_candidates().size()) {
+            // Freeze each symbol as ordinary text, just like a selected single
+            // reading. The extra UI candidate never enters model candidates.
+            const auto position = static_cast<int>(item - buffer.data());
+            std::vector<BopomofoPos> literals;
+            literals.reserve(reading->size());
+            for (const char16_t ch : *reading) {
+                auto& literal = literals.emplace_back();
+                literal.id = next_id_++;
+                literal.set_chosen_candidate(ch);
+                literal.manually_selected = true;
+            }
+            const auto after = buffer.erase(buffer.begin() + position);
+            buffer.insert(after, std::make_move_iterator(literals.begin()), std::make_move_iterator(literals.end()));
+            // Finalizing a candidate advances once. When the caret was before
+            // this entry, keep it just before the last symbol for that step.
+            if (idx >= position - 1) idx += static_cast<int>(literals.size()) - 1;
+            ++revision_;
+            return true;
         }
         item->set_choose_index(static_cast<int>(displayed_index));
         edited(*item);
@@ -324,6 +346,16 @@ public:
             throw std::runtime_error("candidate target out of range");
         }
         return buffer[target];
+    }
+    // UTF-16 span of the candidate target in the displayed composition.
+    std::pair<std::size_t, std::size_t> candidate_target_span() const {
+        const int target = candidate_target_index();
+        if (target < 0) throw std::runtime_error("candidate target out of range");
+        std::size_t start = 0;
+        for (int index = 0; index < target; ++index) {
+            start += display(buffer[index]).size();
+        }
+        return {start, display(buffer[target]).size()};
     }
     std::u16string to_string() const {
         std::u16string res;

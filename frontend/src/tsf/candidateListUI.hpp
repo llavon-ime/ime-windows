@@ -304,7 +304,11 @@ public:
             return CandidateKeyResult::navigated;
         }
         if (wParam == VK_LEFT) {
-            page_prev();
+            if (is_expanded() && current_page == 0) {
+                collapse();
+            } else {
+                page_prev();
+            }
             return CandidateKeyResult::navigated;
         }
         if (wParam == VK_RIGHT) {
@@ -417,14 +421,8 @@ private:
             return;
         }
 
-        RECT presentation_anchor = anchor_rect;
-        if (!has_anchor_rect) {
-            POINT cursor = {};
-            if (GetCursorPos(&cursor) == FALSE) {
-                return;
-            }
-            presentation_anchor = RECT{cursor.x, cursor.y, cursor.x, cursor.y};
-        }
+        if (!has_anchor_rect) return;
+        const RECT presentation_anchor = anchor_rect;
 
         CandidateUiPresentation presentation;
         presentation.owner_window = static_cast<uint64_t>(reinterpret_cast<ULONG_PTR>(owner_window));

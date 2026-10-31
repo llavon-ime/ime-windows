@@ -1714,11 +1714,13 @@ void TextService::show_candidate_list_for_current_input(ITfContext* pContext, bo
  * @brief Displays the candidate list UI with the given candidates.
  */
 void TextService::show_candidate_list(const BopomofoPos& bopomofoPos, ITfContext* pContext) {
-    // TODO
+    winrt::com_ptr<ITfRange> composition_range;
+    if (!itfComposition || FAILED(itfComposition->GetRange(composition_range.put()))) {
+        candidate_ui_->hide();
+        return;
+    }
     std::shared_ptr<std::vector<std::wstring>> candidate_ptr = std::make_shared<std::vector<std::wstring>>();
-    for (auto candi : bopomofoPos.get_candidates()) {
-        std::u16string str;
-        utf8::append16(candi, str);
+    for (const auto& str : bopomofoPos.get_candidate_texts()) {
         std::wstring wstr(str.begin(), str.end());
         candidate_ptr->push_back(wstr);
     }
@@ -1726,7 +1728,8 @@ void TextService::show_candidate_list(const BopomofoPos& bopomofoPos, ITfContext
     // The list refers to its entry by id: the buffer may change while it is open.
     const auto entry = bopomofoPos.id;
     controller_.candidates_opened(entry);
-    candidate_ui_->show(pContext, *candidate_ptr, [this, entry, candidate_ptr](std::wstring word) {
+    candidate_ui_->show(pContext, composition_range.get(), controller_.buffer().candidate_target_span(),
+                        *candidate_ptr, [this, entry, candidate_ptr](std::wstring word) {
         const auto& candidate = *candidate_ptr;
         const auto selected = std::ranges::find(candidate, word);
         if (selected != candidate.end()) {

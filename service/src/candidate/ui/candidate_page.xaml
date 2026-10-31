@@ -10,7 +10,7 @@
     </DataTemplate>
   </Border.Resources>
   <StackPanel>
-    <StackPanel x:Name="CandidateColumns" Orientation="Horizontal" Spacing="12" Margin="7,7,7,0" />
+    <StackPanel x:Name="CandidateColumns" Orientation="Horizontal" Spacing="1" Margin="7,7,7,0" />
     <Border BorderThickness="0,1,0,0" BorderBrush="{ThemeResource CandidateDividerBrush}"
             Margin="0,3,0,0" Padding="6,4,6,4" Height="31">
       <Grid>

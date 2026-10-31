@@ -1,5 +1,7 @@
 #include "candidateUiController.hpp"
 
+#include <limits>
+
 #include "editSession.hpp"
 
 namespace tsf {
@@ -36,7 +38,9 @@ CandidateKeyResult CandidateUiController::handle_key(WPARAM wParam) {
     return result;
 }
 
-void CandidateUiController::show(ITfContext* context, const std::vector<std::wstring>& candidates,
+void CandidateUiController::show(ITfContext* context, ITfRange* composition_range,
+                                 std::pair<std::size_t, std::size_t> target_span,
+                                 const std::vector<std::wstring>& candidates,
                                  std::function<void(std::wstring)> on_finalize) {
     if (!context || candidates.empty()) {
         hide();
@@ -53,11 +57,11 @@ void CandidateUiController::show(ITfContext* context, const std::vector<std::wst
     element_->set_owner_window(owner_window);
 
     RECT anchor_rect = {};
-    if (query_anchor_rect(context, &anchor_rect)) {
-        element_->set_anchor_rect(anchor_rect);
-    } else {
-        element_->clear_anchor_rect();
+    if (!query_anchor_rect(context, composition_range, target_span, &anchor_rect)) {
+        hide();
+        return;
     }
+    element_->set_anchor_rect(anchor_rect);
 
     element_->update(candidates, [this, callback = std::move(on_finalize)](std::wstring word) mutable {
         if (callback) {
@@ -132,8 +136,13 @@ bool CandidateUiController::query_owner_window(ITfContext* context, HWND* owner_
     return true;
 }
 
-bool CandidateUiController::query_anchor_rect(ITfContext* context, RECT* anchor_rect) const {
-    if (!context || !anchor_rect || client_id_ == TF_CLIENTID_NULL) {
+bool CandidateUiController::query_anchor_rect(ITfContext* context, ITfRange* composition_range,
+                                              std::pair<std::size_t, std::size_t> target_span,
+                                              RECT* anchor_rect) const {
+    const auto [start, length] = target_span;
+    if (!context || !composition_range || !anchor_rect || client_id_ == TF_CLIENTID_NULL ||
+        length == 0 || !std::in_range<LONG>(start) || !std::in_range<LONG>(length) ||
+        start > static_cast<std::size_t>(std::numeric_limits<LONG>::max()) - length) {
         return false;
     }
 
@@ -146,16 +155,16 @@ bool CandidateUiController::query_anchor_rect(ITfContext* context, RECT* anchor_
     RECT text_rect = {};
     bool found = false;
     winrt::com_ptr<EditSession> edit_session = winrt::make_self<EditSession>();
-    edit_session->set_operation([context, context_view, &text_rect, &found](TfEditCookie ec) {
-        TF_SELECTION selection = {};
-        ULONG fetched = 0;
-        const HRESULT hr_selection = context->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
-        if (FAILED(hr_selection) || fetched == 0 || !selection.range) {
-            return;
-        }
-
+    edit_session->set_operation([composition_range, context_view, start, length, &text_rect, &found](TfEditCookie ec) {
+        // Measure the target character, including its full UTF-16 width, so
+        // the popup uses its left edge even when the caret is at its right.
         winrt::com_ptr<ITfRange> range;
-        range.attach(selection.range);
+        if (FAILED(composition_range->Clone(range.put())) || FAILED(range->Collapse(ec, TF_ANCHOR_START))) return;
+        LONG shifted = 0;
+        const auto end = static_cast<LONG>(start + length);
+        if (FAILED(range->ShiftEnd(ec, end, &shifted, nullptr)) || shifted != end) return;
+        const auto offset = static_cast<LONG>(start);
+        if (FAILED(range->ShiftStart(ec, offset, &shifted, nullptr)) || shifted != offset) return;
 
         RECT rc = {};
         BOOL clipped = FALSE;

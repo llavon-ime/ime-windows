@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <rfl/json.hpp>
@@ -354,6 +355,12 @@ public:
         if (reading.size() != 1) return std::nullopt;
         return reading.front();
     }
+    std::optional<std::u16string> multi_reading_literal() const {
+        auto reading = to_toneless_bopomofo_string();
+        if (!tone || reading.size() < 2) return std::nullopt;
+        if (tone != u' ') reading.push_back(tone);
+        return reading;
+    }
     void set_chosen_candidate(char32_t ch) {
         initial = 0;
         medial = 0;
@@ -402,6 +409,19 @@ public:
             std::erase(displayed, *literal);
             const auto offset = std::min<std::size_t>(8, displayed.size());
             displayed.insert(displayed.begin() + offset, *literal);
+        }
+        return displayed;
+    }
+    // UI strings are independent of the character candidates used by the model.
+    std::vector<std::u16string> get_candidate_texts() const {
+        std::vector<std::u16string> displayed;
+        for (const char32_t candidate : get_candidates()) {
+            std::u16string text;
+            utf8::append16(candidate, text);
+            displayed.push_back(std::move(text));
+        }
+        if (auto reading = multi_reading_literal()) {
+            displayed.push_back(std::move(*reading));
         }
         return displayed;
     }

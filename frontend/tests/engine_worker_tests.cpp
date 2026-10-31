@@ -382,6 +382,42 @@ void uncomposed_reading_test() {
     require(buffer.current_invalid() && buffer.has_uncomposed_reading(), "invalid reading allowed commit");
 }
 
+void candidate_target_span_test() {
+    tsf::CompositionBuffer buffer;
+    buffer.add_chosen_candidate(U'𠀀'); // Two UTF-16 code units before the target.
+    type(buffer, u"ㄋㄧˇ");
+    const auto expect_span = [&](std::size_t start, std::size_t length) {
+        require(buffer.candidate_target_span() == std::pair{start, length},
+                "candidate anchor span did not match the displayed target");
+    };
+    expect_span(2, 2); // Pending input still displays ㄋㄧ.
+    buffer.pre();
+    expect_span(2, 2); // The same target from either side of the caret.
+    buffer.pre();
+    expect_span(0, 2);
+    buffer.next();
+
+    const auto snapshot = buffer.conversion_snapshot();
+    auto result = snapshot->entries;
+    result.back().candidates = {U'你', U'妳'};
+    result.back().predicted = true;
+    require(buffer.merge_conversion(1, snapshot->entries, std::move(result)).changed,
+            "candidate anchor test conversion rejected");
+    expect_span(2, 1); // A converted target uses the actual character width.
+    buffer.next();
+    expect_span(2, 1);
+    buffer.add_chosen_candidate(U'！');
+    buffer.pre();
+    buffer.pre();
+    expect_span(2, 1); // Target inside a composition, with text on both sides.
+
+    tsf::CompositionBuffer immediate;
+    immediate.set_immediate_conversion(true);
+    type(immediate, u"ㄊㄧㄢ ");
+    require(immediate.candidate_target_span() == std::pair<std::size_t, std::size_t>{0, 1},
+            "immediate candidate anchor used the reading width instead of the displayed character");
+}
+
 void single_reading_candidate_test() {
     tsf::CompositionBuffer buffer;
     const std::u32string ranked = U"一衣依醫伊揖壹噫咿禕漪猗";
@@ -469,6 +505,94 @@ void literal_only_reading_test() {
     }
 }
 
+void multi_reading_candidate_test() {
+    const std::u32string ranked = U"你妳擬旎儗柅狔苨薿禰鑈馜";
+    for (const auto reading : {u"ㄋㄧˇ", u"ㄊㄧㄢ ", u"ㄏㄠˋ", u"ㄉㄜ˙", u"ㄋㄧˊ"}) {
+        for (const std::size_t count : {1u, 8u, 9u, 12u}) {
+            tsf::CompositionBuffer buffer;
+            type(buffer, reading);
+            const auto snapshot = buffer.conversion_snapshot();
+            require(snapshot && !snapshot->entries.front().chosen,
+                    "multi-symbol syllable bypassed model conversion");
+            auto result = snapshot->entries;
+            const std::vector<char32_t> candidates(ranked.begin(), ranked.begin() + count);
+            result.front().candidates = candidates;
+            result.front().predicted = true;
+            if (count == 1) result.front().choose_candidate(candidates.front());
+            require(buffer.merge_conversion(1, snapshot->entries, std::move(result)).changed,
+                    "multi-symbol conversion rejected");
+            const auto& entry = buffer.cur();
+            const auto displayed = entry.get_candidate_texts();
+            auto literal = std::u16string(reading);
+            if (literal.back() == u' ') literal.pop_back();
+            require(displayed.size() == count + 1 && displayed.back() == literal &&
+                        buffer.current_has_candidate_list(),
+                    "full reading was not the final candidate or retained the first-tone space");
+            for (std::size_t index = 0; index < count; ++index) {
+                std::u16string expected;
+                utf8::append16(candidates[index], expected);
+                require(displayed[index] == expected, "reading candidate changed character order");
+            }
+            require(entry.candidates == candidates && buffer.to_string() == u"你",
+                    "reading candidate changed model candidates or the default output");
+            if (count > 1) {
+                const auto next = buffer.conversion_snapshot();
+                require(next && next->entries.front().candidates == candidates,
+                        "display-only full reading leaked into model candidates");
+            }
+            const auto id = entry.id;
+            require(!buffer.select_candidate(id, displayed.size()), "out-of-range reading selection accepted");
+            require(buffer.select_candidate(id, count) && buffer.to_string() == literal &&
+                        buffer.ready_to_commit() && !buffer.conversion_snapshot(),
+                    "selected reading did not become fixed text");
+            for (const auto& symbol : buffer.entries()) {
+                require(symbol.chosen && symbol.to_bopomofo_string().empty() &&
+                            symbol.current().size() == 1 && symbol.was_manually_selected(),
+                        "selected reading retained convertible syllable data");
+            }
+            auto stale = snapshot->entries;
+            stale.front().predicted = true;
+            require(!buffer.merge_conversion(2, snapshot->entries, std::move(stale)).changed &&
+                        buffer.to_string() == literal,
+                    "stale conversion overwrote selected reading text");
+        }
+    }
+
+    for (const bool caret_before : {false, true}) {
+        tsf::CompositionBuffer buffer;
+        buffer.add_chosen_candidate(U'你');
+        type(buffer, u"ㄋㄧˇ");
+        if (caret_before) {
+            buffer.add_chosen_candidate(U'！');
+            buffer.pre();
+            buffer.pre();
+        }
+        buffer.accept_local_candidates();
+        const auto& target = buffer.candidate_target();
+        const auto index = target.get_candidate_texts().size() - 1;
+        const std::u16string expected = caret_before ? u"你ㄋㄧˇ！" : u"你ㄋㄧˇ";
+        require(buffer.select_candidate(target.id, index), "full reading selection failed");
+        buffer.next(); // CompositionController::candidate_finalized steps past the selected entry.
+        require(buffer.to_string() == expected && buffer.caret_offset() == 4,
+                "reading selection changed surrounding text or caret");
+        const auto sample = buffer.commit_sample(u"");
+        require(sample.answer == expected && sample.input[1].reading.empty() &&
+                    sample.input[2].reading.empty() && sample.input[3].reading.empty(),
+                "selected full reading retained syllable data in the commit sample");
+        if (!caret_before) {
+            type(buffer, u"ㄏㄠˇ");
+            const auto next = buffer.conversion_snapshot();
+            require(next && next->entries.size() == 5 && next->entries[1].chosen &&
+                        next->entries[1].current32() == U'ㄋ' && next->entries[2].current32() == U'ㄧ' &&
+                        next->entries[3].current32() == U'ˇ' && !next->entries[4].chosen,
+                    "new input merged with the selected full reading");
+        } else {
+            require(buffer.remove_last() && buffer.to_string() == u"你ㄋㄧ！",
+                    "selected reading could not be edited as ordinary text");
+        }
+    }
+}
+
 void empty_result_test() {
     tsf::CompositionBuffer buffer;
     type(buffer, u"ㄧ ");
@@ -496,7 +620,9 @@ int main() {
         backend_lost_buffer_test();
         discard_reading_test();
         uncomposed_reading_test();
+        candidate_target_span_test();
         single_reading_candidate_test();
+        multi_reading_candidate_test();
         literal_only_reading_test();
         empty_result_test();
         return 0;
