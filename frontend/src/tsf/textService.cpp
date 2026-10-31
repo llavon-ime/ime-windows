@@ -479,7 +479,6 @@ void TextService::leave_other_document(DocumentId document) {
         candidate_ui_->hide();
         controller_.seal();
     }
-    if (!controller_.active()) drop_composition();
 }
 
 InputMode TextService::cached_input_mode() const {
@@ -488,36 +487,126 @@ InputMode TextService::cached_input_mode() const {
 
 // ---- CompositionHost -----------------------------------------------------
 
-std::u16string TextService::preceding_text(DocumentId document) {
-    const auto context = context_of(document);
-    return context ? get_pre_composit_context(context.get()) : std::u16string{};
+// ---- edits -----------------------------------------------------------------
+// TSF grants an edit session when the document allows it, which may be long
+// after the request. Every write goes through one queue per document and runs
+// in request order inside whichever session is granted next; nothing ever
+// asks for a synchronous lock, which a document may refuse while an earlier
+// request is still waiting.
+
+bool TextService::run_edit(DocumentId document, std::function<void()> edit) {
+    if (!context_of(document) || _tfClientId == TF_CLIENTID_NULL) return false;
+    queued_edits_[document].push_back(std::move(edit));
+    if (!active_edit_ || active_edit_->document != document) request_edits(document);
+    return true;
 }
 
-void TextService::with_edit_cookie(ITfContext* context, const std::function<void(TfEditCookie)>& edit) {
-    if (edit_cookie_) {
-        edit(*edit_cookie_);
+bool TextService::has_queued_edits(DocumentId document) const {
+    const auto queue = queued_edits_.find(document);
+    return queue != queued_edits_.end() && !queue->second.empty();
+}
+
+// Each granted session runs everything queued by then, so a session that
+// finds the queue empty is harmless.
+void TextService::request_edits(DocumentId document) {
+    const auto context = context_of(document);
+    if (!context) return;
+    const auto requested = std::chrono::steady_clock::now();
+    auto session = winrt::make_self<EditSession>();
+    session->set_operation([self = get_strong(), document, requested](TfEditCookie cookie) {
+        self->run_edits(document, cookie, requested);
+    });
+    HRESULT session_hr = E_FAIL;
+    const HRESULT hr = context->RequestEditSession(_tfClientId, session.get(),
+                                                   TF_ES_READWRITE | TF_ES_ASYNCDONTCARE, &session_hr);
+    if (FAILED(hr) || (FAILED(session_hr) && session_hr != TF_E_LOCKED)) {
+        logger_.log([hr, session_hr] {
+            return std::format("[EDIT] request failed hr=0x{:08x} session=0x{:08x}", static_cast<std::uint32_t>(hr),
+                               static_cast<std::uint32_t>(session_hr));
+        });
+    } else if (session_hr == TF_S_ASYNC) {
+        logger_.log("[EDIT] request queued by the document");
+    }
+}
+
+void TextService::run_edits(DocumentId document, TfEditCookie cookie,
+                            std::chrono::steady_clock::time_point requested) {
+    const auto waited = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - requested);
+    if (waited > std::chrono::milliseconds(50) && has_queued_edits(document)) {
+        logger_.log([waited] { return std::format("[EDIT] granted after {:.1f}ms", waited.count()); });
+    }
+    const auto outer = std::exchange(active_edit_, ActiveEdit{document, cookie});
+    before_return restore([&] { active_edit_ = outer; });
+    run_queued(document, [] { return true; });
+}
+
+// Runs queued edits of document while more() holds, in order, including
+// those queued meanwhile.
+void TextService::run_queued(DocumentId document, const std::function<bool()>& more) {
+    while (more()) {
+        const auto queue = queued_edits_.find(document);
+        if (queue == queued_edits_.end() || queue->second.empty()) return;
+        auto edit = std::move(queue->second.front());
+        queue->second.pop_front();
+        try {
+            edit();
+        } catch (...) {
+            handle_com_exception();
+        }
+    }
+}
+
+TfEditCookie TextService::edit_cookie() const {
+    if (!active_edit_) throw std::logic_error("document accessed outside an edit session");
+    return active_edit_->cookie;
+}
+
+void TextService::erase_before_caret(DocumentId document) {
+    const auto context = context_of(document);
+    if (!context) return;
+    const auto cookie = edit_cookie();
+    TF_SELECTION selection = {};
+    ULONG fetched = 0;
+    if (FAILED(context->GetSelection(cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched == 0 ||
+        !selection.range) {
         return;
     }
-    auto session = winrt::make_self<EditSession>();
-    session->set_operation([&edit](TfEditCookie cookie) { edit(cookie); });
-    HRESULT session_hr = E_FAIL;
-    context->RequestEditSession(_tfClientId, session.get(), TF_ES_READWRITE | TF_ES_SYNC, &session_hr) |
-        win::check();
-    session_hr | win::check();
+    winrt::com_ptr<ITfRange> range;
+    range.attach(selection.range);
+    BOOL empty = FALSE;
+    range->IsEmpty(cookie, &empty) | win::check();
+    if (empty) {
+        LONG moved = 0;
+        if (FAILED(range->ShiftStart(cookie, -1, &moved, nullptr)) || moved == 0) return;
+        WCHAR first = 0;
+        ULONG read = 0;
+        if (SUCCEEDED(range->GetText(cookie, 0, &first, 1, &read)) && read == 1 && first >= 0xDC00 &&
+            first <= 0xDFFF) {
+            range->ShiftStart(cookie, -1, &moved, nullptr);
+        }
+    }
+    range->SetText(cookie, 0, L"", 0) | win::check();
 }
 
-void TextService::render(DocumentId document, const Rendering& rendering, const E2eTrace* trace) {
+// ---- CompositionView -----------------------------------------------------
+
+std::u16string TextService::preceding_text(DocumentId document, std::uint64_t epoch) {
+    const auto context = context_of(document);
+    return context ? get_pre_composit_context(context.get(), edit_cookie(), epoch) : std::u16string{};
+}
+
+void TextService::render(DocumentId document, std::uint64_t epoch, const Rendering& rendering,
+                         const E2eTrace* trace) {
     const auto context = context_of(document);
     if (!context) return;
     const auto requested = std::chrono::steady_clock::now();
     if (trace) ensure_text_edit_sink(context.get());
-    with_edit_cookie(context.get(), [&](TfEditCookie cookie) {
-        write_composition_text(context.get(), cookie, rendering, trace, requested);
-    });
+    write_composition_text(context.get(), edit_cookie(), epoch, rendering, trace, requested);
 }
 
-void TextService::commit(DocumentId document) {
+void TextService::commit(DocumentId document, std::uint64_t epoch) {
     candidate_ui_->hide();
+    if (composition_epoch_ != epoch) return;
     if (termination_) {
         // Already ended by the host; only our display attribute remains.
         if (const auto context = context_of(document); context && termination_->range) {
@@ -534,81 +623,79 @@ void TextService::commit(DocumentId document) {
         drop_composition();
         return;
     }
-    with_edit_cookie(context.get(), [&](TfEditCookie cookie) { finish_composition(context.get(), cookie); });
+    finish_composition(context.get(), edit_cookie(), epoch);
 }
 
-void TextService::discard(DocumentId document) {
+void TextService::discard(DocumentId document, std::uint64_t epoch) {
     candidate_ui_->hide();
+    if (composition_epoch_ != epoch) {
+        private_scopes_.erase(epoch);
+        return;
+    }
     const auto context = context_of(document);
     if (!context || !itfComposition || termination_) {
         drop_composition();
         return;
     }
-    with_edit_cookie(context.get(), [&](TfEditCookie cookie) { erase_composition(context.get(), cookie); });
+    erase_composition(context.get(), edit_cookie(), epoch);
 }
 
+// Ends the composition where it is, without touching its text, and puts the
+// caret after it so typing continues there.
 void TextService::seal(DocumentId document, std::uint64_t epoch) {
     candidate_ui_->hide();
     const auto context = context_of(document);
     const auto composition = itfComposition;
-    drop_composition();
-    if (!context) return;
+    const bool shown = composition_epoch_ == epoch;
+    if (shown) drop_composition();
+    if (!context || !shown) return;
 
-    const auto clear_attribute = [context](TfEditCookie cookie, ITfRange* range) {
+    const auto clear_attribute = [&context](TfEditCookie cookie, ITfRange* range) {
         winrt::com_ptr<ITfProperty> attribute_property;
         if (range && SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, attribute_property.put()))) {
             attribute_property->Clear(cookie, range);
         }
     };
+    const auto keep = [&](TfEditCookie cookie, ITfRange* range) {
+        SealedRange kept{.context = context};
+        if (range && SUCCEEDED(range->Clone(kept.range.put()))) {
+            kept.range->SetGravity(cookie, TF_GRAVITY_FORWARD, TF_GRAVITY_BACKWARD);
+            sealed_ranges_[epoch] = std::move(kept);
+        }
+    };
 
     if (termination_) {
         clear_attribute(termination_->cookie, termination_->range);
-        SealedRange kept{.context = context};
-        if (termination_->range && SUCCEEDED(termination_->range->Clone(kept.range.put()))) {
-            kept.range->SetGravity(termination_->cookie, TF_GRAVITY_FORWARD, TF_GRAVITY_BACKWARD);
-            sealed_ranges_[epoch] = std::move(kept);
-        }
+        keep(termination_->cookie, termination_->range);
         return;
     }
     if (!composition) return;
 
-    // Ends the composition where it is, without touching its text, and puts
-    // the caret after it so typing continues there. The edit that later
-    // replaces the text runs after this one.
-    auto session = winrt::make_self<EditSession>();
-    session->set_operation([self = get_strong(), context, composition, clear_attribute, epoch](TfEditCookie cookie) {
-        winrt::com_ptr<ITfRange> range;
-        if (SUCCEEDED(composition->GetRange(range.put()))) {
-            clear_attribute(cookie, range.get());
-            SealedRange kept{.context = context};
-            if (SUCCEEDED(range->Clone(kept.range.put()))) {
-                kept.range->SetGravity(cookie, TF_GRAVITY_FORWARD, TF_GRAVITY_BACKWARD);
-                self->sealed_ranges_[epoch] = std::move(kept);
-            }
-            winrt::com_ptr<ITfRange> caret;
-            if (SUCCEEDED(range->Clone(caret.put())) && SUCCEEDED(caret->Collapse(cookie, TF_ANCHOR_END))) {
-                TF_SELECTION selection = {};
-                selection.range = caret.get();
-                selection.style.ase = TF_AE_END;
-                selection.style.fInterimChar = FALSE;
-                context->SetSelection(cookie, 1, &selection);
-            }
+    const auto cookie = edit_cookie();
+    winrt::com_ptr<ITfRange> range;
+    if (SUCCEEDED(composition->GetRange(range.put()))) {
+        clear_attribute(cookie, range.get());
+        keep(cookie, range.get());
+        winrt::com_ptr<ITfRange> caret;
+        if (SUCCEEDED(range->Clone(caret.put())) && SUCCEEDED(caret->Collapse(cookie, TF_ANCHOR_END))) {
+            TF_SELECTION selection = {};
+            selection.range = caret.get();
+            selection.style.ase = TF_AE_END;
+            selection.style.fInterimChar = FALSE;
+            context->SetSelection(cookie, 1, &selection);
         }
-        composition->EndComposition(cookie);
-    });
-    HRESULT session_hr = E_FAIL;
-    if (FAILED(context->RequestEditSession(_tfClientId, session.get(), TF_ES_READWRITE | TF_ES_ASYNCDONTCARE,
-                                           &session_hr))) {
-        composition->EndComposition(TF_INVALID_COOKIE);
     }
+    composition->EndComposition(cookie);
 }
+
+// ---- SealedTextStore -----------------------------------------------------
 
 std::optional<std::u16string> TextService::sealed_text(DocumentId /*document*/, std::uint64_t epoch) {
     const auto found = sealed_ranges_.find(epoch);
-    if (found == sealed_ranges_.end() || !edit_cookie_) return std::nullopt;
+    if (found == sealed_ranges_.end()) return std::nullopt;
     winrt::com_ptr<ITfRange> reader;
     std::u16string text;
-    if (FAILED(found->second.range->Clone(reader.put())) || !append_range_text(*edit_cookie_, reader.get(), text)) {
+    if (FAILED(found->second.range->Clone(reader.put())) || !append_range_text(edit_cookie(), reader.get(), text)) {
         return std::nullopt;
     }
     return text;
@@ -616,15 +703,15 @@ std::optional<std::u16string> TextService::sealed_text(DocumentId /*document*/, 
 
 void TextService::write_sealed(DocumentId /*document*/, std::uint64_t epoch, const std::u16string& text) {
     const auto found = sealed_ranges_.find(epoch);
-    if (found == sealed_ranges_.end() || !edit_cookie_) return;
-    found->second.range->SetText(*edit_cookie_, 0, convu16(text).data(), static_cast<LONG>(text.size())) |
+    if (found == sealed_ranges_.end()) return;
+    found->second.range->SetText(edit_cookie(), 0, convu16(text).data(), static_cast<LONG>(text.size())) |
         win::check();
 }
 
 void TextService::erase_before_sealed(DocumentId /*document*/, std::uint64_t epoch, std::size_t count) {
     const auto found = sealed_ranges_.find(epoch);
-    if (found == sealed_ranges_.end() || !edit_cookie_) return;
-    const auto cookie = *edit_cookie_;
+    if (found == sealed_ranges_.end()) return;
+    const auto cookie = edit_cookie();
     winrt::com_ptr<ITfRange> before;
     found->second.range->Clone(before.put()) | win::check();
     before->Collapse(cookie, TF_ANCHOR_START) | win::check();
@@ -649,54 +736,19 @@ bool TextService::caret_after_sealed(DocumentId document, std::uint64_t epoch) {
     const auto found = sealed_ranges_.find(epoch);
     const auto context = context_of(document);
     if (found == sealed_ranges_.end() || !context) return false;
-    const auto range = found->second.range;
-
-    std::optional<bool> after;
-    const auto read = [&](TfEditCookie cookie) {
-        TF_SELECTION selection = {};
-        ULONG fetched = 0;
-        if (FAILED(context->GetSelection(cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched == 0 ||
-            !selection.range) {
-            return;
-        }
-        winrt::com_ptr<ITfRange> caret;
-        caret.attach(selection.range);
-        BOOL empty = FALSE;
-        LONG order = 0;
-        after = SUCCEEDED(caret->IsEmpty(cookie, &empty)) && empty &&
-                SUCCEEDED(caret->CompareStart(cookie, range.get(), TF_ANCHOR_END, &order)) && order == 0;
-    };
-    if (edit_cookie_) {
-        read(*edit_cookie_);
-    } else {
-        auto session = winrt::make_self<EditSession>();
-        session->set_operation(read);
-        HRESULT session_hr = E_FAIL;
-        context->RequestEditSession(_tfClientId, session.get(), TF_ES_READ | TF_ES_SYNC, &session_hr);
+    const auto cookie = edit_cookie();
+    TF_SELECTION selection = {};
+    ULONG fetched = 0;
+    if (FAILED(context->GetSelection(cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched == 0 ||
+        !selection.range) {
+        return false;
     }
-    // TODO: when the document refuses a synchronous read the caret is assumed
-    // to still be where sealing put it.
-    return after.value_or(true);
-}
-
-bool TextService::run_edit(DocumentId document, std::function<void()> edit) {
-    const auto context = context_of(document);
-    if (!context || _tfClientId == TF_CLIENTID_NULL) return false;
-    auto session = winrt::make_self<EditSession>();
-    session->set_operation([self = get_strong(), edit = std::move(edit)](TfEditCookie cookie) {
-        const auto outer = std::exchange(self->edit_cookie_, cookie);
-        before_return restore([&] { self->edit_cookie_ = outer; });
-        try {
-            edit();
-        } catch (...) {
-            self->handle_com_exception();
-            throw;
-        }
-    });
-    HRESULT session_hr = E_FAIL;
-    return SUCCEEDED(context->RequestEditSession(_tfClientId, session.get(),
-                                                 TF_ES_READWRITE | TF_ES_ASYNCDONTCARE, &session_hr)) &&
-           SUCCEEDED(session_hr);
+    winrt::com_ptr<ITfRange> caret;
+    caret.attach(selection.range);
+    BOOL empty = FALSE;
+    LONG order = 0;
+    return SUCCEEDED(caret->IsEmpty(cookie, &empty)) && empty &&
+           SUCCEEDED(caret->CompareStart(cookie, found->second.range.get(), TF_ANCHOR_END, &order)) && order == 0;
 }
 
 void TextService::record_commit(DocumentId document, std::uint64_t epoch, CommitSample sample) {
@@ -814,6 +866,7 @@ void TextService::deactivate() {
         controller_.reset();
     }
     clear_composition_state();
+    queued_edits_.clear();
     unadvise_text_edit_sink();
 
     if (threadMgr) {
@@ -916,10 +969,11 @@ bool TextService::has_composition_state() const {
     return itfComposition || composition_context_ || controller_.active() || candidate_ui_->is_active();
 }
 
-// Forgets the TSF side of the live composition.
+// Forgets the TSF side of the shown composition.
 void TextService::drop_composition() noexcept {
     itfComposition = nullptr;
     composition_context_ = nullptr;
+    composition_epoch_.reset();
 }
 
 void TextService::clear_composition_state() {
@@ -962,13 +1016,17 @@ void TextService::discard_recent_commit(ITfContext* context) noexcept {
     try {
         if (!context || !recent_commit_context_ || !recent_commit_time_ ||
             !same_com_object(recent_commit_context_.get(), context) ||
-            std::chrono::steady_clock::now() - *recent_commit_time_ >
-                correction_window ||
-            get_pre_composit_context(context) != recent_commit_tail_) {
+            std::chrono::steady_clock::now() - *recent_commit_time_ > correction_window) {
             forget_recent_commit();
             return;
         }
-        if (engine_worker_) engine_worker_->discard_commit(recent_commit_token_);
+        winrt::com_ptr<ITfContext> target;
+        target.copy_from(context);
+        run_edit(document_of(context), [this, target, tail = recent_commit_tail_, token = recent_commit_token_] {
+            if (engine_worker_ && get_pre_composit_context(target.get(), edit_cookie(), std::nullopt) == tail) {
+                engine_worker_->discard_commit(token);
+            }
+        });
         forget_recent_commit();
     } catch (...) {
         forget_recent_commit();
@@ -1030,6 +1088,7 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pContext) try {
     const auto document = document_of(pContext);
     if (controller_.owns(document)) clear_composition_state();
     controller_.document_closed(document);
+    queued_edits_.erase(document);
     std::erase_if(sealed_ranges_, [pContext](const auto& entry) {
         return same_com_object(entry.second.context.get(), pContext);
     });
@@ -1077,7 +1136,8 @@ keys::KeyContext TextService::key_context(ITfContext* context, WPARAM wParam, In
             .reading_complete = composing && controller_.buffer().current_compositable(),
             .candidates_open = candidate_ui_->is_active(),
             .candidates_take_key = candidate_ui_->can_handle_key(wParam),
-            .sealed_text_at_caret = wParam == VK_BACK && controller_.sealed_at_caret(document),
+            .document_behind = wParam == VK_BACK && !composing &&
+                               (controller_.sealed_pending(document) || has_queued_edits(document)),
             .full_width = full_width_mode_,
             .width_toggle_enabled = shift_space_width_toggle_enabled_,
             .backtick_prefix = key_state_.backtick_prefix()};
@@ -1098,7 +1158,7 @@ bool TextService::perform(ITfContext* context, DocumentId document, const keys::
             [](const act::ArmBacktick&) { return true; },
             [&](const act::Insert& insert) {
                 candidate_ui_->hide();
-                insert_text(context, insert.text);
+                insert_text(document, insert.text);
                 return true;
             },
             [&](const act::Compose& compose) {
@@ -1139,7 +1199,10 @@ bool TextService::perform(ITfContext* context, DocumentId document, const keys::
                 controller_.backspace(document, trace);
                 return true;
             },
-            [&](const act::EraseSealed&) { return controller_.erase_sealed(document); },
+            [&](const act::BackspaceInOrder&) {
+                controller_.backspace_in_order(document);
+                return true;
+            },
             [&](const act::Enter&) {
                 candidate_ui_->hide();
                 controller_.enter(document, trace);
@@ -1247,7 +1310,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM 
     e2e_trace.ready_finished = e2e_trace.mode_finished;
 
     if (wParam == VK_BACK && !has_composition_state() &&
-        !std::holds_alternative<keys::action::EraseSealed>(action)) {
+        !std::holds_alternative<keys::action::BackspaceInOrder>(action)) {
         discard_recent_commit(pContext);
     }
     key_state_.handled(press, action);
@@ -1306,16 +1369,27 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfCompo
     }
     // The host ended the composition (focus change, click, its own commit).
     // Keep what the user typed; text still converting is finished in place.
+    const auto document = document_of(composition_context_.get());
+    const auto terminated = composition_epoch_;
     winrt::com_ptr<ITfRange> range;
-    if (pComposition && SUCCEEDED(pComposition->GetRange(range.put())) && composition_context_) {
-        private_scopes_[controller_.epoch()] |=
-            has_private_input_scope(composition_context_.get(), ecWrite, range.get());
+    if (pComposition && SUCCEEDED(pComposition->GetRange(range.put())) && composition_context_ && terminated) {
+        private_scopes_[*terminated] |= has_private_input_scope(composition_context_.get(), ecWrite, range.get());
     }
-    termination_ = Termination{ecWrite, range.get()};
-    before_return terminated([this] { termination_.reset(); });
     candidate_ui_->hide();
-    controller_.seal();
+    termination_ = Termination{ecWrite, range.get()};
+    const auto outer = std::exchange(active_edit_, ActiveEdit{document, ecWrite});
+    before_return restore([&] {
+        active_edit_ = outer;
+        termination_.reset();
+    });
+    // Input typed before the host ended the composition ends with it, even
+    // when the document still shows an earlier composition. Edits queued for
+    // the shown composition run now, with the host's cookie, so its text is
+    // complete before it is sealed.
+    if (controller_.owns(document)) controller_.seal();
+    run_queued(document, [&] { return itfComposition && composition_epoch_ == terminated; });
     drop_composition();
+    if (has_queued_edits(document)) request_edits(document);
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -1441,7 +1515,7 @@ TextService::GetDisplayAttributeInfo(REFGUID guid, ITfDisplayAttributeInfo** ppI
     return handle_com_exception();
 }
 
-void TextService::finish_composition(ITfContext* pContext, TfEditCookie ec) {
+void TextService::finish_composition(ITfContext* pContext, TfEditCookie ec, std::uint64_t epoch) {
     before_return cleanup([this]() { drop_composition(); });
     if (!itfComposition) return;
     // The composition range already contains the final text. Rewriting it
@@ -1449,7 +1523,7 @@ void TextService::finish_composition(ITfContext* pContext, TfEditCookie ec) {
     // which can delete adjacent text around contenteditable boundaries.
     winrt::com_ptr<ITfRange> range;
     itfComposition->GetRange(range.put()) | win::check();
-    private_scopes_[controller_.epoch()] |= has_private_input_scope(pContext, ec, range.get());
+    private_scopes_[epoch] |= has_private_input_scope(pContext, ec, range.get());
 
     winrt::com_ptr<ITfRange> caret_range;
     range->Clone(caret_range.put()) | win::check();
@@ -1472,9 +1546,9 @@ void TextService::finish_composition(ITfContext* pContext, TfEditCookie ec) {
     composition->EndComposition(ec) | win::check();
 }
 
-void TextService::erase_composition(ITfContext* pContext, TfEditCookie ec) {
+void TextService::erase_composition(ITfContext* pContext, TfEditCookie ec, std::uint64_t epoch) {
     before_return cleanup([this]() { drop_composition(); });
-    private_scopes_.erase(controller_.epoch());
+    private_scopes_.erase(epoch);
     if (!itfComposition) return;
 
     winrt::com_ptr<ITfRange> range;
@@ -1495,18 +1569,16 @@ void TextService::erase_composition(ITfContext* pContext, TfEditCookie ec) {
     pContext->SetSelection(ec, 1, &selection) | win::check();
 }
 
-HRESULT TextService::insert_text(ITfContext* pContext, const std::u16string& text) {
-    if (!pContext) return E_INVALIDARG;
-    if (text.empty()) return S_OK;
-
-    winrt::com_ptr<ITfInsertAtSelection> insertAtSelection;
-    HRESULT hr = pContext->QueryInterface<ITfInsertAtSelection>(insertAtSelection.put());
-    if (FAILED(hr)) return hr;
-
-    winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
-    editSession->set_operation([pContext, insertAtSelection, text](TfEditCookie ec) {
+void TextService::insert_text(DocumentId document, std::u16string text) {
+    if (text.empty()) return;
+    run_edit(document, [this, document, text = std::move(text)] {
+        const auto context = context_of(document);
+        if (!context) return;
+        const auto ec = edit_cookie();
+        winrt::com_ptr<ITfInsertAtSelection> insert_at_selection;
+        context->QueryInterface<ITfInsertAtSelection>(insert_at_selection.put()) | win::check();
         winrt::com_ptr<ITfRange> range;
-        insertAtSelection->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, nullptr, 0, range.put()) | win::check();
+        insert_at_selection->InsertTextAtSelection(ec, TF_IAS_QUERYONLY, nullptr, 0, range.put()) | win::check();
         range->SetText(ec, 0, convu16(text.data()), static_cast<LONG>(text.size())) | win::check();
 
         winrt::com_ptr<ITfRange> caret_range;
@@ -1517,24 +1589,25 @@ HRESULT TextService::insert_text(ITfContext* pContext, const std::u16string& tex
         selection.range = caret_range.get();
         selection.style.ase = TF_AE_END;
         selection.style.fInterimChar = FALSE;
-        pContext->SetSelection(ec, 1, &selection) | win::check();
+        context->SetSelection(ec, 1, &selection) | win::check();
     });
-
-    HRESULT hrSession;
-    pContext->RequestEditSession(_tfClientId, editSession.get(), TF_ES_READWRITE | TF_ES_SYNC, &hrSession) |
-        win::check();
-
-    return S_OK;
 }
 
 /**
  * @brief Updates the active composition text, starting the composition if needed.
  */
-void TextService::write_composition_text(ITfContext* pContext, TfEditCookie ec, const Rendering& rendering,
-                                         const E2eTrace* e2e_trace,
+void TextService::write_composition_text(ITfContext* pContext, TfEditCookie ec, std::uint64_t epoch,
+                                         const Rendering& rendering, const E2eTrace* e2e_trace,
                                          std::chrono::steady_clock::time_point edit_request_started) {
     const auto& text = rendering.text;
     const auto edit_operation_started = std::chrono::steady_clock::now();
+    if (itfComposition && composition_epoch_ != epoch) {
+        logger_.log("[EDIT] composition shown for another epoch; render skipped");
+        return;
+    }
+    // A composition the host is ending cannot be started again inside its
+    // termination; the next render shows it.
+    if (!itfComposition && termination_) return;
     winrt::com_ptr<ITfRange> range;
     if (!itfComposition) {
         winrt::com_ptr<ITfContextComposition> contextComposition;
@@ -1546,6 +1619,7 @@ void TextService::write_composition_text(ITfContext* pContext, TfEditCookie ec, 
             ec, range.get(), static_cast<ITfCompositionSink*>(this), itfComposition.put()) |
             win::check();
         composition_context_.copy_from(pContext);
+        composition_epoch_ = epoch;
     }
 
     range = nullptr;
@@ -1748,38 +1822,26 @@ bool read_pre_context_with_shift(TfEditCookie ec, ITfRange* anchor_range, std::u
     return append_range_text(ec, read_range.get(), context);
 }
 
-std::u16string TextService::get_pre_composit_context(ITfContext* pContext) {
-    if (!pContext) {
-        return {};
+std::u16string TextService::get_pre_composit_context(ITfContext* pContext, TfEditCookie ec,
+                                                    std::optional<std::uint64_t> epoch) {
+    if (!pContext) return {};
+    winrt::com_ptr<ITfRange> anchor_range;
+    if (itfComposition) {
+        itfComposition->GetRange(anchor_range.put()) | win::check();
+    } else {
+        TF_SELECTION selection = {};
+        ULONG fetched = 0;
+        pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched) | win::check();
+        if (fetched == 0 || !selection.range) return {};
+        anchor_range.attach(selection.range);
     }
 
+    if (epoch) private_scopes_[*epoch] |= has_private_input_scope(pContext, ec, anchor_range.get());
+    anchor_range->Collapse(ec, TF_ANCHOR_START) | win::check();
     std::u16string context;
-    winrt::com_ptr<EditSession> editSession = winrt::make_self<EditSession>();
-    editSession->set_operation([this, pContext, &context](TfEditCookie ec) {
-        winrt::com_ptr<ITfRange> anchor_range;
-
-        if (itfComposition) {
-            itfComposition->GetRange(anchor_range.put()) | win::check();
-        } else {
-            TF_SELECTION selection = {};
-            ULONG fetched = 0;
-            pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection, &fetched) | win::check();
-            if (fetched == 0 || !selection.range) {
-                return;
-            }
-
-            anchor_range.attach(selection.range);
-        }
-
-        private_scopes_[controller_.epoch()] |= has_private_input_scope(pContext, ec, anchor_range.get());
-        anchor_range->Collapse(ec, TF_ANCHOR_START) | win::check();
-        if (!read_pre_context_with_acp(ec, anchor_range.get(), context)) {
-            read_pre_context_with_shift(ec, anchor_range.get(), context);
-        }
-    });
-
-    HRESULT hr = S_OK;
-    pContext->RequestEditSession(_tfClientId, editSession.get(), TF_ES_READ | TF_ES_SYNC, &hr) | win::check();
+    if (!read_pre_context_with_acp(ec, anchor_range.get(), context)) {
+        read_pre_context_with_shift(ec, anchor_range.get(), context);
+    }
     return context;
 }
 

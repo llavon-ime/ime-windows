@@ -34,7 +34,9 @@ struct KeyContext {
     bool reading_complete = false;
     bool candidates_open = false;
     bool candidates_take_key = false;
-    bool sealed_text_at_caret = false;
+    // Edits are still queued, or sealed text is waiting for its conversion:
+    // the document has not caught up with the keys before this one.
+    bool document_behind = false;
     bool full_width = false;
     bool width_toggle_enabled = false;
     // The previous key was the backtick prefix.
@@ -68,7 +70,8 @@ struct MoveCaret {
     bool forward = false;
 };
 struct Backspace {};
-struct EraseSealed {};
+// Backspace that must take effect after everything queued before it.
+struct BackspaceInOrder {};
 struct Enter {};
 struct Escape {};
 }  // namespace action
@@ -76,7 +79,7 @@ struct Escape {};
 using KeyAction = std::variant<action::PassThrough, action::ShiftDown, action::ToggleWidth, action::ArmBacktick,
                                action::Insert, action::Compose, action::ComposeEnglish, action::Reading,
                                action::Candidates, action::OpenCandidates, action::MoveCaret, action::Backspace,
-                               action::EraseSealed, action::Enter, action::Escape>;
+                               action::BackspaceInOrder, action::Enter, action::Escape>;
 
 bool is_shift(WPARAM key) noexcept;
 // Keys whose text the layout decides, given the modifiers held.

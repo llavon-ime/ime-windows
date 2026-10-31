@@ -19,8 +19,11 @@ namespace tsf {
 // The composition state machine, free of TSF. Every call happens on the
 // owning UI thread; conversions return through on_conversion.
 //
-// - Typing never waits: each edit renders at once and sends the complete
-//   composition for conversion.
+// - The state changes at once with each key; the document follows in order
+//   through queued edits (see DocumentEditor), however late the document
+//   grants them.
+// - Typing never waits: each edit renders and sends the complete composition
+//   for conversion once the text before it has been read.
 // - A result is merged into every syllable that is still the one it was
 //   computed for, so continued typing never wastes it.
 // - Enter commits at once when what is shown is the conversion of exactly
@@ -55,10 +58,11 @@ public:
     void move_caret(DocumentId document, bool forward);
     void enter(DocumentId document, E2eTrace trace = {});
     void escape(DocumentId document);
-    // Backspace outside a composition. Returns false when the key belongs to
-    // the document.
-    bool erase_sealed(DocumentId document);
-    bool sealed_at_caret(DocumentId document) { return !owns(document) && sealed_.at_caret(document); }
+    // Backspace outside a composition while sealed text may sit at the caret
+    // or edits are still queued: erases from the sealed text, or does what
+    // Backspace does in the document, in order with everything before it.
+    void backspace_in_order(DocumentId document);
+    bool sealed_pending(DocumentId document) const noexcept { return !owns(document) && sealed_.pending(document); }
 
     void candidates_opened(std::uint64_t entry);
     void select_candidate(std::uint64_t entry, std::size_t index);
@@ -86,7 +90,8 @@ private:
     struct Composition {
         std::uint64_t epoch = 0;
         DocumentId document = 0;
-        std::u16string preceding;
+        // Unknown until the document has been read.
+        std::optional<std::u16string> preceding;
         CompositionBuffer buffer;
         CandidateLock candidates;
         // The newest conversion sent.
@@ -104,11 +109,14 @@ private:
         return composition_ && composition_->epoch == epoch ? &*composition_ : nullptr;
     }
     Composition* open(DocumentId document, bool prefill);
+    void context_ready(std::uint64_t epoch, std::u16string preceding);
+    void show(const Composition& composition, std::optional<E2eTrace> trace = std::nullopt);
     void update(Composition& composition, E2eTrace trace = {});
     void request(Composition& composition, E2eTrace trace = {});
     void apply(Composition& composition, std::uint64_t sequence, const ConversionTracker::Request& request,
                std::vector<BopomofoPos> converted);
     void commit();
+    void discard();
     void backend_lost();
 
     CompositionHost& host_;

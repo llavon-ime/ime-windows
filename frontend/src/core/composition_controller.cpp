@@ -33,23 +33,46 @@ CompositionController::Composition* CompositionController::open(DocumentId docum
     // Text before the composition cannot change while it is open, so it is
     // read once and reused by every conversion of this composition. Sealed
     // text right before it counts as what it is going to become.
-    composition.preceding = host_.preceding_text(document);
-    if (auto context = sealed_.context_at_caret(document)) composition.preceding = std::move(*context);
-    if (prefill) conversions_.prefill(composition.preceding);
-    return &composition;
+    host_.run_edit(document, [this, document, epoch = composition.epoch, prefill] {
+        auto preceding = host_.preceding_text(document, epoch);
+        if (auto context = sealed_.context_at_caret(document)) preceding = std::move(*context);
+        if (prefill) conversions_.prefill(preceding);
+        context_ready(epoch, std::move(preceding));
+    });
+    return composition_ ? &*composition_ : nullptr;
+}
+
+void CompositionController::context_ready(std::uint64_t epoch, std::u16string preceding) {
+    if (auto* composition = live_epoch(epoch)) {
+        composition->preceding = std::move(preceding);
+        request(*composition);
+    } else {
+        sealed_.context_ready(epoch, std::move(preceding));
+    }
+}
+
+// A render shows the state as of when it runs: renders made inside edits may
+// already have shown newer state. Only an ended composition is shown as it
+// was, which is how it ended.
+void CompositionController::show(const Composition& composition, std::optional<E2eTrace> trace) {
+    host_.run_edit(composition.document, [this, document = composition.document, epoch = composition.epoch,
+                                          ended = composition.rendering(), trace] {
+        const auto* live = live_epoch(epoch);
+        host_.render(document, epoch, live ? live->rendering() : ended, trace ? &*trace : nullptr);
+    });
 }
 
 void CompositionController::update(Composition& composition, E2eTrace trace) {
     if (composition.buffer.empty()) {
-        host_.discard(composition.document);
-        composition_.reset();
+        discard();
         return;
     }
-    host_.render(composition.document, composition.rendering(), nullptr);
+    show(composition);
     request(composition, trace);
 }
 
 void CompositionController::request(Composition& composition, E2eTrace trace) {
+    if (!composition.preceding) return;
     auto snapshot = composition.buffer.conversion_snapshot();
     if (!snapshot || (composition.sent && composition.sent->revision == snapshot->revision)) return;
     trace.predict_started = std::chrono::steady_clock::now();
@@ -59,7 +82,7 @@ void CompositionController::request(Composition& composition, E2eTrace trace) {
                                              .document = composition.document,
                                              .snapshot = std::move(snapshot->entries),
                                              .trace = trace},
-                                            composition.preceding);
+                                            *composition.preceding);
     if (sequence) composition.sent = Sent{revision, *sequence};
 }
 
@@ -95,7 +118,7 @@ void CompositionController::move_caret(DocumentId document, bool forward) {
     auto* composition = live(document);
     if (!composition) return;
     auto& buffer = composition->buffer;
-    if (forward ? buffer.next() : buffer.pre()) host_.render(document, composition->rendering(), nullptr);
+    if (forward ? buffer.next() : buffer.pre()) show(*composition);
 }
 
 void CompositionController::enter(DocumentId document, E2eTrace trace) {
@@ -110,13 +133,14 @@ void CompositionController::enter(DocumentId document, E2eTrace trace) {
 }
 
 void CompositionController::escape(DocumentId document) {
-    if (!owns(document)) return;
-    host_.discard(document);
-    composition_.reset();
+    if (owns(document)) discard();
 }
 
-bool CompositionController::erase_sealed(DocumentId document) {
-    return !owns(document) && sealed_.erase_at_caret(document);
+void CompositionController::backspace_in_order(DocumentId document) {
+    if (owns(document)) return;
+    host_.run_edit(document, [this, document] {
+        if (!sealed_.erase_at_caret(document)) host_.erase_before_caret(document);
+    });
 }
 
 void CompositionController::candidates_opened(std::uint64_t entry) {
@@ -141,7 +165,7 @@ void CompositionController::candidates_closed(DocumentId document) {
     if (!held) return;
     const auto outcome = composition->buffer.merge_conversion(held->sequence, {std::move(held->requested)},
                                                               {std::move(held->converted)});
-    if (outcome.changed) host_.render(document, composition->rendering(), nullptr);
+    if (outcome.changed) show(*composition);
 }
 
 void CompositionController::on_conversion(ConversionResult result) {
@@ -161,11 +185,10 @@ void CompositionController::on_conversion(ConversionResult result) {
         sealed_.on_conversion(request->epoch, result.sequence, request->snapshot, std::move(result.padding));
         return;
     }
-    const auto document = request->document;
-    host_.run_edit(document, [this, request = std::move(*request), sequence = result.sequence,
-                              converted = std::move(result.padding)]() mutable {
-        // The document may grant the edit after more keys, or after the
-        // composition was sealed.
+    // Merged in order with the edits queued before it, so what is shown
+    // changes together with the state.
+    host_.run_edit(request->document, [this, request = std::move(*request), sequence = result.sequence,
+                                       converted = std::move(result.padding)]() mutable {
         if (auto* composition = live_epoch(request.epoch)) {
             apply(*composition, sequence, request, std::move(converted));
         } else {
@@ -174,26 +197,38 @@ void CompositionController::on_conversion(ConversionResult result) {
     });
 }
 
-// The merge only touches syllables that are still exactly what was sent.
+// In an edit. The merge only touches syllables that are still exactly what
+// was sent.
 void CompositionController::apply(Composition& composition, std::uint64_t sequence,
                                   const ConversionTracker::Request& request, std::vector<BopomofoPos> converted) {
-    auto outcome =
-        composition.buffer.merge_conversion(sequence, request.snapshot, std::move(converted), composition.candidates.entry());
+    auto outcome = composition.buffer.merge_conversion(sequence, request.snapshot, std::move(converted),
+                                                       composition.candidates.entry());
     if (outcome.held) {
         composition.candidates.hold(sequence, std::move(outcome.held->first), std::move(outcome.held->second));
     }
     if (request.revision == composition.buffer.revision()) composition.converted = request.revision;
-    if (outcome.changed) host_.render(composition.document, composition.rendering(), &request.trace);
+    if (outcome.changed) {
+        host_.render(composition.document, composition.epoch, composition.rendering(), &request.trace);
+    }
 }
 
+// The state ends first: the queued edit may run right away.
 void CompositionController::commit() {
-    auto& composition = *composition_;
-    const auto document = composition.document;
-    const auto epoch = composition.epoch;
-    auto sample = training_sample(composition.buffer, composition.preceding);
-    host_.commit(document);
+    const auto document = composition_->document;
+    const auto epoch = composition_->epoch;
+    auto sample = training_sample(composition_->buffer, composition_->preceding.value_or(std::u16string{}));
     composition_.reset();
-    if (sample) host_.record_commit(document, epoch, std::move(*sample));
+    host_.run_edit(document, [this, document, epoch, sample = std::move(sample)]() mutable {
+        host_.commit(document, epoch);
+        if (sample) host_.record_commit(document, epoch, std::move(*sample));
+    });
+}
+
+void CompositionController::discard() {
+    const auto document = composition_->document;
+    const auto epoch = composition_->epoch;
+    composition_.reset();
+    host_.run_edit(document, [this, document, epoch] { host_.discard(document, epoch); });
 }
 
 void CompositionController::seal() {
@@ -210,10 +245,13 @@ void CompositionController::seal() {
                                              conversions_.pending(sent->sequence)) {
         in_flight = sent->sequence;
     }
-    host_.seal(composition.document, composition.epoch);
     auto sealed = std::move(composition);
     composition_.reset();
     sealed_.add(sealed.epoch, sealed.document, std::move(sealed.buffer), std::move(sealed.preceding), in_flight);
+    host_.run_edit(sealed.document, [this, document = sealed.document, epoch = sealed.epoch] {
+        host_.seal(document, epoch);
+        sealed_.placed(epoch);
+    });
 }
 
 // Nothing can convert the syllables still waiting, so the local table is the
@@ -230,7 +268,7 @@ void CompositionController::backend_lost() {
         if (!composition) return;
         composition->converted = composition->buffer.revision();
         if (composition->buffer.accept_local_candidates()) {
-            host_.render(composition->document, composition->rendering(), nullptr);
+            host_.render(composition->document, composition->epoch, composition->rendering(), nullptr);
         }
     });
 }

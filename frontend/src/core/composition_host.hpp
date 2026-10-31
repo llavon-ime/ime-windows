@@ -21,31 +21,37 @@ struct Rendering {
     std::optional<std::pair<std::size_t, std::size_t>> selection;
 };
 
+// The TSF contract: a document is read and written only inside an edit
+// session the document grants, possibly much later than requested. Every
+// method of the interfaces below except run_edit is called inside a run_edit
+// callback.
 class DocumentEditor {
 public:
     virtual ~DocumentEditor() = default;
-    // Runs edit once the document can be written, possibly right away.
-    // Returns false when it never will.
+    // Queues edit behind every edit queued before it for the document.
+    // Returns false when the document is gone.
     virtual bool run_edit(DocumentId document, std::function<void()> edit) = 0;
+    // What Backspace does in the document itself.
+    virtual void erase_before_caret(DocumentId document) = 0;
 };
 
-// The open composition. Called during key handling or inside run_edit.
+// The composition of a given epoch.
 class CompositionView {
 public:
     virtual ~CompositionView() = default;
-    virtual std::u16string preceding_text(DocumentId document) = 0;
+    virtual std::u16string preceding_text(DocumentId document, std::uint64_t epoch) = 0;
     // Shows the composition, starting it if needed.
-    virtual void render(DocumentId document, const Rendering& rendering, const E2eTrace* trace) = 0;
+    virtual void render(DocumentId document, std::uint64_t epoch, const Rendering& rendering,
+                        const E2eTrace* trace) = 0;
     // The shown text is final: ends the composition in place.
-    virtual void commit(DocumentId document) = 0;
+    virtual void commit(DocumentId document, std::uint64_t epoch) = 0;
     // Removes the composition together with its text.
-    virtual void discard(DocumentId document) = 0;
+    virtual void discard(DocumentId document, std::uint64_t epoch) = 0;
     // Ends the composition but leaves its text, tracked as sealed text under
     // epoch; the caret stays right after it.
     virtual void seal(DocumentId document, std::uint64_t epoch) = 0;
 };
 
-// Sealed text in its document. Reads and writes happen inside run_edit.
 class SealedTextStore {
 public:
     virtual ~SealedTextStore() = default;
