@@ -2,13 +2,18 @@
 
 #include <windows.h>
 #include <llavon-ipc/pipe_security.hpp>
+#include <winrt/Windows.Foundation.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <optional>
-#include <span>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "core/bopomofo.hpp"
@@ -17,7 +22,7 @@
 
 namespace tsf {
 
-enum class PipeCommand : uint8_t {
+enum class PipeCommand : std::uint8_t {
     Predict = 1,
     ToggleInputMode = 2,
     GetInputMode = 3,
@@ -27,259 +32,241 @@ enum class PipeCommand : uint8_t {
     Prefill = 7,
 };
 
-class PipeEngine : public IEngine {
-    HANDLE hPipe = INVALID_HANDLE_VALUE;
-    static inline std::atomic_uint64_t next_commit_token{1};
-    static constexpr const wchar_t* pipe_base_name = L"llavon-ime";
-    static constexpr uint32_t maximum_candidate_count = 4096;
-    static constexpr std::chrono::seconds launch_retry_interval{5};
-    std::optional<std::chrono::steady_clock::time_point> last_launch_request;
-
-    bool connect_pipe() {
-        const auto pipe_name = llavon::ipc::session_pipe_name(pipe_base_name);
-        hPipe = CreateFileW(pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-        if (hPipe == INVALID_HANDLE_VALUE) return false;
-        if (!llavon::ipc::is_trusted_pipe_server(hPipe)) {
-            disconnect();
-            return false;
-        }
-        return true;
-    }
-
-    // Starts the backend without waiting for its pipe. Until it is reachable the
-    // engine reports English mode, so key handling never blocks while the backend
-    // loads or while an update holds the launch mutex.
-    void request_backend_launch() {
-        const auto now = std::chrono::steady_clock::now();
-        if (last_launch_request && now - *last_launch_request < launch_retry_interval) return;
-        last_launch_request = now;
-
-        HANDLE launch_mutex = CreateMutexW(nullptr, FALSE, service_launch_mutex_name);
-        if (!launch_mutex) return;
-
-        // The updater holds this mutex while it replaces the backend.
-        const DWORD wait_result = WaitForSingleObject(launch_mutex, 0);
-        if (wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED) {
-            if (!connect_pipe()) {
-                launch_service_backend();
-            }
-            ReleaseMutex(launch_mutex);
-        }
-        CloseHandle(launch_mutex);
-    }
-
-    bool ensure_pipe() {
-        if (hPipe != INVALID_HANDLE_VALUE) return true;
-        if (connect_pipe()) return true;
-
-        request_backend_launch();
-        return hPipe != INVALID_HANDLE_VALUE;
-    }
-
-    void disconnect() {
-        if (hPipe != INVALID_HANDLE_VALUE) {
-            CloseHandle(hPipe);
-            hPipe = INVALID_HANDLE_VALUE;
-        }
-    }
-
-    template <typename T>
-    bool write_exact(const T& val) {
-        DWORD written = 0;
-        return WriteFile(hPipe, &val, sizeof(T), &written, nullptr) && written == sizeof(T);
-    }
-
-    bool write_exact(const void* buf, DWORD size) {
-        DWORD written = 0;
-        while (written < size) {
-            DWORD n = 0;
-            if (!WriteFile(hPipe, static_cast<const char*>(buf) + written, size - written, &n, nullptr) || n == 0) return false;
-            written += n;
-        }
-        return true;
-    }
-
-    template <typename T>
-    bool read_exact(T& val) {
-        DWORD total = 0;
-        while (total < sizeof(T)) {
-            DWORD n = 0;
-            if (!ReadFile(hPipe, reinterpret_cast<char*>(&val) + total, sizeof(T) - total, &n, nullptr) || n == 0)
-                return false;
-            total += n;
-        }
-        return true;
-    }
-
-    bool read_exact(void* buf, DWORD size) {
-        DWORD total = 0;
-        while (total < size) {
-            DWORD n = 0;
-            if (!ReadFile(hPipe, static_cast<char*>(buf) + total, size - total, &n, nullptr) || n == 0) return false;
-            total += n;
-        }
-        return true;
-    }
-
-    bool write_command(PipeCommand command) {
-        const uint8_t raw_command = static_cast<uint8_t>(command);
-        return write_exact(raw_command);
-    }
-
-    bool read_input_mode(InputMode& mode) {
-        uint8_t raw_mode = 0;
-        if (!read_exact(raw_mode)) return false;
-
-        mode = raw_mode == static_cast<uint8_t>(InputMode::English) ? InputMode::English : InputMode::Chinese;
-        return true;
-    }
-
+class PipeEngine final : public IEngine {
 public:
     PipeEngine() = default;
     ~PipeEngine() override { disconnect(); }
     PipeEngine(const PipeEngine&) = delete;
     PipeEngine& operator=(const PipeEngine&) = delete;
 
-    void ready() override {
-        if (!ensure_pipe()) return;
-
-        if (!write_command(PipeCommand::Ready)) { disconnect(); return; }
-
-        uint8_t ok = 0;
-        if (!read_exact(ok)) { disconnect(); return; }
+    IAsyncAction ready() override {
+        if (!ensure_pipe()) co_return;
+        std::uint8_t ok = 0;
+        if (!co_await send(Request(PipeCommand::Ready)) || !co_await receive(ok)) disconnect();
     }
 
-    void prefill(const std::u16string& context) override {
-        if (!ensure_pipe()) return;
-
-        if (!write_command(PipeCommand::Prefill)) { disconnect(); return; }
-
-        const uint32_t ctx_len = static_cast<uint32_t>(context.size());
-        if (!write_exact(ctx_len)) { disconnect(); return; }
-        if (ctx_len > 0 && !write_exact(context.data(), ctx_len * sizeof(char16_t))) { disconnect(); return; }
+    IAsyncAction prefill(std::u16string context) override {
+        if (!ensure_pipe()) co_return;
+        Request request(PipeCommand::Prefill);
+        request.string(context);
+        if (!co_await send(request)) disconnect();
     }
 
-    void predict(const std::u16string& context, std::span<BopomofoPos> padding) override {
-        for (auto& p : padding) {
-            if (!p.is_predictable_by_engine()) {
-                return;
-            }
-        }
+    IAsyncOperation<bool> predict(std::u16string context, std::vector<BopomofoPos>& padding) override {
+        if (!std::ranges::all_of(padding, &BopomofoPos::is_predictable_by_engine)) co_return false;
+        if (!ensure_pipe()) co_return false;
 
-        if (!ensure_pipe()) return;
-
-        // --- request ---
-        if (!write_command(PipeCommand::Predict)) { disconnect(); return; }
-
-        uint32_t ctx_len = static_cast<uint32_t>(context.size());
-        if (!write_exact(ctx_len)) { disconnect(); return; }
-        if (ctx_len > 0 && !write_exact(context.data(), ctx_len * sizeof(char16_t))) { disconnect(); return; }
-
-        uint32_t pad_cnt = static_cast<uint32_t>(padding.size());
-        if (!write_exact(pad_cnt)) { disconnect(); return; }
-
-        for (auto& p : padding) {
-            uint8_t type = p.chosen ? 1 : 0;
-            if (!write_exact(type)) { disconnect(); return; }
-
-            if (p.chosen) {
-                char32_t c = p.current32();
-                if (!write_exact(c)) { disconnect(); return; }
+        Request request(PipeCommand::Predict);
+        request.string(context);
+        request.value(static_cast<std::uint32_t>(padding.size()));
+        for (const auto& entry : padding) {
+            request.value(static_cast<std::uint8_t>(entry.chosen ? 1 : 0));
+            if (entry.chosen) {
+                request.value(entry.current32());
             } else {
-                auto bpmf = p.to_bopomofo_string();
-                uint32_t len = static_cast<uint32_t>(bpmf.size());
-                if (!write_exact(len)) { disconnect(); return; }
-                if (len > 0 && !write_exact(bpmf.data(), len * sizeof(char16_t))) { disconnect(); return; }
+                request.string(entry.to_bopomofo_string());
             }
         }
+        if (!co_await send(request)) { disconnect(); co_return false; }
 
-        // --- response ---
-        uint32_t resp_cnt;
-        if (!read_exact(resp_cnt) || resp_cnt > padding.size()) { disconnect(); return; }
-
-        for (uint32_t i = 0; i < resp_cnt && i < static_cast<uint32_t>(padding.size()); i++) {
-            uint32_t cand_cnt;
-            if (!read_exact(cand_cnt) || cand_cnt > maximum_candidate_count) { disconnect(); return; }
-
-            std::vector<char32_t> cands(cand_cnt);
-            if (cand_cnt > 0 && !read_exact(cands.data(), cand_cnt * sizeof(char32_t))) { disconnect(); return; }
-
-            if (!padding[i].chosen) {
-                if (cands.size() == 1) {
-                    padding[i].choose_candidate(cands.front());
+        std::uint32_t count = 0;
+        if (!co_await receive(count) || count > padding.size()) { disconnect(); co_return false; }
+        for (std::uint32_t index = 0; index < count; ++index) {
+            std::uint32_t candidate_count = 0;
+            if (!co_await receive(candidate_count) || candidate_count > maximum_candidate_count) {
+                disconnect();
+                co_return false;
+            }
+            std::vector<char32_t> candidates(candidate_count);
+            if (!co_await transfer(false, candidates.data(), candidate_count * sizeof(char32_t))) {
+                disconnect();
+                co_return false;
+            }
+            auto& entry = padding[index];
+            if (!entry.chosen) {
+                if (candidates.size() == 1) {
+                    entry.choose_candidate(candidates.front());
                 } else {
-                    padding[i].set_candaiates(std::move(cands));
+                    entry.set_candaiates(std::move(candidates));
                 }
             }
-            padding[i].predicted = true;
+            entry.predicted = true;
         }
+        co_return true;
     }
 
-    std::uint64_t record_commit(const CommitSample& sample) override {
-        if (sample.answer.empty() || sample.input.empty() || !ensure_pipe()) return 0;
+    IAsyncOperation<std::uint64_t> record_commit(CommitSample sample) override {
+        if (sample.answer.empty() || sample.input.empty() || !ensure_pipe()) co_return 0;
 
-        if (!write_command(PipeCommand::RecordCommit)) { disconnect(); return 0; }
-
-        const std::uint64_t token = next_commit_token.fetch_add(
-            1, std::memory_order_relaxed);
-        if (token == 0 || !write_exact(token)) {
-            disconnect();
-            return 0;
-        }
-
-        const auto write_string = [this](std::u16string_view value) {
-            const auto length = static_cast<std::uint32_t>(value.size());
-            if (!write_exact(length)) return false;
-            return length == 0 || write_exact(value.data(), length * sizeof(char16_t));
-        };
-
-        if (!write_string(sample.context) || !write_string(sample.answer)) {
-            disconnect();
-            return 0;
-        }
-
-        const auto count = static_cast<std::uint32_t>(sample.input.size());
-        if (!write_exact(count)) { disconnect(); return 0; }
+        const std::uint64_t token = next_commit_token.fetch_add(1, std::memory_order_relaxed);
+        Request request(PipeCommand::RecordCommit);
+        request.value(token);
+        request.string(sample.context);
+        request.string(sample.answer);
+        request.value(static_cast<std::uint32_t>(sample.input.size()));
         for (const auto& entry : sample.input) {
-            const std::uint8_t manually_selected = entry.manually_selected ? 1 : 0;
-            if (!write_string(entry.reading) || !write_string(entry.output) ||
-                !write_exact(manually_selected)) {
-                disconnect();
-                return 0;
-            }
+            request.string(entry.reading);
+            request.string(entry.output);
+            request.value(static_cast<std::uint8_t>(entry.manually_selected ? 1 : 0));
         }
-        return token;
+        if (!co_await send(request)) { disconnect(); co_return 0; }
+        co_return token;
     }
 
-    void discard_commit(std::uint64_t token) override {
-        if (token == 0) return;
-        if (!ensure_pipe()) return;
-        if (!write_command(PipeCommand::DiscardLastCommit) ||
-            !write_exact(token)) {
-            disconnect();
-        }
+    IAsyncAction discard_commit(std::uint64_t token) override {
+        if (token == 0 || !ensure_pipe()) co_return;
+        Request request(PipeCommand::DiscardLastCommit);
+        request.value(token);
+        if (!co_await send(request)) disconnect();
     }
 
     // Without a backend there is no Bopomofo engine, so both mode queries
     // fall back to English and keys pass through to the application.
-    InputMode toggle_input_mode() override {
-        if (!ensure_pipe()) return InputMode::English;
-
-        if (!write_command(PipeCommand::ToggleInputMode)) { disconnect(); return InputMode::English; }
-
-        InputMode mode = InputMode::English;
-        if (!read_input_mode(mode)) { disconnect(); return InputMode::English; }
-        return mode;
+    IAsyncOperation<std::uint8_t> toggle_input_mode() override {
+        return query_input_mode(PipeCommand::ToggleInputMode);
     }
 
-    InputMode current_input_mode() override {
-        if (!ensure_pipe()) return InputMode::English;
+    IAsyncOperation<std::uint8_t> current_input_mode() override {
+        return query_input_mode(PipeCommand::GetInputMode);
+    }
 
-        if (!write_command(PipeCommand::GetInputMode)) { disconnect(); return InputMode::English; }
+    void abort() noexcept override {
+        aborted_ = true;
+        std::lock_guard lock(handle_mutex_);
+        if (pipe_ != INVALID_HANDLE_VALUE) CancelIoEx(pipe_, nullptr);
+    }
 
-        InputMode mode = InputMode::English;
-        if (!read_input_mode(mode)) { disconnect(); return InputMode::English; }
-        return mode;
+private:
+    class Request {
+    public:
+        explicit Request(PipeCommand command) { value(static_cast<std::uint8_t>(command)); }
+
+        template <typename T>
+            requires std::is_trivially_copyable_v<T>
+        void value(const T& data) {
+            const auto* bytes = reinterpret_cast<const std::byte*>(&data);
+            bytes_.insert(bytes_.end(), bytes, bytes + sizeof(T));
+        }
+
+        void string(std::u16string_view text) {
+            value(static_cast<std::uint32_t>(text.size()));
+            const auto* bytes = reinterpret_cast<const std::byte*>(text.data());
+            bytes_.insert(bytes_.end(), bytes, bytes + text.size() * sizeof(char16_t));
+        }
+
+        std::byte* data() { return bytes_.data(); }
+        std::size_t size() const { return bytes_.size(); }
+
+    private:
+        std::vector<std::byte> bytes_;
+    };
+
+    static inline std::atomic_uint64_t next_commit_token{1};
+    static constexpr const wchar_t* pipe_base_name = L"llavon-ime";
+    static constexpr std::uint32_t maximum_candidate_count = 4096;
+    static constexpr std::chrono::seconds launch_retry_interval{5};
+
+    std::mutex handle_mutex_;
+    HANDLE pipe_ = INVALID_HANDLE_VALUE;
+    winrt::handle io_event_{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    std::atomic_bool aborted_ = false;
+    std::optional<std::chrono::steady_clock::time_point> last_launch_request_;
+
+    bool ensure_pipe() {
+        if (aborted_) return false;
+        if (pipe_ != INVALID_HANDLE_VALUE) return true;
+        if (connect_pipe()) return true;
+        request_backend_launch();
+        return pipe_ != INVALID_HANDLE_VALUE;
+    }
+
+    bool connect_pipe() {
+        const auto pipe_name = llavon::ipc::session_pipe_name(pipe_base_name);
+        const HANDLE handle = CreateFileW(pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                          OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) return false;
+        if (!llavon::ipc::is_trusted_pipe_server(handle)) {
+            CloseHandle(handle);
+            return false;
+        }
+        std::lock_guard lock(handle_mutex_);
+        pipe_ = handle;
+        return true;
+    }
+
+    // Starts the backend without waiting for its pipe. Until it is reachable the
+    // engine reports English mode, so key handling never waits while the backend
+    // loads or while an update holds the launch mutex.
+    void request_backend_launch() {
+        const auto now = std::chrono::steady_clock::now();
+        if (last_launch_request_ && now - *last_launch_request_ < launch_retry_interval) return;
+        last_launch_request_ = now;
+
+        const HANDLE launch_mutex = CreateMutexW(nullptr, FALSE, service_launch_mutex_name);
+        if (!launch_mutex) return;
+
+        // The updater holds this mutex while it replaces the backend.
+        const DWORD wait_result = WaitForSingleObject(launch_mutex, 0);
+        if (wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED) {
+            if (!connect_pipe()) launch_service_backend();
+            ReleaseMutex(launch_mutex);
+        }
+        CloseHandle(launch_mutex);
+    }
+
+    void disconnect() noexcept {
+        std::lock_guard lock(handle_mutex_);
+        if (pipe_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(pipe_);
+            pipe_ = INVALID_HANDLE_VALUE;
+        }
+    }
+
+    // One overlapped read or write of exactly size bytes. Completes when the
+    // backend answers or its pipe breaks; abort() cancels it on shutdown.
+    IAsyncOperation<bool> transfer(bool write, void* data, std::size_t size) {
+        auto* bytes = static_cast<std::byte*>(data);
+        std::size_t done = 0;
+        while (done < size) {
+            OVERLAPPED overlapped{};
+            overlapped.hEvent = io_event_.get();
+            ResetEvent(overlapped.hEvent);
+            const auto chunk = static_cast<DWORD>(std::min<std::size_t>(size - done, MAXDWORD));
+            const BOOL started = write ? WriteFile(pipe_, bytes + done, chunk, nullptr, &overlapped)
+                                       : ReadFile(pipe_, bytes + done, chunk, nullptr, &overlapped);
+            if (!started && GetLastError() != ERROR_IO_PENDING) co_return false;
+            // abort() sets the flag before cancelling, so an operation started
+            // after its CancelIoEx is still cancelled here.
+            if (aborted_) CancelIoEx(pipe_, &overlapped);
+            co_await winrt::resume_on_signal(overlapped.hEvent);
+            DWORD transferred = 0;
+            if (!GetOverlappedResult(pipe_, &overlapped, &transferred, FALSE) || transferred == 0) {
+                co_return false;
+            }
+            done += transferred;
+        }
+        co_return true;
+    }
+
+    IAsyncOperation<bool> send(Request request) {
+        co_return co_await transfer(true, request.data(), request.size());
+    }
+
+    template <typename T>
+        requires std::is_trivially_copyable_v<T>
+    IAsyncOperation<bool> receive(T& value) {
+        return transfer(false, &value, sizeof(T));
+    }
+
+    IAsyncOperation<std::uint8_t> query_input_mode(PipeCommand command) {
+        constexpr auto english = static_cast<std::uint8_t>(InputMode::English);
+        if (!ensure_pipe()) co_return english;
+        std::uint8_t raw_mode = 0;
+        if (!co_await send(Request(command)) || !co_await receive(raw_mode)) {
+            disconnect();
+            co_return english;
+        }
+        co_return raw_mode == english ? english : static_cast<std::uint8_t>(InputMode::Chinese);
     }
 };
 

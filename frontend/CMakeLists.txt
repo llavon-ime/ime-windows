@@ -122,7 +122,12 @@ install(TARGETS llavon-ime
 )
 
 if(BUILD_TESTING)
-    add_executable(frontend-engine-worker-tests tests/engine_worker_tests.cpp)
+    add_executable(frontend-engine-worker-tests
+        tests/engine_worker_tests.cpp
+        src/core/composition_controller.cpp
+        src/core/sealed_text.cpp
+        src/engine/engine_worker.cpp)
+    target_include_directories(frontend-engine-worker-tests PRIVATE src)
     target_compile_features(frontend-engine-worker-tests PRIVATE cxx_std_23)
     target_compile_definitions(frontend-engine-worker-tests PRIVATE
         WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
@@ -131,9 +136,48 @@ if(BUILD_TESTING)
     set_target_properties(frontend-engine-worker-tests PROPERTIES
         CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
     target_link_libraries(frontend-engine-worker-tests PRIVATE
-        ole32 reflectcpp::reflectcpp utf8::cpp utf8cpp::utf8cpp)
+        ole32 Microsoft::CppWinRT WindowsApp reflectcpp::reflectcpp utf8::cpp utf8cpp::utf8cpp)
     add_test(NAME frontend-engine-worker COMMAND frontend-engine-worker-tests)
-    set_tests_properties(frontend-engine-worker PROPERTIES TIMEOUT 30)
+    set_tests_properties(frontend-engine-worker PROPERTIES
+        TIMEOUT 30
+        ENVIRONMENT "LLAVON_IME_TABLES_DIR=${CMAKE_SOURCE_DIR}/ime-core/table")
+
+    add_executable(frontend-typing-timing-tests
+        tests/typing_timing_tests.cpp
+        src/core/composition_controller.cpp
+        src/core/sealed_text.cpp
+        src/engine/engine_worker.cpp)
+    target_compile_features(frontend-typing-timing-tests PRIVATE cxx_std_23)
+    target_compile_definitions(frontend-typing-timing-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(frontend-typing-timing-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    set_target_properties(frontend-typing-timing-tests PROPERTIES
+        CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+    target_link_libraries(frontend-typing-timing-tests PRIVATE
+        ole32 Microsoft::CppWinRT WindowsApp reflectcpp::reflectcpp utf8::cpp utf8cpp::utf8cpp)
+    add_test(NAME frontend-typing-timing COMMAND frontend-typing-timing-tests)
+    set_tests_properties(frontend-typing-timing PROPERTIES
+        TIMEOUT 120
+        ENVIRONMENT "LLAVON_IME_TABLES_DIR=${CMAKE_SOURCE_DIR}/ime-core/table")
+
+    add_executable(frontend-key-router-tests
+        tests/key_router_tests.cpp
+        src/tsf/key_router.cpp)
+    target_include_directories(frontend-key-router-tests PRIVATE src)
+    target_compile_features(frontend-key-router-tests PRIVATE cxx_std_23)
+    target_compile_definitions(frontend-key-router-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(frontend-key-router-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    set_target_properties(frontend-key-router-tests PROPERTIES
+        CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+    target_link_libraries(frontend-key-router-tests PRIVATE
+        reflectcpp::reflectcpp utf8::cpp utf8cpp::utf8cpp)
+    add_test(NAME frontend-key-router COMMAND frontend-key-router-tests)
+    set_tests_properties(frontend-key-router PROPERTIES
+        TIMEOUT 30
+        ENVIRONMENT "LLAVON_IME_TABLES_DIR=${CMAKE_SOURCE_DIR}/ime-core/table")
 
     add_executable(frontend-dll-load-tests tests/dll_load_tests.cpp)
     target_compile_features(frontend-dll-load-tests PRIVATE cxx_std_23)

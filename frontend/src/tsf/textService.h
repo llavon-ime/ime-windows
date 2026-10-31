@@ -6,34 +6,38 @@
 #include <winrt/base.h>
 
 #include <chrono>
+#include <map>
 #include <memory>
 #include <optional>
 #include <source_location>
 #include <string>
-#include <variant>
+#include <utility>
 #include <vector>
 
-#include "core/buffer.hpp"
-#include "engine/impl/engine.h"
+#include "core/composition_controller.hpp"
+#include "core/e2e_trace.hpp"
+#include "engine/engine_types.hpp"
+#include "engine/engine_worker.hpp"
 #include "system/sysutil.hpp"
+#include "tsf/key_router.hpp"
 
 namespace tsf {
 
 class CandidateUiController;
 class InputModeLangBarItem;
-class EngineWorker;
+class UiDispatcher;
 
 // clang-format off
-class TextService : 
+class TextService :
     public winrt::implements<
         TextService,
         ITfTextInputProcessor,
-        ITfTextInputProcessorEx, 
+        ITfTextInputProcessorEx,
         ITfThreadMgrEventSink,
-        ITfKeyEventSink, 
-        ITfCompositionSink, 
+        ITfKeyEventSink,
+        ITfCompositionSink,
         ITfTextEditSink,
-        ITfDisplayAttributeProvider>, private module_lock_updater {
+        ITfDisplayAttributeProvider>, private module_lock_updater, private CompositionHost {
     // clang-format on
 public:
     TextService();
@@ -73,22 +77,6 @@ public:
     STDMETHODIMP GetDisplayAttributeInfo(REFGUID guid, ITfDisplayAttributeInfo** ppInfo) override;
 
 private:
-    struct E2eTrace {
-        std::chrono::steady_clock::time_point start;
-        std::chrono::steady_clock::time_point on_key_started;
-        std::chrono::steady_clock::time_point mode_started;
-        std::chrono::steady_clock::time_point mode_finished;
-        std::chrono::steady_clock::time_point ready_started;
-        std::chrono::steady_clock::time_point ready_finished;
-        std::chrono::steady_clock::time_point pre_context_started;
-        std::chrono::steady_clock::time_point pre_context_finished;
-        std::chrono::steady_clock::time_point predict_started;
-        std::chrono::steady_clock::time_point predict_finished;
-        std::uint64_t key = 0;
-        std::uint64_t sequence = 0;
-        bool started_at_on_test = false;
-    };
-
     struct PendingE2eTrace {
         E2eTrace trace;
         std::chrono::steady_clock::time_point edit_request_started;
@@ -99,78 +87,108 @@ private:
         std::chrono::steady_clock::time_point edit_operation_finished;
     };
 
-    struct PendingPrediction {
-        std::uint64_t sequence;
+    // Text left in a document by a sealed composition.
+    struct SealedRange {
         winrt::com_ptr<ITfContext> context;
-        std::vector<BopomofoPos> snapshot;
-        E2eTrace trace;
+        winrt::com_ptr<ITfRange> range;
     };
+
+    // The host ended the composition; its edit cookie and range are valid for
+    // the duration of OnCompositionTerminated only.
+    struct Termination {
+        TfEditCookie cookie;
+        ITfRange* range;
+    };
+
+    // A key decided in OnTestKeyDown, carried out in OnKeyDown.
+    struct TestedKey {
+        WPARAM key = 0;
+        keys::KeyAction action;
+    };
+
+    // DocumentEditor
+    bool run_edit(DocumentId document, std::function<void()> edit) override;
+    // CompositionView
+    std::u16string preceding_text(DocumentId document) override;
+    void render(DocumentId document, const Rendering& rendering, const E2eTrace* trace) override;
+    void commit(DocumentId document) override;
+    void discard(DocumentId document) override;
+    void seal(DocumentId document, std::uint64_t epoch) override;
+    // SealedTextStore
+    std::optional<std::u16string> sealed_text(DocumentId document, std::uint64_t epoch) override;
+    void write_sealed(DocumentId document, std::uint64_t epoch, const std::u16string& text) override;
+    void erase_before_sealed(DocumentId document, std::uint64_t epoch, std::size_t count) override;
+    void release_sealed(DocumentId document, std::uint64_t epoch) override;
+    bool caret_after_sealed(DocumentId document, std::uint64_t epoch) override;
+    // TrainingSink
+    void record_commit(DocumentId document, std::uint64_t epoch, CommitSample sample) override;
+
+    keys::KeyPress key_press(WPARAM wParam, LPARAM lParam) const;
+    keys::KeyContext key_context(ITfContext* context, WPARAM wParam, InputMode mode);
+    bool perform(ITfContext* context, DocumentId document, const keys::KeyPress& press,
+                 const keys::KeyAction& action, E2eTrace& trace);
+    bool perform_candidate_key(ITfContext* context, DocumentId document, const keys::KeyPress& press,
+                               E2eTrace& trace);
 
     void start_engine_worker();
     void stop_engine_worker() noexcept;
-    static LRESULT CALLBACK engine_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-    void on_engine_result();
-    void queue_prediction(ITfContext* context, std::u16string preceding, E2eTrace trace);
-    void invalidate_prediction();
-    bool prediction_is_current(const PendingPrediction& request) const;
+    DocumentId document_of(ITfContext* context);
+    winrt::com_ptr<ITfContext> context_of(DocumentId document) const;
+    void leave_other_document(DocumentId document);
+    InputMode cached_input_mode() const;
 
     HRESULT activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId);
     void deactivate();
     HRESULT handle_com_exception(
         std::source_location location = std::source_location::current()) noexcept;
 
-    HRESULT start_composition(ITfContext* pContext);
-    HRESULT end_composition(ITfContext* pContext);
-    void finish_composition(ITfContext* context, TfEditCookie cookie, bool& private_input_scope);
-    HRESULT discard_composition(ITfContext* pContext);
+    void with_edit_cookie(ITfContext* context, const std::function<void(TfEditCookie)>& edit);
+    void finish_composition(ITfContext* context, TfEditCookie cookie);
+    void erase_composition(ITfContext* context, TfEditCookie cookie);
+    void drop_composition() noexcept;
     HRESULT insert_text(ITfContext* pContext, const std::u16string& text);
-    HRESULT set_composition_text(ITfContext* pContext, const std::u16string& text,
-                                 size_t select_start = std::u16string::npos,
-                                 size_t select_length = 0,
-                                 std::optional<E2eTrace> e2e_trace = std::nullopt);
-    void write_composition_text(ITfContext* context, TfEditCookie cookie,
-                                const std::u16string& text, size_t select_start,
-                                size_t select_length, std::optional<E2eTrace> trace,
+    void write_composition_text(ITfContext* context, TfEditCookie cookie, const Rendering& rendering,
+                                const E2eTrace* trace,
                                 std::chrono::steady_clock::time_point requested);
-    void refresh_composition_after_candidate_finalize(ITfContext* pContext,
-                                                       E2eTrace e2e_trace);
     HRESULT ensure_text_edit_sink(ITfContext* context);
     void unadvise_text_edit_sink() noexcept;
     void show_candidate_list_for_current_input(ITfContext* pContext, bool expand);
-    void show_candidate_list(BopomofoPos& pos, ITfContext* pContext);
+    void show_candidate_list(const BopomofoPos& pos, ITfContext* pContext);
     std::u16string get_pre_composit_context(ITfContext* pContext);
     InputMode read_backend_input_mode();
     InputMode refresh_input_mode_indicator(bool query_backend = true);
     void sync_input_mode_compartments(InputMode mode);
     void refresh_input_settings();
     bool context_accepts_input(ITfContext* context) const;
-    bool composition_belongs_to(ITfContext* context) const;
+    bool composing_in(ITfContext* context) const;
     bool has_composition_state() const;
     void clear_composition_state();
     void record_commit(CommitSample sample, bool private_input_scope,
                        ITfContext* context) noexcept;
     void forget_recent_commit() noexcept;
     void discard_recent_commit(ITfContext* context) noexcept;
-    // Multifunctional shortcut handling
-    std::optional<std::u16string> multifuntional_shortcut(WPARAM wParam);
 
     winrt::com_ptr<ITfThreadMgr> threadMgr;
     TfClientId _tfClientId = TF_CLIENTID_NULL;
     DWORD dwThreadMgrEventSinkCookie = TF_INVALID_COOKIE;
+    // The TSF side of the live composition.
     winrt::com_ptr<ITfComposition> itfComposition;
     winrt::com_ptr<ITfContext> composition_context_;
     llavon::debug::Logger logger_{"frontend"};
     std::unique_ptr<CandidateUiController> candidate_ui_;
     winrt::com_ptr<InputModeLangBarItem> input_mode_lang_bar_item_;
-    CompositionBuffer compositionBuffer;
+    CompositionController controller_{*this};
+    std::unique_ptr<UiDispatcher> ui_dispatcher_;
     std::unique_ptr<EngineWorker> engine_worker_;
-    HWND engine_window_ = nullptr;
-    std::wstring engine_window_class_;
-    std::uint64_t prediction_sequence_ = 0;
-    std::optional<PendingPrediction> pending_prediction_;
-    std::optional<std::uint64_t> pending_commit_sequence_;
-    bool shift_toggle_pending_ = false;
-    bool shift_used_as_modifier_ = false;
+    std::map<DocumentId, winrt::com_ptr<ITfContext>> documents_;
+    std::map<std::uint64_t, SealedRange> sealed_ranges_;
+    // Composition epochs typed into a private (password-like) input scope.
+    std::map<std::uint64_t, bool> private_scopes_;
+    // Set while a TSF edit session runs a controller edit.
+    std::optional<TfEditCookie> edit_cookie_;
+    std::optional<Termination> termination_;
+    keys::KeyState key_state_;
+    std::optional<TestedKey> tested_key_;
     bool full_width_mode_ = false;
     bool shift_space_width_toggle_enabled_ = false;
     std::optional<std::chrono::steady_clock::time_point> key_down_started_at_;
@@ -179,15 +197,10 @@ private:
     DWORD text_edit_sink_cookie_ = TF_INVALID_COOKIE;
     std::optional<PendingE2eTrace> pending_e2e_trace_;
     std::uint64_t next_e2e_sequence_ = 1;
-    std::u16string collection_context_;
-    bool commit_reported_ = false;
-    bool private_input_scope_ = false;
     winrt::com_ptr<ITfContext> recent_commit_context_;
     std::optional<std::chrono::steady_clock::time_point> recent_commit_time_;
     std::u16string recent_commit_tail_;
     std::uint64_t recent_commit_token_ = 0;
-    // Multifunctional shortcut handling
-    bool backtick_used_as_modifier_ = false;
 };
 
 };  // namespace tsf

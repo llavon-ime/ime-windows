@@ -10,7 +10,7 @@
 #include <functional>
 #include <utility>
 
-#include "engine/impl/engine.h"
+#include "engine/engine_types.hpp"
 #include "system/globals.h"
 #include "system/sysutil.hpp"
 

@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -260,6 +261,15 @@ struct BopomofoPos {
     bool manually_selected = false;
     bool compositable = false;
     bool invalid = false;
+    // Set when a backend conversion (not the local table) produced the output.
+    bool model_converted = false;
+    // Stable within a composition; a conversion result finds its entry by id.
+    std::uint64_t id = 0;
+    // Bumped on every user edit of this entry, so results for an older
+    // reading never land on a newer one.
+    std::uint32_t version = 0;
+    // Sequence of the last conversion applied; older results never overwrite it.
+    std::uint64_t converted_by = 0;
     std::vector<char32_t> candidates;
 
     // TODO temp
@@ -356,6 +366,7 @@ public:
         manually_selected = false;
         compositable = true;
         invalid = false;
+        model_converted = false;
         predicted_candidate.reset();
         candidates = {ch};
     }
@@ -408,6 +419,8 @@ public:
         predicted = false;
         conversion_pending = false;
         manually_selected = false;
+        model_converted = false;
+        converted_by = 0;
         predicted_candidate.reset();
         candidates.clear();
 
