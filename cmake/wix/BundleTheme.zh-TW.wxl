@@ -2,15 +2,15 @@
 <WixLocalization Culture="zh-TW" Language="1028" xmlns="http://wixtoolset.org/schemas/v4/wxl">
   <String Id="Caption" Value="[WixBundleName] 安裝程式" />
   <String Id="Title" Value="[WixBundleName]" />
-  <String Id="CheckingForUpdatesLabel" Value="正在檢查安裝狀態" />
-  <String Id="UpdateButton" Value="更新至 [WixStdBAUpdateAvailable]" />
-  <String Id="InstallHeader" Value="選擇安裝項目" />
-  <String Id="InstallMessage" Value="拉風輸入法版本：[WixBundleVersion]" />
-  <String Id="ModelDownloadNotice" Value="安裝程式會驗證已下載的模型；相同模型會直接沿用。LoRA 訓練器可稍後在設定中安裝。" />
-  <String Id="ConfirmCancelMessage" Value="確定要取消嗎？" />
-  <String Id="ExecuteUpgradeRelatedBundleMessage" Value="舊版拉風輸入法" />
-  <String Id="HelpHeader" Value="安裝說明" />
-  <String Id="HelpText" Value="命令：/install、/repair、/uninstall、/layout [目錄]。選項：/passive、/quiet、/norestart、/log。" />
+  <String Id="CheckingForUpdatesLabel" Value="正在檢查更新…" />
+  <String Id="UpdateButton" Value="更新至 [WixStdBAUpdateAvailable] 版" />
+  <String Id="InstallHeader" Value="準備安裝" />
+  <String Id="InstallMessage" Value="版本 [WixBundleVersion]" />
+  <String Id="ModelDownloadNotice" Value="按一下「安裝」即可將拉風輸入法安裝到這部電腦。安裝期間需要網路連線以下載語言模型（約 150 MB）；若電腦上已有相同的模型，將不會重複下載。&#xA;&#xA;LoRA 訓練器為選用元件，可在安裝完成後從設定中安裝。" />
+  <String Id="ConfirmCancelMessage" Value="確定要取消並結束安裝程式嗎？" />
+  <String Id="ExecuteUpgradeRelatedBundleMessage" Value="正在移除舊版本" />
+  <String Id="HelpHeader" Value="命令列參數" />
+  <String Id="HelpText" Value="/install | /repair | /uninstall | /layout [目錄]&#xA;安裝、修復、解除安裝，或在指定目錄建立完整的離線安裝檔。&#xA;&#xA;/passive | /quiet&#xA;僅顯示進度且不提示，或完全不顯示介面。預設會顯示完整介面。&#xA;&#xA;/norestart&#xA;不自動重新啟動電腦。&#xA;&#xA;/log 記錄檔.txt&#xA;將記錄寫入指定的檔案。" />
   <String Id="HelpCloseButton" Value="關閉" />
   <String Id="InstallLicenseLinkText" Value="" />
   <String Id="InstallAcceptCheckbox" Value="" />
@@ -25,49 +25,49 @@
   <String Id="ProgressHeader" Value="正在處理" />
   <String Id="ProgressLayoutHeader" Value="正在建立離線安裝檔" />
   <String Id="ProgressUninstallHeader" Value="正在解除安裝" />
-  <String Id="ProgressCacheHeader" Value="正在準備安裝檔" />
+  <String Id="ProgressCacheHeader" Value="正在準備安裝檔案" />
   <String Id="ProgressInstallHeader" Value="正在安裝" />
   <String Id="ProgressModifyHeader" Value="正在變更安裝" />
   <String Id="ProgressRepairHeader" Value="正在修復" />
   <String Id="ProgressLabel" Value="進度：" />
-  <String Id="OverallProgressPackageText" Value="準備中…" />
+  <String Id="OverallProgressPackageText" Value="正在準備…" />
   <String Id="ProgressCancelButton" Value="取消" />
-  <String Id="ModifyHeader" Value="拉風輸入法已安裝" />
+  <String Id="ModifyHeader" Value="修復或解除安裝" />
   <String Id="ModifyRepairButton" Value="修復" />
   <String Id="ModifyUninstallButton" Value="解除安裝" />
   <String Id="ModifyCancelButton" Value="取消" />
-  <String Id="SuccessHeader" Value="已完成" />
-  <String Id="SuccessCacheHeader" Value="安裝檔已備妥" />
+  <String Id="SuccessHeader" Value="作業完成" />
+  <String Id="SuccessCacheHeader" Value="安裝檔案已準備就緒" />
   <String Id="SuccessInstallHeader" Value="安裝完成" />
-  <String Id="SuccessLayoutHeader" Value="離線安裝檔已備妥" />
+  <String Id="SuccessLayoutHeader" Value="離線安裝檔已建立" />
   <String Id="SuccessModifyHeader" Value="變更完成" />
   <String Id="SuccessRepairHeader" Value="修復完成" />
   <String Id="SuccessUninstallHeader" Value="解除安裝完成" />
   <String Id="SuccessUnsafeUninstallHeader" Value="解除安裝完成" />
   <String Id="SuccessLaunchButton" Value="啟動" />
-  <String Id="SuccessRestartText" Value="需要重新啟動電腦才能完成安裝。" />
-  <String Id="SuccessUninstallRestartText" Value="需要重新啟動電腦才能完成解除安裝。" />
-  <String Id="SuccessModifyRestartText" Value="需要重新啟動電腦才能完成變更。" />
-  <String Id="SuccessRepairRestartText" Value="需要重新啟動電腦才能完成修復。" />
+  <String Id="SuccessRestartText" Value="您必須重新啟動電腦，才能完成安裝。" />
+  <String Id="SuccessUninstallRestartText" Value="您必須重新啟動電腦，才能完成解除安裝。" />
+  <String Id="SuccessModifyRestartText" Value="您必須重新啟動電腦，才能完成變更。" />
+  <String Id="SuccessRepairRestartText" Value="您必須重新啟動電腦，才能完成修復。" />
   <String Id="SuccessRestartButton" Value="重新啟動" />
   <String Id="SuccessCloseButton" Value="關閉" />
-  <String Id="FailureHeader" Value="發生錯誤" />
-  <String Id="FailureCacheHeader" Value="無法準備安裝檔" />
+  <String Id="FailureHeader" Value="作業失敗" />
+  <String Id="FailureCacheHeader" Value="無法準備安裝檔案" />
   <String Id="FailureInstallHeader" Value="安裝失敗" />
   <String Id="FailureLayoutHeader" Value="無法建立離線安裝檔" />
   <String Id="FailureModifyHeader" Value="變更失敗" />
   <String Id="FailureRepairHeader" Value="修復失敗" />
   <String Id="FailureUninstallHeader" Value="解除安裝失敗" />
   <String Id="FailureUnsafeUninstallHeader" Value="解除安裝失敗" />
-  <String Id="FailureHyperlinkLogText" Value="&lt;a href=&quot;#&quot;&gt;查看記錄&lt;/a&gt;" />
-  <String Id="FailureRestartText" Value="需要重新啟動電腦才能還原變更。" />
+  <String Id="FailureHyperlinkLogText" Value="安裝程式因發生問題而無法完成。請排除問題後再試一次。如需詳細資訊，請參閱&lt;a href=&quot;#&quot;&gt;記錄檔&lt;/a&gt;。" />
+  <String Id="FailureRestartText" Value="您必須重新啟動電腦，才能完成復原。" />
   <String Id="FailureRestartButton" Value="重新啟動" />
   <String Id="FailureCloseButton" Value="關閉" />
   <String Id="FilesInUseTitle" Value="檔案使用中" />
   <String Id="FilesInUseLabel" Value="下列應用程式正在使用需要更新的檔案：" />
-  <String Id="FilesInUseNetfxCloseRadioButton" Value="關閉程式" />
-  <String Id="FilesInUseCloseRadioButton" Value="關閉程式，完成後嘗試重新開啟" />
-  <String Id="FilesInUseDontCloseRadioButton" Value="不要關閉程式（稍後需重新啟動電腦）" />
+  <String Id="FilesInUseNetfxCloseRadioButton" Value="關閉應用程式" />
+  <String Id="FilesInUseCloseRadioButton" Value="關閉應用程式，並在完成後嘗試重新開啟" />
+  <String Id="FilesInUseDontCloseRadioButton" Value="不要關閉應用程式（稍後需要重新啟動電腦）" />
   <String Id="FilesInUseRetryButton" Value="重試" />
   <String Id="FilesInUseIgnoreButton" Value="忽略" />
   <String Id="FilesInUseExitButton" Value="結束" />

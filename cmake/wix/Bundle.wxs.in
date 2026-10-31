@@ -2,7 +2,7 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
   <Bundle
-      Name="Llavon IME"
+      Name="拉風輸入法"
       Manufacturer="Llavon IME"
       Version="@LLAVON_IME_VERSION@"
       UpgradeCode="7E4C5A19-9882-4E30-8747-3D1649D13257"
