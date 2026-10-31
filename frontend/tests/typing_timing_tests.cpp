@@ -264,18 +264,27 @@ struct Profile {
     Time spike_high = ms(400);
     Time prefill_high = ms(30);
     Time dispatch_high = ms(2);
-    // Document: share of edits deferred, and by how long at most.
+    // Document: share of edit requests granted a little later instead of at
+    // once, and by how long at most.
     double deferred_edits = 0.5;
     Time defer_high = ms(8);
+    // Share of edit requests the document holds back for a long while, as
+    // Notepad does; keys keep coming meanwhile.
+    double stall = 0.0;
+    Time stall_low = ms(200), stall_high = ms(1500);
     // Kills the backend after this many compositions.
     std::optional<int> kill_after;
 };
 
 // ---- the document ----------------------------------------------------------
+// Follows the TSF contract: the document is read and written only inside an
+// edit session it grants, edits run in the order they were requested, and a
+// grant may come much later than the request. The caret is always at the end.
 
 struct Document {
     std::u16string text;
     std::optional<std::u16string> composition;
+    std::optional<std::uint64_t> composition_epoch;
     struct Range {
         std::size_t start = 0;
         std::size_t length = 0;
@@ -287,14 +296,27 @@ struct Stats {
     std::vector<Time> conversion;  // syllable completed -> first shown converted
     std::vector<Time> sealing;     // sealed -> finished in place
     std::size_t deferred_edits = 0;
+    std::size_t stalls = 0;
     std::size_t held_back = 0;
-    std::size_t sealed_backspaces = 0;  // taken and applied after the conversion
+    std::size_t sealed_backspaces = 0;  // taken and applied in order
     std::size_t app_backspaces = 0;
 };
 
 class Host final : public tsf::CompositionHost {
     // Entry ids are per composition.
     using Syllable = std::pair<std::uint64_t, std::uint64_t>;
+
+    // What a render queued at some moment must show.
+    struct Expectation {
+        std::uint64_t epoch = 0;
+        std::u16string text;
+        std::vector<Syllable> converted;
+    };
+
+    struct Queued {
+        std::function<void()> edit;
+        std::optional<Expectation> expectation;
+    };
 
 public:
     Host(Scheduler& clock, Rng& rng, const Profile& profile) : clock_(clock), rng_(rng), profile_(profile) {}
@@ -304,7 +326,7 @@ public:
     std::vector<std::u16string> committed_answers;
     Stats stats;
 
-    // Key handling, and edit sessions, run synchronously in a session.
+    // Key handling and edit sessions run synchronously on the UI thread.
     void session(const std::function<void()>& body) {
         const bool outer = std::exchange(in_session_, true);
         body();
@@ -320,26 +342,181 @@ public:
         }
     }
 
-    std::u16string preceding_text(DocumentId document) override {
-        require(in_session_, "preceding text read outside a session");
-        return documents[document].text;
+    bool edits_pending(DocumentId document) const {
+        const auto queue = queues_.find(document);
+        return queue != queues_.end() && !queue->second.empty();
     }
 
-    void render(DocumentId document, const tsf::Rendering& rendering, const tsf::E2eTrace*) override {
-        require(in_session_, "rendered outside a session");
+    bool any_edits_pending() const {
+        return std::ranges::any_of(queues_, [](const auto& queue) { return !queue.second.empty(); });
+    }
+
+    // ---- DocumentEditor
+
+    bool run_edit(DocumentId document, std::function<void()> edit) override {
+        queues_[document].push_back({std::move(edit), expectation()});
+        if (editing_ != document) request_grant(document);
+        return true;
+    }
+
+    void erase_before_caret(DocumentId document) override {
+        auto& target = edited(document, "Backspace applied");
+        require(!target.composition, "Backspace applied inside a composition");
+        if (target.text.empty()) return;
+        require_outside_sealed(target, "erased sealed text before it was finished");
+        target.text.pop_back();
+    }
+
+    // ---- CompositionView
+
+    std::u16string preceding_text(DocumentId document, std::uint64_t) override {
+        auto& target = edited(document, "preceding text read");
+        require(!target.composition, "preceding text read while another composition is shown");
+        return target.text;
+    }
+
+    void render(DocumentId document, std::uint64_t epoch, const tsf::Rendering& rendering,
+                const tsf::E2eTrace*) override {
+        auto& target = edited(document, "rendered");
         require(rendering.caret <= rendering.text.size(), "caret outside the composition");
-        std::u16string expected;
-        for (const auto& entry : controller->buffer().entries()) expected += expected_display(entry);
-        require(rendering.text == expected,
-                "shows \"" + utf8(rendering.text) + "\" instead of \"" + utf8(expected) + "\"");
-        documents[document].composition = rendering.text;
-        for (const auto& entry : controller->buffer().entries()) {
-            if (!entry.model_converted) continue;
-            if (const auto completed = completed_.extract({controller->epoch(), entry.id})) {
+        require(!target.composition || target.composition_epoch == epoch, "rendered over another composition");
+        // Either the state the render was queued for, or, for a render made
+        // inside an edit, the state now.
+        auto matched = current_expectation_;
+        if (!matched || matched->epoch != epoch || matched->text != rendering.text) {
+            matched = controller->active() && controller->epoch() == epoch ? expectation() : std::nullopt;
+        }
+        require(matched && matched->text == rendering.text,
+                "shows \"" + utf8(rendering.text) + "\" instead of \"" + (matched ? utf8(matched->text) : "") +
+                    "\"");
+        target.composition = rendering.text;
+        target.composition_epoch = epoch;
+        for (const auto& syllable : matched->converted) {
+            if (const auto completed = completed_.extract(syllable)) {
                 stats.conversion.push_back(clock_.now() - completed.mapped());
                 reported_.insert(completed.key());
             }
         }
+    }
+
+    void commit(DocumentId document, std::uint64_t epoch) override {
+        auto& target = shown(document, epoch, "committed");
+        target.text += *target.composition;
+        end_composition(target);
+    }
+
+    void discard(DocumentId document, std::uint64_t epoch) override {
+        auto& target = edited(document, "discarded");
+        if (!target.composition) return;
+        require(target.composition_epoch == epoch, "discarded another composition");
+        end_composition(target);
+    }
+
+    void seal(DocumentId document, std::uint64_t epoch) override {
+        auto& target = shown(document, epoch, "sealed");
+        target.sealed[epoch] = {target.text.size(), target.composition->size()};
+        target.text += *target.composition;
+        end_composition(target);
+        sealed_at_[epoch] = clock_.now();
+    }
+
+    // ---- SealedTextStore
+
+    std::optional<std::u16string> sealed_text(DocumentId document, std::uint64_t epoch) override {
+        const auto& target = edited(document, "sealed text read");
+        const auto found = target.sealed.find(epoch);
+        if (found == target.sealed.end()) return std::nullopt;
+        return target.text.substr(found->second.start, found->second.length);
+    }
+
+    void write_sealed(DocumentId document, std::uint64_t epoch, const std::u16string& text) override {
+        auto& target = edited(document, "sealed text written");
+        auto& range = sealed_range(target, epoch);
+        target.text.replace(range.start, range.length, text);
+        const auto delta = static_cast<std::ptrdiff_t>(text.size()) - static_cast<std::ptrdiff_t>(range.length);
+        range.length = text.size();
+        move_ranges_after(target, range.start, delta);
+        written_.insert(epoch);
+    }
+
+    void erase_before_sealed(DocumentId document, std::uint64_t epoch, std::size_t count) override {
+        auto& target = edited(document, "text erased");
+        auto& range = sealed_range(target, epoch);
+        const auto erased = std::min(count, range.start);
+        const auto from = range.start - erased;
+        for (const auto& [other_epoch, other] : target.sealed) {
+            require(other_epoch == epoch || other.start + other.length <= from || other.start >= range.start,
+                    "erased into sealed text that was not finished yet");
+        }
+        target.text.erase(from, erased);
+        move_ranges_after(target, from, -static_cast<std::ptrdiff_t>(erased));
+    }
+
+    void release_sealed(DocumentId document, std::uint64_t epoch) override {
+        auto& target = edited(document, "sealed text released");
+        require(target.sealed.erase(epoch) == 1, "sealed text released twice");
+        require(written_.erase(epoch) == 1, "sealed text was left as typed");
+        stats.sealing.push_back(clock_.now() - sealed_at_[epoch]);
+    }
+
+    bool caret_after_sealed(DocumentId document, std::uint64_t epoch) override {
+        const auto& target = edited(document, "caret read");
+        const auto found = target.sealed.find(epoch);
+        return !target.composition && found != target.sealed.end() &&
+               found->second.start + found->second.length == target.text.size();
+    }
+
+    // ---- TrainingSink
+
+    void record_commit(DocumentId document, std::uint64_t, tsf::CommitSample sample) override {
+        edited(document, "commit recorded");
+        committed_answers.push_back(std::move(sample.answer));
+    }
+
+    // ---- the application
+
+    // Backspace the IME left to the application, which acts on it at once.
+    void app_backspace(DocumentId document) {
+        auto& target = documents[document];
+        require(!edits_pending(document), "the application got Backspace ahead of queued edits");
+        require(!target.composition, "the application got Backspace during a composition");
+        if (target.text.empty()) return;
+        require_outside_sealed(target, "the application erased sealed text before it was finished");
+        target.text.pop_back();
+    }
+
+    // The application ends the composition it shows (focus moved, a click).
+    // Like TextService, edits queued for it run first with the host's
+    // cookie, so its text is complete when it is sealed. Returns false when
+    // nothing is shown.
+    bool terminate(DocumentId document) {
+        auto& target = documents[document];
+        if (!target.composition) return false;
+        const auto terminated = target.composition_epoch;
+        session([&] {
+            const auto outer = std::exchange(editing_, document);
+            if (controller->owns(document)) controller->seal();
+            run_queued(document, [&] { return target.composition && target.composition_epoch == terminated; });
+            if (target.composition && target.composition_epoch == terminated) {
+                target.text += *target.composition;
+                end_composition(target);
+            }
+            editing_ = outer;
+        });
+        if (edits_pending(document)) request_grant(document);
+        return true;
+    }
+
+private:
+    // What a render queued now must show, by the behaviour contract.
+    std::optional<Expectation> expectation() {
+        if (!controller->active()) return std::nullopt;
+        Expectation expected{.epoch = controller->epoch()};
+        for (const auto& entry : controller->buffer().entries()) {
+            expected.text += expected_display(entry);
+            if (entry.model_converted) expected.converted.push_back({controller->epoch(), entry.id});
+        }
+        return expected;
     }
 
     // What a syllable must look like (behaviour contract, items 2 and 5).
@@ -366,132 +543,94 @@ public:
         return entry.current();
     }
 
-    void commit(DocumentId document) override {
-        require(in_session_, "committed outside a session");
-        auto& target = documents[document];
-        require(target.composition.has_value(), "committed without a composition");
-        require(*target.composition == controller->buffer().to_string(),
-                "committed text that is not what the document shows");
-        target.text += *target.composition;
+    Document& edited(DocumentId document, const char* what) {
+        require(editing_ == document, std::string(what) + " outside an edit session of its document");
+        return documents[document];
+    }
+
+    Document& shown(DocumentId document, std::uint64_t epoch, const char* what) {
+        auto& target = edited(document, what);
+        require(target.composition && target.composition_epoch == epoch,
+                std::string(what) + " a composition the document does not show");
+        return target;
+    }
+
+    static void end_composition(Document& target) {
         target.composition.reset();
+        target.composition_epoch.reset();
     }
 
-    void discard(DocumentId document) override {
-        require(in_session_, "discarded outside a session");
-        documents[document].composition.reset();
-    }
-
-    void seal(DocumentId document, std::uint64_t epoch) override {
-        require(in_session_, "sealed outside a session");
-        auto& target = documents[document];
-        require(target.composition.has_value(), "sealed without a composition");
-        require(*target.composition == controller->buffer().to_string(),
-                "sealed text that is not what the document shows");
-        target.sealed[epoch] = {target.text.size(), target.composition->size()};
-        target.text += *target.composition;
-        target.composition.reset();
-        sealed_at_[epoch] = clock_.now();
-    }
-
-    std::optional<std::u16string> sealed_text(DocumentId document, std::uint64_t epoch) override {
-        require(in_edit_, "sealed text read outside an edit");
-        const auto& target = documents[document];
-        const auto found = target.sealed.find(epoch);
-        if (found == target.sealed.end()) return std::nullopt;
-        return target.text.substr(found->second.start, found->second.length);
-    }
-
-    void write_sealed(DocumentId document, std::uint64_t epoch, const std::u16string& text) override {
-        require(in_edit_, "sealed text written outside an edit");
-        auto& target = documents[document];
-        auto& range = sealed_range(target, epoch);
-        target.text.replace(range.start, range.length, text);
-        const auto delta = static_cast<std::ptrdiff_t>(text.size()) - static_cast<std::ptrdiff_t>(range.length);
-        range.length = text.size();
-        move_ranges_after(target, range.start, delta);
-        written_.insert(epoch);
-    }
-
-    void erase_before_sealed(DocumentId document, std::uint64_t epoch, std::size_t count) override {
-        require(in_edit_, "text erased outside an edit");
-        auto& target = documents[document];
-        auto& range = sealed_range(target, epoch);
-        const auto erased = std::min(count, range.start);
-        const auto from = range.start - erased;
-        for (const auto& [other_epoch, other] : target.sealed) {
-            require(other_epoch == epoch || other.start + other.length <= from || other.start >= range.start,
-                    "erased into sealed text that was not finished yet");
-        }
-        target.text.erase(from, erased);
-        move_ranges_after(target, from, -static_cast<std::ptrdiff_t>(erased));
-    }
-
-    void release_sealed(DocumentId document, std::uint64_t epoch) override {
-        auto& target = documents[document];
-        require(target.sealed.erase(epoch) == 1, "sealed text released twice");
-        require(written_.erase(epoch) == 1, "sealed text was left as typed");
-        stats.sealing.push_back(clock_.now() - sealed_at_[epoch]);
-    }
-
-    // The caret always sits at the end of the document.
-    bool caret_after_sealed(DocumentId document, std::uint64_t epoch) override {
-        require(in_session_, "caret read outside a session");
-        const auto& target = documents[document];
-        const auto found = target.sealed.find(epoch);
-        return !target.composition && found != target.sealed.end() &&
-               found->second.start + found->second.length == target.text.size();
-    }
-
-    // Backspace the IME left to the application.
-    void app_backspace(DocumentId document) {
-        auto& target = documents[document];
-        require(!target.composition, "the application got Backspace during a composition");
-        if (target.text.empty()) return;
+    static void require_outside_sealed(const Document& target, const std::string& message) {
         for (const auto& [_, range] : target.sealed) {
-            require(range.start + range.length < target.text.size(),
-                    "the application erased sealed text before it was finished");
+            require(range.start + range.length < target.text.size(), message);
         }
-        target.text.pop_back();
     }
 
-    bool run_edit(DocumentId document, std::function<void()> edit) override {
-        auto run = [this, edit = std::move(edit)] {
+    // TSF grants a request made inside an edit session after it; others at
+    // once, a little later, or, when the document holds edits back, much
+    // later.
+    void request_grant(DocumentId document) {
+        if (editing_) {
+            grant_after(document, 0);
+            return;
+        }
+        auto& stalled = stalled_until_[document];
+        if (clock_.now() < stalled) {
+            grant_after(document, stalled - clock_.now());
+        } else if (rng_.chance(profile_.stall)) {
+            ++stats.stalls;
+            stalled = clock_.now() + rng_.between(profile_.stall_low, profile_.stall_high);
+            grant_after(document, stalled - clock_.now());
+        } else if (rng_.chance(profile_.deferred_edits)) {
+            ++stats.deferred_edits;
+            grant_after(document, rng_.between(0, profile_.defer_high));
+        } else {
+            grant(document);
+        }
+    }
+
+    void grant_after(DocumentId document, Time delay) {
+        clock_.post(delay, [this, document] {
             session([&] {
-                const bool outer = std::exchange(in_edit_, true);
-                edit();
-                in_edit_ = outer;
+                if (clock_.now() < stalled_until_[document]) {
+                    grant_after(document, stalled_until_[document] - clock_.now());
+                } else if (editing_) {
+                    grant_after(document, 0);
+                } else {
+                    grant(document);
+                }
             });
-        };
-        // An edit requested while a session is running is queued by TSF; one
-        // requested from a message handler may still be deferred by the app.
-        if (!in_session_ && !rng_.chance(profile_.deferred_edits)) {
-            run();
-            return true;
+        });
+    }
+
+    void grant(DocumentId document) {
+        editing_ = document;
+        run_queued(document, [] { return true; });
+        editing_.reset();
+        // Caught up: the document shows exactly the state.
+        auto& target = documents[document];
+        if (controller->owns(document) && !controller->buffer().empty() && !edits_pending(document)) {
+            require(target.composition && target.composition_epoch == controller->epoch() &&
+                        *target.composition == controller->buffer().to_string(),
+                    "the document did not catch up with the composition: shows \"" +
+                        utf8(target.composition.value_or(u"<none>")) + "\" for epoch " +
+                        std::to_string(target.composition_epoch.value_or(0)) + ", state \"" +
+                        utf8(controller->buffer().to_string()) + "\" epoch " +
+                        std::to_string(controller->epoch()));
         }
-        ++stats.deferred_edits;
-        auto& next = next_edit_[document];
-        next = std::max(next, clock_.now() + rng_.between(0, profile_.defer_high));
-        clock_.post(next - clock_.now(), std::move(run));
-        return true;
     }
 
-    void record_commit(DocumentId, std::uint64_t, tsf::CommitSample sample) override {
-        committed_answers.push_back(std::move(sample.answer));
+    void run_queued(DocumentId document, const std::function<bool()>& more) {
+        while (more()) {
+            auto& queue = queues_[document];
+            if (queue.empty()) return;
+            auto next = std::move(queue.front());
+            queue.pop_front();
+            current_expectation_ = std::move(next.expectation);
+            next.edit();
+            current_expectation_.reset();
+        }
     }
-
-private:
-    Scheduler& clock_;
-    Rng& rng_;
-    const Profile& profile_;
-    bool in_session_ = false;
-    bool in_edit_ = false;
-    std::map<DocumentId, Time> next_edit_;
-    std::map<Syllable, Time> completed_;
-    std::set<Syllable> reported_;
-    // The entry version last shown converted by the model.
-    std::map<Syllable, std::uint32_t> shown_converted_;
-    std::map<std::uint64_t, Time> sealed_at_;
-    std::set<std::uint64_t> written_;
 
     static Document::Range& sealed_range(Document& target, std::uint64_t epoch) {
         const auto found = target.sealed.find(epoch);
@@ -505,6 +644,21 @@ private:
             if (other.start > position) other.start = static_cast<std::size_t>(static_cast<std::ptrdiff_t>(other.start) + delta);
         }
     }
+
+    Scheduler& clock_;
+    Rng& rng_;
+    const Profile& profile_;
+    bool in_session_ = false;
+    std::optional<DocumentId> editing_;
+    std::map<DocumentId, std::deque<Queued>> queues_;
+    std::map<DocumentId, Time> stalled_until_;
+    std::optional<Expectation> current_expectation_;
+    std::map<Syllable, Time> completed_;
+    std::set<Syllable> reported_;
+    // The entry version last shown converted by the model.
+    std::map<Syllable, std::uint32_t> shown_converted_;
+    std::map<std::uint64_t, Time> sealed_at_;
+    std::set<std::uint64_t> written_;
 };
 
 // ---- the simulated backend ---------------------------------------------------
@@ -719,8 +873,9 @@ private:
                 if (profile_.documents > 1 && planned_ < profile_.compositions && rng_.chance(0.6)) {
                     // Sealed by the first key typed in the other document.
                     switch_next_ = true;
-                } else {
-                    controller_.seal();  // the host ended the composition
+                } else if (!host_.terminate(document)) {
+                    // Nothing shown yet for the host to end: focus moved.
+                    controller_.seal();
                 }
                 finish(document);
             }});
@@ -741,12 +896,13 @@ private:
         }
     }
 
-    // Mirrors TextService: Backspace outside a composition erases sealed
-    // text at the caret, or else goes to the application.
+    // Mirrors TextService: Backspace outside a composition goes to the
+    // application only once the document has caught up.
     void backspace(DocumentId document) {
         in_document(document);
-        if (controller_.erase_sealed(document)) {
+        if (controller_.sealed_pending(document) || host_.edits_pending(document)) {
             ++host_.stats.sealed_backspaces;
+            controller_.backspace_in_order(document);
         } else {
             ++host_.stats.app_backspaces;
             host_.app_backspace(document);
@@ -792,6 +948,7 @@ void verify(const Profile& profile, std::uint64_t seed, const Host& host, const 
     require(!controller.active(), where + "a composition was left open");
     require(controller.sealed_count() == 0, where + "sealed text was never finished");
     require(controller.outstanding_conversions() == 0, where + "a conversion never returned");
+    require(!host.any_edits_pending(), where + "edits were left queued");
 
     // Backspaces after Enter act on the finished conversion, as if Enter had
     // waited for it.
@@ -879,12 +1036,12 @@ Time percentile(std::vector<Time> values, double share) {
 
 void report(const char* name, const Stats& stats, std::size_t runs) {
     std::printf("  %-34s runs=%zu syllables=%zu  shown converted p50=%lldms p99=%lldms max=%lldms  "
-                "sealed finished p50=%lldms max=%lldms  deferred edits=%zu  "
+                "sealed finished p50=%lldms max=%lldms  deferred edits=%zu stalls=%zu  "
                 "Backspace after Enter held=%zu passed=%zu\n",
                 name, runs, stats.conversion.size(), percentile(stats.conversion, 0.5) / 1000,
                 percentile(stats.conversion, 0.99) / 1000, percentile(stats.conversion, 1.0) / 1000,
                 percentile(stats.sealing, 0.5) / 1000, percentile(stats.sealing, 1.0) / 1000,
-                stats.deferred_edits, stats.sealed_backspaces, stats.app_backspaces);
+                stats.deferred_edits, stats.stalls, stats.sealed_backspaces, stats.app_backspaces);
 }
 
 void simulate(const Profile& profile, std::uint64_t first_seed, int runs) {
@@ -916,19 +1073,24 @@ void simulate(const Profile& profile, std::uint64_t first_seed, int runs) {
                 next();
             });
         };
-        next();
-        clock.run();
+        try {
+            next();
+            clock.run();
+        } catch (const std::exception& error) {
+            throw std::runtime_error(std::string(profile.name) + " seed " + std::to_string(seed) + ": " + error.what());
+        }
 
         verify(profile, seed, host, controller, typist, alive);
         total.conversion.insert(total.conversion.end(), host.stats.conversion.begin(), host.stats.conversion.end());
         total.sealing.insert(total.sealing.end(), host.stats.sealing.begin(), host.stats.sealing.end());
         total.deferred_edits += host.stats.deferred_edits;
+        total.stalls += host.stats.stalls;
         total.sealed_backspaces += host.stats.sealed_backspaces;
         total.app_backspaces += host.stats.app_backspaces;
     }
 
     report(profile.name, total, static_cast<std::size_t>(runs));
-    if (!profile.kill_after) {
+    if (!profile.kill_after && profile.stall == 0.0) {
         // Bounded by the request ahead of it, its own service time, and the
         // requests of compositions sealed just before.
         const auto bound = 4 * profile.spike_high + profile.prefill_high + profile.defer_high + ms(10);
@@ -971,17 +1133,22 @@ public:
         after(delay, [this] { controller_.enter(1); });
     }
 
-    // sealed: the IME has to take the key and hold it until the conversion.
-    void backspace(Time delay, bool sealed) {
-        after(delay, [this, sealed] {
-            const auto before = text();
-            const bool taken = controller_.erase_sealed(1);
-            require(taken == sealed, sealed ? "Backspace after sealed text went to the application"
-                                            : "Backspace after committed text was taken");
-            if (taken) {
-                require(text() == before, "Backspace changed sealed text before its conversion");
+    // sealed: the IME has to take the key and apply it in order. keeps_text:
+    // the sealed text is not erased completely, so nothing changes until its
+    // conversion lands.
+    void backspace(Time delay, bool sealed, bool keeps_text = false) {
+        after(delay, [this, sealed, keeps_text] {
+            const auto before = visible();
+            const bool held = controller_.sealed_pending(1);
+            require(held || !sealed, "Backspace after sealed text went to the application");
+            if (held || host_.edits_pending(1)) {
+                controller_.backspace_in_order(1);
             } else {
                 host_.app_backspace(1);
+            }
+            if (keeps_text) {
+                require(visible() == before, "Backspace changed sealed text before its conversion: \"" +
+                                                 utf8(before) + "\" -> \"" + utf8(visible()) + "\"");
             }
         });
     }
@@ -1036,13 +1203,17 @@ public:
     std::u16string run() {
         clock_.run();
         require(!controller_.active() && controller_.sealed_count() == 0 &&
-                    controller_.outstanding_conversions() == 0,
+                    controller_.outstanding_conversions() == 0 && !host_.any_edits_pending(),
                 "the script left work unfinished");
         return text();
     }
 
 private:
     std::u16string text() { return host_.documents[1].text; }
+    std::u16string visible() {
+        const auto& document = host_.documents[1];
+        return document.text + document.composition.value_or(std::u16string{});
+    }
 
     Profile profile_;
     Rng rng_{1};
@@ -1077,7 +1248,7 @@ void enter_then_backspace(bool immediate) {
         const auto sentence = script.type({u"ㄋㄧˇ", u"ㄏㄠˇ", u"ㄨㄛˇ"});
         script.enter(ms(5));
         script.expect_pending();
-        script.backspace(ms(5), true);
+        script.backspace(ms(5), true, true);
         const auto text = script.run();
         require(text == drop(oracle(sentence), 1), "Enter, Backspace: reads \"" + utf8(text) + "\"");
     }
@@ -1214,7 +1385,8 @@ void threaded(std::uint64_t seed, bool immediate) {
         host.session([&] { typist.perform(); });
     }
     clock.run_until(clock.now() + ms(5000), [&] {
-        return !controller.active() && controller.sealed_count() == 0 && controller.outstanding_conversions() == 0;
+        return !controller.active() && controller.sealed_count() == 0 && controller.outstanding_conversions() == 0 &&
+               !host.any_edits_pending();
     });
     verify(profile, seed, host, controller, typist, true);
     report(profile.name, host.stats, 1);
@@ -1238,6 +1410,7 @@ int main() {
              .pause = 0.0,
              .quick_enter = 0.8},
             {.name = "backend dies mid-session", .documents = 2, .cut = 0.2, .kill_after = 8},
+            {.name = "document holds edits back", .documents = 2, .cut = 0.2, .stall = 0.03},
         };
         for (const bool immediate : {false, true}) {
             std::printf("%s:\n", mode_name(immediate));

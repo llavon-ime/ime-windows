@@ -6,6 +6,8 @@
 #include <winrt/base.h>
 
 #include <chrono>
+#include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -100,6 +102,12 @@ private:
         ITfRange* range;
     };
 
+    // The edit session running now, and the document it belongs to.
+    struct ActiveEdit {
+        DocumentId document = 0;
+        TfEditCookie cookie = TF_INVALID_COOKIE;
+    };
+
     // A key decided in OnTestKeyDown, carried out in OnKeyDown.
     struct TestedKey {
         WPARAM key = 0;
@@ -108,11 +116,13 @@ private:
 
     // DocumentEditor
     bool run_edit(DocumentId document, std::function<void()> edit) override;
+    void erase_before_caret(DocumentId document) override;
     // CompositionView
-    std::u16string preceding_text(DocumentId document) override;
-    void render(DocumentId document, const Rendering& rendering, const E2eTrace* trace) override;
-    void commit(DocumentId document) override;
-    void discard(DocumentId document) override;
+    std::u16string preceding_text(DocumentId document, std::uint64_t epoch) override;
+    void render(DocumentId document, std::uint64_t epoch, const Rendering& rendering,
+                const E2eTrace* trace) override;
+    void commit(DocumentId document, std::uint64_t epoch) override;
+    void discard(DocumentId document, std::uint64_t epoch) override;
     void seal(DocumentId document, std::uint64_t epoch) override;
     // SealedTextStore
     std::optional<std::u16string> sealed_text(DocumentId document, std::uint64_t epoch) override;
@@ -142,19 +152,24 @@ private:
     HRESULT handle_com_exception(
         std::source_location location = std::source_location::current()) noexcept;
 
-    void with_edit_cookie(ITfContext* context, const std::function<void(TfEditCookie)>& edit);
-    void finish_composition(ITfContext* context, TfEditCookie cookie);
-    void erase_composition(ITfContext* context, TfEditCookie cookie);
+    void request_edits(DocumentId document);
+    void run_edits(DocumentId document, TfEditCookie cookie, std::chrono::steady_clock::time_point requested);
+    void run_queued(DocumentId document, const std::function<bool()>& more);
+    TfEditCookie edit_cookie() const;
+    bool has_queued_edits(DocumentId document) const;
+    void finish_composition(ITfContext* context, TfEditCookie cookie, std::uint64_t epoch);
+    void erase_composition(ITfContext* context, TfEditCookie cookie, std::uint64_t epoch);
     void drop_composition() noexcept;
-    HRESULT insert_text(ITfContext* pContext, const std::u16string& text);
-    void write_composition_text(ITfContext* context, TfEditCookie cookie, const Rendering& rendering,
-                                const E2eTrace* trace,
+    void insert_text(DocumentId document, std::u16string text);
+    void write_composition_text(ITfContext* context, TfEditCookie cookie, std::uint64_t epoch,
+                                const Rendering& rendering, const E2eTrace* trace,
                                 std::chrono::steady_clock::time_point requested);
     HRESULT ensure_text_edit_sink(ITfContext* context);
     void unadvise_text_edit_sink() noexcept;
     void show_candidate_list_for_current_input(ITfContext* pContext, bool expand);
     void show_candidate_list(const BopomofoPos& pos, ITfContext* pContext);
-    std::u16string get_pre_composit_context(ITfContext* pContext);
+    std::u16string get_pre_composit_context(ITfContext* pContext, TfEditCookie cookie,
+                                            std::optional<std::uint64_t> epoch);
     InputMode read_backend_input_mode();
     InputMode refresh_input_mode_indicator(bool query_backend = true);
     void sync_input_mode_compartments(InputMode mode);
@@ -171,9 +186,10 @@ private:
     winrt::com_ptr<ITfThreadMgr> threadMgr;
     TfClientId _tfClientId = TF_CLIENTID_NULL;
     DWORD dwThreadMgrEventSinkCookie = TF_INVALID_COOKIE;
-    // The TSF side of the live composition.
+    // The TSF side of the composition the document shows, and its epoch.
     winrt::com_ptr<ITfComposition> itfComposition;
     winrt::com_ptr<ITfContext> composition_context_;
+    std::optional<std::uint64_t> composition_epoch_;
     llavon::debug::Logger logger_{"frontend"};
     std::unique_ptr<CandidateUiController> candidate_ui_;
     winrt::com_ptr<InputModeLangBarItem> input_mode_lang_bar_item_;
@@ -184,8 +200,9 @@ private:
     std::map<std::uint64_t, SealedRange> sealed_ranges_;
     // Composition epochs typed into a private (password-like) input scope.
     std::map<std::uint64_t, bool> private_scopes_;
-    // Set while a TSF edit session runs a controller edit.
-    std::optional<TfEditCookie> edit_cookie_;
+    // Edits per document, run in order inside the edit sessions it grants.
+    std::map<DocumentId, std::deque<std::function<void()>>> queued_edits_;
+    std::optional<ActiveEdit> active_edit_;
     std::optional<Termination> termination_;
     keys::KeyState key_state_;
     std::optional<TestedKey> tested_key_;

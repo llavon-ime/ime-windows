@@ -133,8 +133,8 @@ KeyAction route(const KeyPress& press, const KeyContext& context) {
     if (!english && key == VK_OEM_3 && plain(modifiers)) {
         return context.backtick_prefix ? KeyAction{action::Compose{u"‵"}} : KeyAction{action::ArmBacktick{}};
     }
-    if (key == VK_BACK && !modifiers.ctrl && !modifiers.alt && !context.composing && context.sealed_text_at_caret) {
-        return action::EraseSealed{};
+    if (key == VK_BACK && !modifiers.ctrl && !modifiers.alt && !context.composing && context.document_behind) {
+        return action::BackspaceInOrder{};
     }
     if (auto text = ctrl_punctuation(key, modifiers)) return action::Compose{std::move(*text)};
     if (!english && context.backtick_prefix) {

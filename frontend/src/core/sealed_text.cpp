@@ -19,18 +19,13 @@ void drop_last_characters(std::u16string& text, std::size_t count) {
 }  // namespace
 
 SealedSegment::SealedSegment(std::uint64_t epoch, DocumentId document, CompositionBuffer buffer,
-                             std::u16string preceding, std::optional<std::uint64_t> awaited)
+                             std::optional<std::u16string> preceding)
     : epoch_(epoch),
       document_(document),
       buffer_(std::move(buffer)),
       preceding_(std::move(preceding)),
-      stage_(Finished{}) {
+      stage_(WaitingForContext{}) {
     shown_ = buffer_.to_string();
-    if (awaited) {
-        stage_ = Converting{*awaited};
-    } else {
-        finish_locally();
-    }
 }
 
 void SealedSegment::merge(std::uint64_t sequence, const std::vector<BopomofoPos>& requested,
@@ -66,30 +61,56 @@ std::size_t SealedSegment::erases_before() const noexcept {
 }
 
 std::u16string SealedSegment::following_context() const {
-    auto context = preceding_;
+    auto context = preceding_.value_or(std::u16string{});
     drop_last_characters(context, erases_before());
     return context + text();
 }
 
 std::optional<CommitSample> SealedSegment::training_sample() const {
     if (erased_ > 0) return std::nullopt;
-    return tsf::training_sample(buffer_, preceding_);
+    return tsf::training_sample(buffer_, preceding_.value_or(std::u16string{}));
 }
 
-void SealedQueue::add(std::uint64_t epoch, DocumentId document, CompositionBuffer buffer, std::u16string preceding,
-                      std::optional<std::uint64_t> in_flight) {
-    if (!in_flight) {
-        if (auto snapshot = buffer.conversion_snapshot()) {
-            in_flight = conversions_.send({.epoch = epoch,
-                                           .revision = snapshot->revision,
-                                           .document = document,
-                                           .snapshot = std::move(snapshot->entries)},
-                                          preceding);
-        }
+void SealedQueue::add(std::uint64_t epoch, DocumentId document, CompositionBuffer buffer,
+                      std::optional<std::u16string> preceding, std::optional<std::uint64_t> in_flight) {
+    auto& segment = segments_.emplace_back(epoch, document, std::move(buffer), std::move(preceding));
+    if (in_flight) {
+        segment.await(*in_flight);
+    } else if (segment.preceding()) {
+        convert(segment);
     }
-    const auto& segment =
-        segments_.emplace_back(epoch, document, std::move(buffer), std::move(preceding), in_flight);
     if (segment.finished()) write_when_possible(document);
+}
+
+void SealedQueue::context_ready(std::uint64_t epoch, std::u16string preceding) {
+    auto* segment = find(epoch);
+    if (!segment) return;
+    segment->set_preceding(std::move(preceding));
+    if (!segment->waiting_for_context()) return;
+    convert(*segment);
+    if (segment->finished()) write_when_possible(segment->document());
+}
+
+void SealedQueue::placed(std::uint64_t epoch) {
+    auto* segment = find(epoch);
+    if (!segment) return;
+    segment->placed();
+    if (segment->finished()) write_when_possible(segment->document());
+}
+
+void SealedQueue::convert(SealedSegment& segment) {
+    auto snapshot = segment.buffer().conversion_snapshot();
+    const auto sequence = snapshot ? conversions_.send({.epoch = segment.epoch(),
+                                                        .revision = snapshot->revision,
+                                                        .document = segment.document(),
+                                                        .snapshot = std::move(snapshot->entries)},
+                                                       *segment.preceding())
+                                   : std::nullopt;
+    if (sequence) {
+        segment.await(*sequence);
+    } else {
+        segment.finish_locally();
+    }
 }
 
 void SealedQueue::on_conversion(std::uint64_t epoch, std::uint64_t sequence,
@@ -114,6 +135,10 @@ std::optional<std::u16string> SealedQueue::context_at_caret(DocumentId document)
     return segment->following_context();
 }
 
+bool SealedQueue::pending(DocumentId document) const noexcept {
+    return std::ranges::contains(segments_, document, &SealedSegment::document);
+}
+
 void SealedQueue::finish_locally() {
     std::vector<DocumentId> documents;
     for (auto& segment : segments_) {
@@ -124,9 +149,6 @@ void SealedQueue::finish_locally() {
 }
 
 void SealedQueue::forget(DocumentId document) {
-    for (const auto& segment : segments_) {
-        if (segment.document() == document) store_.release_sealed(document, segment.epoch());
-    }
     std::erase_if(segments_, [document](const SealedSegment& segment) { return segment.document() == document; });
 }
 
@@ -135,8 +157,12 @@ SealedSegment* SealedQueue::find(std::uint64_t epoch) {
     return found == segments_.end() ? nullptr : &*found;
 }
 
+// Segments sealed by edits still queued behind the running one are not in
+// the document yet.
 SealedSegment* SealedQueue::newest_at_caret(DocumentId document) {
-    const auto newest = std::ranges::find_last(segments_, document, &SealedSegment::document);
+    const auto newest = std::ranges::find_last_if(segments_, [document](const SealedSegment& segment) {
+        return segment.document() == document && segment.in_document();
+    });
     if (newest.empty() || !store_.caret_after_sealed(document, newest.begin()->epoch())) return nullptr;
     return &*newest.begin();
 }
@@ -154,7 +180,7 @@ void SealedQueue::write_finished(DocumentId document) {
             ++segment;
             continue;
         }
-        if (segment->finished() && !(earlier_waiting && segment->erases_before() > 0)) {
+        if (segment->in_document() && segment->finished() && !(earlier_waiting && segment->erases_before() > 0)) {
             write(*segment);
             segment = segments_.erase(segment);
             continue;
