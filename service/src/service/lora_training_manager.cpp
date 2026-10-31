@@ -743,6 +743,7 @@ bool LoraTrainingManager::start_training_async(
         const bool only_selected = options.only_manually_selected;
         const bool train_until_remembered = options.train_until_remembered;
         const bool only_train_incorrect = options.only_train_incorrect;
+        const bool use_candidate_loss = options.use_candidate_loss;
         const bool stabilize_intruders = options.stabilize_intruders;
         const auto base_run_id = options.base_run_id;
         options = LoraTrainingOptions{};
@@ -754,6 +755,7 @@ bool LoraTrainingManager::start_training_async(
         options.only_manually_selected = only_selected;
         options.train_until_remembered = train_until_remembered;
         options.only_train_incorrect = only_train_incorrect;
+        options.use_candidate_loss = use_candidate_loss;
         options.stabilize_intruders = stabilize_intruders;
     }
     if (options.train_until_remembered &&
@@ -1563,6 +1565,7 @@ void LoraTrainingManager::training_worker() {
             bool only_manually_selected;
             bool train_until_remembered;
             bool only_train_incorrect;
+            bool use_candidate_loss;
             bool stabilize_intruders;
             std::int64_t parent_id;
             std::string base_model_fingerprint;
@@ -1606,6 +1609,7 @@ void LoraTrainingManager::training_worker() {
             .only_manually_selected = pending_options_.only_manually_selected,
             .train_until_remembered = pending_options_.train_until_remembered,
             .only_train_incorrect = pending_options_.only_train_incorrect,
+            .use_candidate_loss = pending_options_.use_candidate_loss,
             .stabilize_intruders = pending_options_.stabilize_intruders,
             .parent_id = previous_run ? previous_run->id : 0,
             .base_model_fingerprint = fingerprint,
@@ -1688,6 +1692,9 @@ void LoraTrainingManager::training_worker() {
     }
     if (pending_options_.only_train_incorrect) {
         train_arguments.push_back(L"--only-train-incorrect");
+    }
+    if (!pending_options_.use_candidate_loss) {
+        train_arguments.push_back(L"--no-candidate-loss");
     }
     if (!pending_options_.shuffle) train_arguments.push_back(L"--no-shuffle");
     // auto uses the CUDA runtime when it is installed; trainers released

@@ -56,6 +56,7 @@ struct LoraTrainingOptions {
     bool only_manually_selected = true;
     bool train_until_remembered = false;
     bool only_train_incorrect = false;
+    bool use_candidate_loss = false;
     bool stabilize_intruders = true;
 };
 

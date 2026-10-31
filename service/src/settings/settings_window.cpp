@@ -1469,6 +1469,7 @@ void SettingsWindow::show_lora_training_dialog() {
         ToggleSwitch only_selected_sentences{nullptr};
         ToggleSwitch train_until_remembered{nullptr};
         ToggleSwitch only_train_incorrect{nullptr};
+        ToggleSwitch use_candidate_loss{nullptr};
         ToggleSwitch stabilize_intruders{nullptr};
         StackPanel advanced_settings{nullptr};
         TextBox rank{nullptr};
@@ -1838,6 +1839,7 @@ void SettingsWindow::show_lora_training_dialog() {
     state->only_selected_sentences = named<ToggleSwitch>(dialog_root, L"OnlySelectedSentences");
     state->train_until_remembered = named<ToggleSwitch>(dialog_root, L"TrainUntilRemembered");
     state->only_train_incorrect = named<ToggleSwitch>(dialog_root, L"OnlyTrainIncorrect");
+    state->use_candidate_loss = named<ToggleSwitch>(dialog_root, L"UseCandidateLoss");
     state->stabilize_intruders = named<ToggleSwitch>(dialog_root, L"StabilizeIntruders");
     state->advanced_settings = named<StackPanel>(dialog_root, L"AdvancedTrainingSettings");
     state->rank = named<TextBox>(dialog_root, L"Rank");
@@ -2580,6 +2582,7 @@ void SettingsWindow::show_lora_training_dialog() {
                     .only_manually_selected = state->only_selected_sentences.IsOn(),
                     .train_until_remembered = state->train_until_remembered.IsOn(),
                     .only_train_incorrect = state->only_train_incorrect.IsOn(),
+                    .use_candidate_loss = state->use_candidate_loss.IsOn(),
                     .stabilize_intruders = state->stabilize_intruders.IsOn(),
                 };
 

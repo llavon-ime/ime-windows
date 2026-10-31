@@ -311,6 +311,10 @@
             <ToggleSwitch x:Name="OnlyTrainIncorrect"
                 Header="只訓練錯字"
                 IsOn="False"/>
+            <ToggleSwitch x:Name="UseCandidateLoss"
+                Header="候選表aware loss"
+                IsOn="False"
+                ToolTipService.ToolTip="開啟時只在候選表內計算 loss；關閉時使用完整詞彙表的 cross entropy。"/>
             <Grid ColumnSpacing="8">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>

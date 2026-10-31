@@ -11,6 +11,9 @@ tokenization 與 llama.cpp 推論由 `ime-core` 子模組提供。
   WinUI 3 `Microsoft.UI.Xaml` island。
 - 設定 UI 的呼叫會排入共用的 WinUI STA，絕不會在推論工作執行緒上執行 XAML
   或模型相關工作。
+- 個人化模型的訓練設定提供「候選表aware loss」，預設關閉，使用完整詞彙表的
+  causal cross entropy（傳入 trainer 的 `--no-candidate-loss`）。開啟後改用
+  候選表限制的 loss；此選擇會記錄在每次訓練的參數與歷史詳情中。
 - 模型路徑與推論裝置設定儲存於 `%LOCALAPPDATA%\Llavon IME\settings.json`。
   背景服務在程序啟動時讀取此檔並轉換為 `ime-core::CoreConfig`；在設定視窗中
   變更模型或裝置時，會立即重新載入推論核心。

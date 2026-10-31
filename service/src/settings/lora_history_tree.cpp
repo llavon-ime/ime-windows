@@ -55,6 +55,7 @@ struct TrainingParameters {
     bool only_manually_selected;
     std::optional<bool> train_until_remembered;
     std::optional<bool> only_train_incorrect;
+    std::optional<bool> use_candidate_loss;
     std::optional<bool> stabilize_intruders;
     std::int32_t rank;
     double alpha;
@@ -621,6 +622,12 @@ LoraHistoryTreeView make_lora_history_tree(std::vector<LoraHistoryRunView> runs,
                     parameters->only_train_incorrect.value_or(false)
                         ? L"只訓練錯字：開啟"
                         : L"只訓練錯字：關閉",
+                    12, FontWeights::Normal(), muted));
+                details.Children().Append(text(
+                    // Runs saved before this option always used candidate loss.
+                    parameters->use_candidate_loss.value_or(true)
+                        ? L"候選表aware loss：開啟"
+                        : L"候選表aware loss：關閉",
                     12, FontWeights::Normal(), muted));
                 details.Children().Append(text(
                     parameters->stabilize_intruders.value_or(false)
