@@ -244,9 +244,18 @@ int main(int argc, char* argv[]) {
             std::clog << "[WARN] Vulkan pipeline cache disabled: no directory supplied\n";
         }
         const auto user_settings = llavon::service::load_settings();
+        std::optional<std::u16string> configured_model_path;
         if (service_argc == 1 && !user_settings.model_path.empty()) {
-            config.model_path = resolve_configured_model_path(
-                std::filesystem::path(utf8::utf8to16(user_settings.model_path)));
+            auto configured = utf8::utf8to16(user_settings.model_path);
+            const auto resolved = resolve_configured_model_path(std::filesystem::path(configured));
+            std::error_code error;
+            if (std::filesystem::is_regular_file(resolved, error)) {
+                config.model_path = resolved;
+                configured_model_path = std::move(configured);
+            } else {
+                std::clog << "[WARN] configured model not found, using default model: "
+                          << user_settings.model_path << '\n';
+            }
         }
         config.inference_device = user_settings.inference;
 
@@ -282,8 +291,8 @@ int main(int argc, char* argv[]) {
         std::u16string displayed_model_path;
         if (service_argc != 1) {
             displayed_model_path = config.model_path.u16string();
-        } else if (!user_settings.model_path.empty()) {
-            displayed_model_path = utf8::utf8to16(user_settings.model_path);
+        } else if (configured_model_path) {
+            displayed_model_path = *configured_model_path;
         } else if (environment_path(kModelPathEnv)) {
             displayed_model_path = config.model_path.u16string();
         } else {
