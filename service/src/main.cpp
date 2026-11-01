@@ -312,9 +312,15 @@ int main(int argc, char* argv[]) {
             settings.devices.push_back(device_option(device));
         settings.selected_backend = user_settings.inference.backend;
         settings.selected_device_id = utf8::utf8to16(user_settings.inference.device_id);
-        settings.active_device = device_option(active_inference.device);
-        settings.gpu_offload = active_inference.gpu_offload;
-        settings.fell_back_to_cpu = active_inference.fell_back_to_cpu;
+        const auto active_inference_option =
+            [device_option](const llavon::ime::core::InferenceRuntimeInfo& runtime) {
+                return llavon::settings::ActiveInference{
+                    .device = device_option(runtime.device),
+                    .gpu_offload = runtime.gpu_offload,
+                    .fell_back_to_cpu = runtime.fell_back_to_cpu,
+                };
+            };
+        settings.active_inference = active_inference_option(active_inference);
         settings.model_path = std::move(displayed_model_path);
         settings.base_model_path = installed_base_model_path().u16string();
         for (const auto& name : user_settings.custom_names) {
@@ -326,9 +332,10 @@ int main(int argc, char* argv[]) {
         settings.gpu_boost_enabled = user_settings.gpu_boost_enabled;
         settings.major_update_notifications_enabled =
             user_settings.major_update_notifications_enabled;
-        settings.actions.save_inference = [&server, active_config](
-                                              llavon::settings::InferenceBackend backend,
-                                              std::u16string_view device_id) {
+        settings.actions.apply_inference =
+            [&server, active_config, active_inference_option](
+                llavon::settings::InferenceBackend backend, std::u16string_view device_id)
+            -> std::optional<llavon::settings::ActiveInference> {
             try {
                 llavon::ime::core::InferenceDeviceSelection selection{
                     backend, utf8::utf16to8(device_id)};
@@ -337,16 +344,16 @@ int main(int argc, char* argv[]) {
                     selection.device_id.clear();
                 auto reload_config = *active_config;
                 reload_config.inference_device = selection;
-                (void)server.replace_core(std::move(reload_config));
-                if (!llavon::service::save_inference_settings(selection)) return false;
+                const auto runtime = server.replace_core(std::move(reload_config));
+                if (!llavon::service::save_inference_settings(selection)) return std::nullopt;
                 active_config->inference_device = selection;
-                return true;
+                return active_inference_option(runtime);
             } catch (const std::exception& error) {
                 std::cerr << "[ERR] unable to reload inference core: " << error.what() << '\n';
-                return false;
+                return std::nullopt;
             } catch (...) {
                 std::cerr << "[ERR] unable to reload inference core: unknown error\n";
-                return false;
+                return std::nullopt;
             }
         };
         settings.actions.save_model_path =

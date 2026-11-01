@@ -51,7 +51,8 @@ private:
     void switch_to_default_model();
     void update_default_model_button();
     void update_model_path_save_state();
-    void save_inference_setting();
+    void show_active_inference();
+    void apply_inference_setting();
     void update_inference_save_state();
     void add_custom_name_row(
         std::u16string name = {}, std::vector<std::u16string> readings = {});
@@ -145,8 +146,10 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::Button save_model_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock model_note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock active_device_status_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock active_backend_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::ToolTip active_device_tooltip_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::ComboBox inference_device_{nullptr};
-    winrt::Microsoft::UI::Xaml::Controls::Button save_inference_button_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Button apply_inference_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button update_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock update_status_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button update_install_{nullptr};

@@ -53,6 +53,12 @@ struct InferenceDeviceOption {
     std::uint64_t memory_total = 0;
 };
 
+struct ActiveInference {
+    InferenceDeviceOption device;
+    bool gpu_offload = false;
+    bool fell_back_to_cpu = false;
+};
+
 struct CustomNameOption {
     std::u16string name;
     std::vector<std::u16string> readings;
@@ -61,7 +67,8 @@ struct CustomNameOption {
 // Operations run on their caller's thread. The UI explicitly schedules blocking
 // operations on workers. Returned snapshots own every string and collection.
 struct SettingsActions {
-    std::function<bool(InferenceBackend, std::u16string_view)> save_inference;
+    std::function<std::optional<ActiveInference>(InferenceBackend, std::u16string_view)>
+        apply_inference;
     std::function<bool(const std::filesystem::path&)> save_model_path;
     std::function<bool(const std::filesystem::path&, ModelPreparation)> prepare_model;
     std::function<bool(const std::vector<CustomNameOption>&)> save_custom_names;
@@ -87,9 +94,7 @@ struct SettingsConfiguration {
     std::vector<InferenceDeviceOption> devices;
     InferenceBackend selected_backend = InferenceBackend::automatic;
     std::u16string selected_device_id;
-    InferenceDeviceOption active_device;
-    bool gpu_offload = false;
-    bool fell_back_to_cpu = false;
+    ActiveInference active_inference;
     std::u16string model_path;
     std::u16string base_model_path;
     std::vector<CustomNameOption> custom_names;

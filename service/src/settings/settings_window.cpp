@@ -797,46 +797,10 @@ void SettingsWindow::build_page() {
     model_note_ = named<TextBlock>(shell_, L"ModelNote");
 
     const auto active_row = named<Grid>(shell_, L"ActiveDeviceRow");
-    const auto& active = configuration_.active_device;
-    const std::u16string active_name =
-        !active.description.empty() ? active.description
-                                    : (!active.name.empty() ? active.name : active.device_id);
-    const auto active_name_text = to_hstring(active_name);
     active_device_status_ = named<TextBlock>(shell_, L"ActiveDeviceStatus");
-    active_device_status_.Text(active_name_text);
-    std::u16string active_state = u"使用中 · ";
-    active_state += backend_label(active.backend);
-    named<TextBlock>(shell_, L"ActiveBackend").Text(to_hstring(active_state));
-
-    ToolTip active_tooltip;
-    StackPanel tooltip_content;
-    tooltip_content.Spacing(4);
-    tooltip_content.Children().Append(
-        make_text(active_name_text.c_str(), body_text_size, FontWeights::SemiBold()));
-    std::u16string backend_detail = u"後端：";
-    backend_detail += backend_label(active.backend);
-    const auto backend_detail_text = to_hstring(backend_detail);
-    tooltip_content.Children().Append(make_text(backend_detail_text.c_str(), caption_text_size));
-    if (active.backend != InferenceBackend::cpu && active.memory_total != 0) {
-        std::wostringstream memory;
-        memory << L"顯示記憶體：" << std::fixed << std::setprecision(1)
-               << static_cast<double>(active.memory_total) / 1024.0 / 1024.0 / 1024.0
-               << L" GB";
-        tooltip_content.Children().Append(make_text(memory.str().c_str(), caption_text_size));
-    }
-    if (!active.device_id.empty()) {
-        const std::u16string device_id = u"裝置 ID：" + active.device_id;
-        const auto device_id_text = to_hstring(device_id);
-        tooltip_content.Children().Append(make_text(device_id_text.c_str(), caption_text_size));
-    }
-    const wchar_t* offload = configuration_.gpu_offload ? L"GPU offload：啟用"
-                                                        : L"GPU offload：未啟用";
-    tooltip_content.Children().Append(make_text(offload, caption_text_size));
-    if (configuration_.fell_back_to_cpu) {
-        tooltip_content.Children().Append(
-            make_text(L"偏好裝置目前無法使用，已改用 CPU。", caption_text_size));
-    }
-    active_tooltip.Content(tooltip_content);
+    active_backend_ = named<TextBlock>(shell_, L"ActiveBackend");
+    const ToolTip active_tooltip;
+    active_device_tooltip_ = active_tooltip;
     ToolTipService::SetToolTip(active_row, active_tooltip);
     active_row.PointerEntered([active_tooltip](const auto&, const auto&) {
         active_tooltip.IsOpen(true);
@@ -844,6 +808,7 @@ void SettingsWindow::build_page() {
     active_row.PointerExited([active_tooltip](const auto&, const auto&) {
         active_tooltip.IsOpen(false);
     });
+    show_active_inference();
 
     inference_options_.clear();
     inference_options_.push_back(InferenceDeviceOption{
@@ -902,8 +867,8 @@ void SettingsWindow::build_page() {
     inference_device_.SelectedIndex(selected_index);
     inference_device_.SelectionChanged(
         [this](const auto&, const auto&) { update_inference_save_state(); });
-    save_inference_button_ = named<Button>(shell_, L"SaveInferenceButton");
-    save_inference_button_.Click([this](const auto&, const auto&) { save_inference_setting(); });
+    apply_inference_button_ = named<Button>(shell_, L"ApplyInferenceButton");
+    apply_inference_button_.Click([this](const auto&, const auto&) { apply_inference_setting(); });
     note_ = named<TextBlock>(shell_, L"InferenceNote");
 
     const auto gpu_boost_toggle = named<ToggleSwitch>(shell_, L"GpuBoostToggle");
@@ -3311,8 +3276,51 @@ void SettingsWindow::update_model_path_save_state() {
     }
 }
 
-void SettingsWindow::save_inference_setting() {
-    if (!inference_device_ || !note_ || !configuration_.actions.save_inference) {
+void SettingsWindow::show_active_inference() {
+    if (!active_device_status_ || !active_backend_ || !active_device_tooltip_) return;
+    const auto& runtime = configuration_.active_inference;
+    const auto& active = runtime.device;
+    const std::u16string active_name =
+        !active.description.empty() ? active.description
+                                    : (!active.name.empty() ? active.name : active.device_id);
+    const auto active_name_text = to_hstring(active_name);
+    active_device_status_.Text(active_name_text);
+    std::u16string active_state = u"使用中 · ";
+    active_state += backend_label(active.backend);
+    active_backend_.Text(to_hstring(active_state));
+
+    StackPanel tooltip_content;
+    tooltip_content.Spacing(4);
+    tooltip_content.Children().Append(
+        make_text(active_name_text.c_str(), body_text_size, FontWeights::SemiBold()));
+    std::u16string backend_detail = u"後端：";
+    backend_detail += backend_label(active.backend);
+    const auto backend_detail_text = to_hstring(backend_detail);
+    tooltip_content.Children().Append(make_text(backend_detail_text.c_str(), caption_text_size));
+    if (active.backend != InferenceBackend::cpu && active.memory_total != 0) {
+        std::wostringstream memory;
+        memory << L"顯示記憶體：" << std::fixed << std::setprecision(1)
+               << static_cast<double>(active.memory_total) / 1024.0 / 1024.0 / 1024.0
+               << L" GB";
+        tooltip_content.Children().Append(make_text(memory.str().c_str(), caption_text_size));
+    }
+    if (!active.device_id.empty()) {
+        const std::u16string device_id = u"裝置 ID：" + active.device_id;
+        const auto device_id_text = to_hstring(device_id);
+        tooltip_content.Children().Append(make_text(device_id_text.c_str(), caption_text_size));
+    }
+    const wchar_t* offload = runtime.gpu_offload ? L"GPU offload：啟用"
+                                                 : L"GPU offload：未啟用";
+    tooltip_content.Children().Append(make_text(offload, caption_text_size));
+    if (runtime.fell_back_to_cpu) {
+        tooltip_content.Children().Append(
+            make_text(L"偏好裝置目前無法使用，已改用 CPU。", caption_text_size));
+    }
+    active_device_tooltip_.Content(tooltip_content);
+}
+
+void SettingsWindow::apply_inference_setting() {
+    if (!inference_device_ || !note_ || !configuration_.actions.apply_inference) {
         return;
     }
     const std::int32_t selected_index = inference_device_.SelectedIndex();
@@ -3323,11 +3331,13 @@ void SettingsWindow::save_inference_setting() {
     }
 
     const auto& option = inference_options_[static_cast<std::size_t>(selected_index)];
-    const bool result = configuration_.actions.save_inference(option.backend, option.device_id);
-    if (result) {
+    auto runtime = configuration_.actions.apply_inference(option.backend, option.device_id);
+    if (runtime) {
         configuration_.selected_backend = option.backend;
         configuration_.selected_device_id = option.device_id;
-        save_inference_button_.IsEnabled(false);
+        configuration_.active_inference = std::move(*runtime);
+        show_active_inference();
+        apply_inference_button_.IsEnabled(false);
         note_.Text(L"已套用並儲存");
         note_.Visibility(Visibility::Visible);
     } else {
@@ -3337,11 +3347,11 @@ void SettingsWindow::save_inference_setting() {
 }
 
 void SettingsWindow::update_inference_save_state() {
-    if (!inference_device_ || !save_inference_button_ || !note_) return;
+    if (!inference_device_ || !apply_inference_button_ || !note_) return;
     const std::int32_t selected_index = inference_device_.SelectedIndex();
     if (selected_index < 0 ||
         static_cast<std::size_t>(selected_index) >= inference_options_.size()) {
-        save_inference_button_.IsEnabled(false);
+        apply_inference_button_.IsEnabled(false);
         note_.Visibility(Visibility::Collapsed);
         return;
     }
@@ -3349,9 +3359,9 @@ void SettingsWindow::update_inference_save_state() {
     const auto& option = inference_options_[static_cast<std::size_t>(selected_index)];
     const bool changed = option.backend != configuration_.selected_backend ||
                          option.device_id != configuration_.selected_device_id;
-    save_inference_button_.IsEnabled(changed);
+    apply_inference_button_.IsEnabled(changed);
     if (changed) {
-        note_.Text(L"儲存後立即套用");
+        note_.Text(L"套用後立即生效並保留設定");
         note_.Visibility(Visibility::Visible);
     } else {
         note_.Visibility(Visibility::Collapsed);
@@ -3637,8 +3647,10 @@ void SettingsWindow::close_xaml() noexcept {
     save_model_button_ = nullptr;
     model_note_ = nullptr;
     active_device_status_ = nullptr;
+    active_backend_ = nullptr;
+    active_device_tooltip_ = nullptr;
     inference_device_ = nullptr;
-    save_inference_button_ = nullptr;
+    apply_inference_button_ = nullptr;
     update_button_ = nullptr;
     update_status_ = nullptr;
     update_install_ = nullptr;

@@ -111,9 +111,9 @@
             HorizontalAlignment="Stretch"/>
         <Grid MaxWidth="540"
             HorizontalAlignment="Stretch">
-          <Button x:Name="SaveInferenceButton"
+          <Button x:Name="ApplyInferenceButton"
               Style="{StaticResource AccentButtonStyle}"
-              Content="儲存裝置設定"
+              Content="套用裝置設定"
               MinWidth="132"
               MinHeight="32"
               FontSize="14"

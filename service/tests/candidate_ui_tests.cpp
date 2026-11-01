@@ -44,10 +44,12 @@ llavon::settings::SettingsConfiguration test_configuration(PasswordTestState* st
     const InferenceDeviceOption cpu{
         InferenceBackend::cpu, InferenceDeviceType::cpu, u"cpu", u"CPU", u"CPU", 0};
     config.devices = {cpu};
-    config.active_device = cpu;
+    config.active_inference.device = cpu;
     config.selected_backend = InferenceBackend::cpu;
     config.selected_device_id = u"cpu";
-    config.actions.save_inference = [](InferenceBackend, std::u16string_view) { return true; };
+    config.actions.apply_inference = [cpu](InferenceBackend, std::u16string_view) {
+        return std::optional<ActiveInference>{ActiveInference{.device = cpu}};
+    };
     config.actions.save_model_path = [](const std::filesystem::path&) { return true; };
     config.actions.save_custom_names = [](const std::vector<CustomNameOption>&) { return true; };
     config.actions.save_width_toggle = [](bool) { return true; };
