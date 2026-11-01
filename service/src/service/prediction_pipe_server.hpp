@@ -322,11 +322,15 @@ public:
         gpu_activity_.set_enabled(enabled);
     }
 
+    void ready() noexcept {
+        gpu_activity_.activate();
+    }
+
     llavon::ime::core::Session& acquire(ClientId client_id) {
         if (!core_) {
             throw std::runtime_error("inference core is not loaded");
         }
-        gpu_activity_.activate();
+        ready();
         const auto existing = sessions_.find(client_id);
         if (existing != sessions_.end()) {
             recency_.splice(recency_.begin(), recency_, existing->second.recency);
@@ -392,6 +396,11 @@ private:
 
 using InferenceExecutor = asio::thread_pool::executor_type;
 
+inline asio::awaitable<void> invoke_ready(std::shared_ptr<SessionLru> sessions) {
+    sessions->ready();
+    co_return;
+}
+
 template <typename F>
 using SessionResult = std::invoke_result_t<F&, llavon::ime::core::Session&>;
 
@@ -420,6 +429,10 @@ public:
 
     ClientSession(const ClientSession&) = delete;
     ClientSession& operator=(const ClientSession&) = delete;
+
+    asio::awaitable<void> ready() {
+        co_await asio::co_spawn(inference_, invoke_ready(sessions_), asio::use_awaitable);
+    }
 
     template <typename F>
     asio::awaitable<SessionResult<F>> run(F f) {
@@ -463,10 +476,10 @@ inline asio::awaitable<void> handle_client(
         }
 
         if (command == PipeCommand::Ready) {
-            uint8_t ok = 0;
+            std::uint8_t ok = 0;
             try {
-                co_await client_session.run(
-                    [](llavon::ime::core::Session& session) { session.ready(); });
+                // Boost only: do not acquire a session or run a synthetic decode.
+                co_await client_session.ready();
                 ok = 1;
             } catch (const std::exception& e) {
                 std::cerr << "[ERR] ready: " << e.what() << std::endl;

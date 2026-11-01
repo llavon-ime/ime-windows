@@ -21,8 +21,9 @@ tokenization 與 llama.cpp 推論由 `ime-core` 子模組提供。
   裝置 ID 與 GPU offload 狀態；這份執行階段狀態與「下次啟動時套用」的設定
   分開保存。
 - GPU Boost 預設啟用，可在設定視窗中關閉。在支援的 NVIDIA 或 AMD 驅動程式上，
-  背景服務會在 `Ready` 與 `Predict` 之前啟用 Boost，並在兩秒內都沒有這兩種
-  請求時釋放。關閉此設定後會停止續期正在生效的 Boost，因此它會在原本的兩秒
+  背景服務收到 `Ready`、`Prefill` 或 `Predict` 時會啟用或續期 Boost，並在兩秒內
+  都沒有這些請求時釋放。`Ready` 只處理 Boost，不會建立推論 session 或解碼 token。
+  關閉此設定後會停止續期正在生效的 Boost，因此它會在原本的兩秒
   期限到時失效；此選擇在背景服務重新啟動後仍會保留。
   NVIDIA 使用 NVAPI 低延遲提示，作用於一個與推論 GPU PCI 位址相符的離屏
   D3D11 裝置。AMD 則從系統 OpenCL 驅動程式動態解析
@@ -181,8 +182,10 @@ JSONL 原型資料。
 暖機區段中記錄到一筆 473.767 ms 的請求。實際運作中的背景服務也在其他介於
 3–15 ms 的請求之間，記錄到 603.283 ms 與 764.094 ms 的預測，且每次突增的時間
 幾乎全都落在快取對齊用的 `llama_decode()` 呼叫中。後端插樁重現了這些卡頓，
-原因是 Vulkan 矩陣 pipeline 的延遲建立。閒置時的 `ready()` 暖機只在另一個
-context 中解碼一個 token，並未準備實際輸入所需的小 batch 變體。
+原因是 Vulkan 矩陣 pipeline 的延遲建立。舊版的 `ready()` 暖機只在另一個
+context 中解碼一個 token，並未準備實際輸入所需的小 batch 變體。目前 Windows 的
+`Ready` 只啟動或續期 GPU Boost，不再呼叫 ime-core 的 `Session::ready()`，因此
+不會送出假 token 或配置額外的暖機 context。
 
 核心現在會在載入模型時、開始處理請求之前，一次準備好 Vulkan 推論 pipeline。
 涵蓋小 batch、較大的矩陣 kernel 與已填入資料的 attention 快取，接著清除合成的
