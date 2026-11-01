@@ -280,7 +280,7 @@ inline asio::awaitable<void> write_input_mode(asio::windows::stream_handle& pipe
 class SessionLru final {
 public:
     using ClientId = std::uint64_t;
-    static constexpr std::size_t capacity = 5;
+    static constexpr std::size_t capacity = 1;
 
     SessionLru(asio::any_io_executor executor, std::shared_ptr<llavon::ime::core::Core> core,
                bool gpu_boost_enabled)
