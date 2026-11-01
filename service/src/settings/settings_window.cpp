@@ -845,7 +845,7 @@ void SettingsWindow::build_page() {
         });
     }
     inference_device_ = named<ComboBox>(shell_, L"InferenceDevice");
-    inference_device_.Items().Append(winrt::box_value(L"自動選擇（建議）"));
+    inference_device_.Items().Append(winrt::box_value(L"自動選擇（效能最佳）"));
     inference_device_.Items().Append(winrt::box_value(L"CPU"));
     for (std::size_t index = 2; index < inference_options_.size(); ++index) {
         const auto& option = inference_options_[index];
