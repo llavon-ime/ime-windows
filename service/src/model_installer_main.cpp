@@ -99,6 +99,38 @@ void publish_revision(const std::filesystem::path& root,
     }
 }
 
+bool move_verified_model(const std::filesystem::path& root, std::wstring_view revision,
+                         const std::filesystem::path& destination, std::string_view expected,
+                         std::uint64_t expected_size) {
+    std::error_code error;
+    for (std::filesystem::directory_iterator entry(root, error), end;
+         !error && entry != end; entry.increment(error)) {
+        const std::wstring name = entry->path().filename().native();
+        std::error_code status_error;
+        if (!is_hex(name, 40) ||
+            CompareStringOrdinal(name.data(), static_cast<int>(name.size()), revision.data(),
+                                 static_cast<int>(revision.size()), TRUE) == CSTR_EQUAL ||
+            entry->symlink_status(status_error).type() != std::filesystem::file_type::directory)
+            continue;
+        const auto candidate = entry->path() / model_name;
+        std::error_code candidate_error;
+        if (std::filesystem::symlink_status(candidate, candidate_error).type() !=
+                std::filesystem::file_type::regular ||
+            std::filesystem::file_size(candidate, candidate_error) != expected_size ||
+            candidate_error)
+            continue;
+        try {
+            if (sha256_file(candidate) != expected) continue;
+        } catch (const std::runtime_error&) {
+            continue;
+        }
+        if (MoveFileExW(candidate.c_str(), destination.c_str(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return true;
+    }
+    return false;
+}
+
 void install_model(std::wstring_view revision, std::wstring_view expected_sha,
                    std::uint64_t expected_size) {
     if (!is_hex(revision, 40) || !is_hex(expected_sha, 64) || expected_size == 0)
@@ -128,6 +160,12 @@ void install_model(std::wstring_view revision, std::wstring_view expected_sha,
         std::filesystem::path path;
         ~PartialCleanup() { std::error_code ignored; std::filesystem::remove(path, ignored); }
     } cleanup{partial};
+    if (move_verified_model(root, revision, destination, expected, expected_size)) {
+        publish_revision(root, revision);
+        llavon::service::remove_stale_model_revisions(root, revision);
+        std::wcout << L"Model reused from a previous revision; download skipped.\n";
+        return;
+    }
     std::ofstream output(partial, std::ios::binary | std::ios::trunc);
     if (!output) throw std::runtime_error("unable to create model download");
     const std::wstring url =
