@@ -95,8 +95,9 @@ private:
     const std::vector<std::u16string>& lookup_bopomofo(char32_t character) const;
     void begin_update_check();
     void apply_update_result(UpdateCheckResult result);
-    void begin_update_install();
-    void start_update_download();
+    void begin_update_install(ReleaseChannel channel);
+    void start_update_download(ReleaseChannel channel);
+    void set_update_controls_enabled(bool enabled);
     void apply_update_install_event(UpdateInstallEvent event);
     void deactivate_update_target() noexcept;
     void discard_pending_update_results() noexcept;
@@ -113,7 +114,18 @@ private:
         error,
     };
 
+    struct UpdateChannelRow {
+        winrt::Microsoft::UI::Xaml::Controls::TextBlock status{nullptr};
+        winrt::Microsoft::UI::Xaml::Controls::Button install{nullptr};
+        UpdateStatusTone tone = UpdateStatusTone::secondary;
+        std::optional<SetupAsset> setup;
+    };
+
     void set_update_status_tone(UpdateStatusTone tone);
+    void paint_status_tone(const winrt::Microsoft::UI::Xaml::Controls::TextBlock& status,
+                           UpdateStatusTone tone) const;
+    void show_channel_result(ChannelCheckResult result);
+    UpdateChannelRow& update_row(ReleaseChannel channel) noexcept;
 
     HWND window_ = nullptr;
     HWND island_window_ = nullptr;
@@ -152,7 +164,6 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::Button apply_inference_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button update_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock update_status_{nullptr};
-    winrt::Microsoft::UI::Xaml::Controls::Button update_install_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::StackPanel custom_names_panel_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button add_custom_name_button_{nullptr};
@@ -187,8 +198,9 @@ private:
     std::shared_ptr<UpdateNotificationTarget> update_target_;
     UpdateChecker update_checker_;
     UpdateInstaller update_installer_;
-    std::optional<SetupAsset> available_setup_;
-    bool install_after_check_ = false;
+    UpdateChannelRow stable_update_;
+    UpdateChannelRow rolling_update_;
+    std::optional<ReleaseChannel> install_after_check_;
 };
 
 }  // namespace llavon::settings

@@ -33,7 +33,7 @@
 
 ## 安裝
 
-1. 前往 [最新版本下載頁面](https://github.com/llavon-ime/ime-windows/releases/tag/latest)。
+1. 前往 [穩定版下載頁面](https://github.com/llavon-ime/ime-windows/releases/tag/stable)；想搶先體驗開發中功能，可改用 [滾動發布](https://github.com/llavon-ime/ime-windows/releases/tag/latest)。
 2. 一般使用者下載 `*-setup.exe`；離線或系統管理部署可改用 `.msi`。
 3. 執行安裝程式並依畫面指示完成安裝。安裝程式會下載並驗證預設模型；更新時若
    電腦已有相同且完整的模型，就會略過下載。這是全系統安裝，Windows 可能會
@@ -74,7 +74,7 @@
 
 ## 更新
 
-可在設定視窗中檢查更新，或直接前往[最新版本下載頁面](https://github.com/llavon-ime/ime-windows/releases/tag/latest)下載並執行新版 web installer。
+可在設定視窗中檢查更新，畫面會分別列出穩定版與滾動發布是否有新版本，可自行選擇要更新到哪一個。也可以直接前往[穩定版](https://github.com/llavon-ime/ime-windows/releases/tag/stable)或[滾動發布](https://github.com/llavon-ime/ime-windows/releases/tag/latest)下載頁面，下載並執行新版 web installer。
 
 > [!IMPORTANT]
 > 現階段更新完成後需要重新啟動 Windows，才能確保新版輸入法與相關系統元件完整套用。
@@ -181,7 +181,7 @@
 - 首次打包需要網路，以取得 vcpkg 相依套件與 WiX 工具。
 - `setup.exe` 不包含模型檔，只記錄 Hugging Face 模型的 revision、大小與 SHA-256；安裝時才下載至 `%ProgramData%\Llavon IME\models`，若既有檔案驗證相符則略過下載。
 - LoRA Trainer 同樣不打包。開啟訓練視窗時只會檢查版本，使用者按下安裝後才下載 CPU 版訓練器；要用 NVIDIA 顯示卡訓練，可再另外安裝 CUDA 加速元件（約 3 GB）。Windows 版不提供 ROCm；如果你需要 ROCm 支援，請[開一個 issue](https://github.com/llavon-ime/ime-windows/issues) 讓我知道，我再來補上。
-- 安裝器與 MSI 的內部版號固定為 `1.0.0`，CalVer 只用於 GitHub 發布 tag 與 `latest.json`，因此改版不需要重新 configure。
+- 安裝器與 MSI 的內部版號固定為 `1.0.0`，CalVer 只用於 GitHub 發布 tag 與 `stable.json`／`latest.json`，因此改版不需要重新 configure。
 
 ## 授權
 

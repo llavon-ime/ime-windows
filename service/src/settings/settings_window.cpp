@@ -25,6 +25,7 @@
 #include <fstream>
 #include <format>
 #include <iomanip>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -35,6 +36,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 
@@ -1065,9 +1067,17 @@ void SettingsWindow::build_page() {
         });
     update_button_ = named<Button>(shell_, L"UpdateButton");
     update_button_.Click([this](const auto&, const auto&) { begin_update_check(); });
-    update_install_ = named<Button>(shell_, L"UpdateInstall");
-    update_install_.Click([this](const auto&, const auto&) { begin_update_install(); });
     update_status_ = named<TextBlock>(shell_, L"UpdateStatus");
+    stable_update_.status = named<TextBlock>(shell_, L"StableUpdateStatus");
+    stable_update_.install = named<Button>(shell_, L"StableUpdateInstall");
+    stable_update_.install.Click([this](const auto&, const auto&) {
+        begin_update_install(ReleaseChannel::stable);
+    });
+    rolling_update_.status = named<TextBlock>(shell_, L"RollingUpdateStatus");
+    rolling_update_.install = named<Button>(shell_, L"RollingUpdateInstall");
+    rolling_update_.install.Click([this](const auto&, const auto&) {
+        begin_update_install(ReleaseChannel::rolling);
+    });
     xaml_source_.Content(shell_);
 }
 
@@ -3369,17 +3379,18 @@ void SettingsWindow::update_inference_save_state() {
 }
 
 void SettingsWindow::begin_update_check() {
-    if (!update_button_ || !update_status_ || !update_target_ ||
-        update_installer_.installing()) {
+    if (!update_button_ || !update_status_ || !stable_update_.status ||
+        !rolling_update_.status || !update_target_ || update_installer_.installing()) {
         return;
     }
 
     update_button_.IsEnabled(false);
-    update_status_.Text(L"正在檢查 latest 建置…");
+    update_status_.Text(L"正在檢查更新…");
+    update_status_.Visibility(Visibility::Visible);
     set_update_status_tone(UpdateStatusTone::secondary);
-    available_setup_.reset();
-    if (update_install_) {
-        update_install_.Visibility(Visibility::Collapsed);
+    for (auto* row : {&stable_update_, &rolling_update_}) {
+        row->setup.reset();
+        row->install.Visibility(Visibility::Collapsed);
     }
 
     const auto target = update_target_;
@@ -3396,100 +3407,88 @@ void SettingsWindow::begin_update_check() {
     }
 }
 
+SettingsWindow::UpdateChannelRow& SettingsWindow::update_row(ReleaseChannel channel) noexcept {
+    return channel == ReleaseChannel::stable ? stable_update_ : rolling_update_;
+}
+
+void SettingsWindow::show_channel_result(ChannelCheckResult result) {
+    auto& row = update_row(result.channel);
+    std::wstring text = result.channel == ReleaseChannel::stable ? L"穩定版" : L"滾動版";
+    if (!result.latest_version.empty()) text += L"　" + result.latest_version;
+
+    using Verdict = std::tuple<UpdateStatusTone, const wchar_t*, bool>;
+    const auto [tone, verdict, installable] = [&]() -> Verdict {
+        switch (result.status) {
+            case UpdateCheckStatus::update_available:
+                return {UpdateStatusTone::update_available, L"有新版本", true};
+            case UpdateCheckStatus::up_to_date:
+                return {UpdateStatusTone::success, L"已是最新", false};
+            case UpdateCheckStatus::local_newer:
+                return {UpdateStatusTone::information, L"目前較新", false};
+            case UpdateCheckStatus::development_build:
+                return {UpdateStatusTone::secondary, L"無法比較", true};
+            case UpdateCheckStatus::not_published:
+                return {UpdateStatusTone::secondary, L"尚未發布", false};
+            case UpdateCheckStatus::failed:
+            default:
+                return {UpdateStatusTone::error, L"檢查失敗", false};
+        }
+    }();
+    row.tone = tone;
+    row.status.Text(text + L"　" + verdict);
+    ToolTipService::SetToolTip(
+        row.status, result.error_message.empty()
+                        ? nullptr
+                        : winrt::box_value(winrt::hstring(result.error_message)));
+    if (installable && !result.setup_url.empty()) {
+        row.setup = SetupAsset{
+            std::move(result.setup_url), std::move(result.setup_sha256), result.setup_size};
+        row.install.Visibility(Visibility::Visible);
+    }
+    paint_status_tone(row.status, row.tone);
+}
+
 void SettingsWindow::apply_update_result(UpdateCheckResult result) {
-    const bool install_after_check = std::exchange(install_after_check_, false);
-    if (!update_button_ || !update_status_ || !update_install_ ||
-        update_installer_.installing()) {
+    const auto install_after_check = std::exchange(install_after_check_, std::nullopt);
+    if (!update_button_ || !update_status_ || !stable_update_.status ||
+        !rolling_update_.status || update_installer_.installing()) {
         return;
     }
 
     update_button_.IsEnabled(true);
-    switch (result.status) {
-        case UpdateCheckStatus::update_available: {
-            const std::wstring status =
-                L"有新版本：Build " + std::to_wstring(result.current_build) +
-                L" → " + result.latest_version + L"。";
-            update_status_.Text(status);
-            set_update_status_tone(UpdateStatusTone::update_available);
+    update_status_.Visibility(Visibility::Collapsed);
+    show_channel_result(std::move(result.stable));
+    show_channel_result(std::move(result.rolling));
 
-            if (!result.setup_url.empty()) {
-                available_setup_ = SetupAsset{
-                    std::move(result.setup_url), std::move(result.setup_sha256),
-                    result.setup_size};
-                update_install_.Visibility(Visibility::Visible);
-            } else {
-                update_status_.Text(status + L"此發佈尚未提供內建更新資訊。");
-                update_install_.Visibility(Visibility::Collapsed);
-            }
-            break;
-        }
-        case UpdateCheckStatus::up_to_date: {
-            const std::wstring status =
-                L"已是最新發布：" + result.latest_version + L"；目前安裝 " +
-                build_identity(result.current_version, result.current_build, result.current_commit) +
-                L"。";
-            update_status_.Text(status);
-            set_update_status_tone(UpdateStatusTone::success);
-            update_install_.Visibility(Visibility::Collapsed);
-            break;
-        }
-        case UpdateCheckStatus::local_newer: {
-            const std::wstring status =
-                L"目前 Build " + std::to_wstring(result.current_build) +
-                L" 比 latest Build " + std::to_wstring(result.latest_build) + L" 新。";
-            update_status_.Text(status);
-            set_update_status_tone(UpdateStatusTone::information);
-            update_install_.Visibility(Visibility::Collapsed);
-            break;
-        }
-        case UpdateCheckStatus::development_build: {
-            const std::wstring status =
-                build_identity(result.current_version, result.current_build, result.current_commit) +
-                L" 與 latest " + result.latest_version + L"（" +
-                short_commit(result.latest_commit) + L"）不同，無法判斷新舊。";
-            update_status_.Text(status);
-            set_update_status_tone(UpdateStatusTone::secondary);
-            if (!result.setup_url.empty()) {
-                available_setup_ = SetupAsset{
-                    std::move(result.setup_url), std::move(result.setup_sha256),
-                    result.setup_size};
-                update_install_.Visibility(Visibility::Visible);
-            } else {
-                update_status_.Text(status + L"此發佈尚未提供內建更新資訊。");
-                update_install_.Visibility(Visibility::Collapsed);
-            }
-            break;
-        }
-        case UpdateCheckStatus::failed:
-        default:
-            update_status_.Text(L"無法檢查更新：" + result.error_message);
-            set_update_status_tone(UpdateStatusTone::error);
-            update_install_.Visibility(Visibility::Collapsed);
-            break;
-    }
-
-    if (install_after_check && available_setup_) {
-        start_update_download();
+    if (install_after_check && update_row(*install_after_check).setup) {
+        start_update_download(*install_after_check);
     }
 }
 
-void SettingsWindow::begin_update_install() {
-    if (!available_setup_ || !update_target_ || update_installer_.installing()) return;
+void SettingsWindow::begin_update_install(ReleaseChannel channel) {
+    if (!update_row(channel).setup || !update_target_ || update_installer_.installing()) return;
 
-    install_after_check_ = true;
+    install_after_check_ = channel;
     begin_update_check();
 }
 
-void SettingsWindow::start_update_download() {
-    if (!available_setup_ || !update_target_) return;
+void SettingsWindow::set_update_controls_enabled(bool enabled) {
+    update_button_.IsEnabled(enabled);
+    stable_update_.install.IsEnabled(enabled);
+    rolling_update_.install.IsEnabled(enabled);
+}
 
-    update_button_.IsEnabled(false);
-    update_install_.IsEnabled(false);
+void SettingsWindow::start_update_download(ReleaseChannel channel) {
+    const auto& setup = update_row(channel).setup;
+    if (!setup || !update_target_) return;
+
+    set_update_controls_enabled(false);
     update_status_.Text(L"正在下載更新…");
+    update_status_.Visibility(Visibility::Visible);
     set_update_status_tone(UpdateStatusTone::secondary);
 
     const auto target = update_target_;
-    if (!update_installer_.install_async(*available_setup_, [target](UpdateInstallEvent event) {
+    if (!update_installer_.install_async(*setup, [target](UpdateInstallEvent event) {
             auto pending = std::make_unique<UpdateInstallEvent>(std::move(event));
             std::lock_guard lock(target->mutex);
             if (target->window &&
@@ -3519,8 +3518,7 @@ void SettingsWindow::apply_update_install_event(UpdateInstallEvent event) {
         case UpdateInstallStage::failed:
             update_status_.Text(L"更新失敗：" + event.error);
             set_update_status_tone(UpdateStatusTone::error);
-            update_button_.IsEnabled(true);
-            update_install_.IsEnabled(true);
+            set_update_controls_enabled(true);
             break;
     }
 }
@@ -3587,34 +3585,41 @@ void SettingsWindow::update_theme() {
 
 void SettingsWindow::apply_theme_colors() {
     set_update_status_tone(update_status_tone_);
+    for (const auto* row : {&stable_update_, &rolling_update_}) {
+        paint_status_tone(row->status, row->tone);
+    }
 }
 
 void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
     update_status_tone_ = tone;
-    if (!update_status_) {
+    paint_status_tone(update_status_, tone);
+}
+
+void SettingsWindow::paint_status_tone(const TextBlock& status, UpdateStatusTone tone) const {
+    if (!status) {
         return;
     }
 
     switch (tone) {
         case UpdateStatusTone::update_available:
-            update_status_.Foreground(
+            status.Foreground(
                 dark_theme_ ? solid_brush(96, 205, 255) : solid_brush(0, 95, 184));
             break;
         case UpdateStatusTone::success:
-            update_status_.Foreground(
+            status.Foreground(
                 dark_theme_ ? solid_brush(108, 203, 95) : solid_brush(48, 120, 72));
             break;
         case UpdateStatusTone::information:
-            update_status_.Foreground(
+            status.Foreground(
                 dark_theme_ ? solid_brush(117, 182, 231) : solid_brush(48, 96, 156));
             break;
         case UpdateStatusTone::error:
-            update_status_.Foreground(
+            status.Foreground(
                 dark_theme_ ? solid_brush(255, 153, 164) : solid_brush(180, 54, 54));
             break;
         case UpdateStatusTone::secondary:
         default:
-            update_status_.ClearValue(TextBlock::ForegroundProperty());
+            status.ClearValue(TextBlock::ForegroundProperty());
             break;
     }
 }
@@ -3653,7 +3658,8 @@ void SettingsWindow::close_xaml() noexcept {
     apply_inference_button_ = nullptr;
     update_button_ = nullptr;
     update_status_ = nullptr;
-    update_install_ = nullptr;
+    stable_update_ = {};
+    rolling_update_ = {};
     note_ = nullptr;
     custom_name_rows_.clear();
     custom_names_panel_ = nullptr;

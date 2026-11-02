@@ -7,6 +7,7 @@
 #include <winrt/Windows.Web.Http.h>
 #include <winrt/base.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <compare>
@@ -26,17 +27,35 @@ namespace {
 
 using winrt::Windows::Data::Json::JsonObject;
 using winrt::Windows::Foundation::AsyncStatus;
+using winrt::Windows::Foundation::IAsyncOperationWithProgress;
+using winrt::Windows::Foundation::TimeSpan;
 using winrt::Windows::Foundation::Uri;
 using winrt::Windows::Web::Http::HttpClient;
+using winrt::Windows::Web::Http::HttpProgress;
+using ManifestDownload = IAsyncOperationWithProgress<winrt::hstring, HttpProgress>;
+
+struct ChannelEndpoint {
+    const wchar_t* manifest_url;
+    const wchar_t* release_url;
+};
+
+constexpr ChannelEndpoint endpoint(ReleaseChannel channel) noexcept {
+    switch (channel) {
+        case ReleaseChannel::stable:
+            return {L"https://github.com/llavon-ime/ime-windows/releases/download/stable/stable.json",
+                    L"https://github.com/llavon-ime/ime-windows/releases/tag/stable"};
+        case ReleaseChannel::rolling:
+        default:
+            return {L"https://github.com/llavon-ime/ime-windows/releases/download/latest/latest.json",
+                    L"https://github.com/llavon-ime/ime-windows/releases/tag/latest"};
+    }
+}
 
 constexpr std::uint64_t current_build = LLAVON_IME_BUILD_NUMBER;
 constexpr wchar_t current_commit[] = LLAVON_WIDEN(LLAVON_IME_BUILD_COMMIT);
 constexpr wchar_t current_version[] = LLAVON_WIDEN(LLAVON_IME_VERSION);
-constexpr wchar_t latest_manifest_url[] =
-    L"https://github.com/llavon-ime/ime-windows/releases/download/latest/latest.json";
-constexpr wchar_t latest_release_url[] =
-    L"https://github.com/llavon-ime/ime-windows/releases/tag/latest";
 constexpr auto update_timeout = std::chrono::seconds(2);
+constexpr winrt::hresult http_not_found{static_cast<std::int32_t>(0x80190194)};
 constexpr double largest_exact_json_integer = 9007199254740991.0;
 
 struct CalVersion {
@@ -147,9 +166,14 @@ std::uint64_t json_unsigned(const JsonObject& json, const wchar_t* name) {
     const double value = json.GetNamedNumber(name);
     if (!std::isfinite(value) || value < 0 || value > largest_exact_json_integer ||
         std::floor(value) != value) {
-        throw std::runtime_error("latest.json contains an invalid integer");
+        throw std::runtime_error("release manifest contains an invalid integer");
     }
     return static_cast<std::uint64_t>(value);
+}
+
+std::wstring widen_error(const std::exception& error) {
+    const std::string_view message(error.what());
+    return std::wstring(message.begin(), message.end());
 }
 
 UpdateCheckResult base_result() {
@@ -158,6 +182,107 @@ UpdateCheckResult base_result() {
     result.current_commit = current_commit;
     result.current_version = current_version;
     return result;
+}
+
+ChannelCheckResult failed_channel(ReleaseChannel channel, std::wstring message) {
+    return {.channel = channel,
+            .status = UpdateCheckStatus::failed,
+            .error_message = std::move(message)};
+}
+
+ChannelCheckResult evaluate_manifest(ReleaseChannel channel, const winrt::hstring& body,
+                                     const UpdateCheckResult& installed) {
+    ChannelCheckResult result{.channel = channel};
+    JsonObject manifest{nullptr};
+    if (!JsonObject::TryParse(body, manifest) || !manifest.HasKey(L"schema") ||
+        !manifest.HasKey(L"build") || !manifest.HasKey(L"commit") ||
+        !manifest.HasKey(L"version")) {
+        throw std::runtime_error("release manifest is missing required fields");
+    }
+    if (json_unsigned(manifest, L"schema") != 1) {
+        throw std::runtime_error("release manifest uses an unsupported schema");
+    }
+
+    result.latest_build = json_unsigned(manifest, L"build");
+    const winrt::hstring remote_commit = manifest.GetNamedString(L"commit");
+    result.latest_commit.assign(remote_commit.c_str(), remote_commit.size());
+    const winrt::hstring remote_version = manifest.GetNamedString(L"version");
+    result.latest_version.assign(remote_version.c_str(), remote_version.size());
+    result.release_url = endpoint(channel).release_url;
+    const auto parsed_latest_version = parse_calver(result.latest_version);
+    if (!is_commit_id(result.latest_commit) || result.latest_build == 0 ||
+        !parsed_latest_version) {
+        throw std::runtime_error("release manifest contains invalid build identity");
+    }
+    if (manifest.HasKey(L"major_update")) {
+        const auto major = manifest.GetNamedObject(L"major_update");
+        result.major_update_build = json_unsigned(major, L"build");
+        const winrt::hstring message = major.GetNamedString(L"message");
+        result.major_update_message.assign(message.c_str(), message.size());
+        if (result.major_update_build == 0 ||
+            result.major_update_build > result.latest_build ||
+            result.major_update_message.empty() ||
+            result.major_update_message.size() > 200 ||
+            result.major_update_message.find_first_of(L"\r\n\t") != std::wstring::npos) {
+            throw std::runtime_error("release manifest contains invalid major update metadata");
+        }
+    }
+    // Existing schema-1 releases have no setup field. They remain readable so
+    // development builds can check for updates before the first new release.
+    if (manifest.HasKey(L"setup")) {
+        const auto setup = manifest.GetNamedObject(L"setup");
+        const auto remote_url = setup.GetNamedString(L"url");
+        result.setup_url.assign(remote_url.c_str(), remote_url.size());
+        const auto remote_sha256 = setup.GetNamedString(L"sha256");
+        result.setup_sha256.assign(remote_sha256.c_str(), remote_sha256.size());
+        result.setup_size = json_unsigned(setup, L"size");
+        if (!is_release_setup_url(result.setup_url, result.latest_version) ||
+            !is_sha256(result.setup_sha256) || result.setup_size == 0) {
+            throw std::runtime_error("release manifest contains invalid setup metadata");
+        }
+    }
+
+    // The installed WiX version is fixed; release tags are display metadata.
+    // GitHub run numbers, not installer versions, order published builds.
+    // Stable promotes a rolling build as-is, so both channels share one build order.
+    if (installed.current_build == 0) {
+        result.status = installed.current_commit == result.latest_commit
+                            ? UpdateCheckStatus::up_to_date
+                            : UpdateCheckStatus::development_build;
+    } else if (installed.current_build < result.latest_build) {
+        result.status = UpdateCheckStatus::update_available;
+    } else if (installed.current_build > result.latest_build) {
+        result.status = UpdateCheckStatus::local_newer;
+    } else if (installed.current_commit == result.latest_commit) {
+        result.status = UpdateCheckStatus::up_to_date;
+    } else {
+        throw std::runtime_error("build number matches the release but commit id differs");
+    }
+    return result;
+}
+
+ChannelCheckResult resolve_channel(ReleaseChannel channel, const ManifestDownload& download,
+                                   std::chrono::steady_clock::time_point deadline,
+                                   const UpdateCheckResult& installed) noexcept {
+    try {
+        const auto remaining = std::max(deadline - std::chrono::steady_clock::now(),
+                                        std::chrono::steady_clock::duration::zero());
+        if (download.wait_for(std::chrono::duration_cast<TimeSpan>(remaining)) ==
+            AsyncStatus::Started) {
+            download.Cancel();
+            throw std::runtime_error("update check timed out after 2 seconds");
+        }
+        return evaluate_manifest(channel, download.GetResults(), installed);
+    } catch (const winrt::hresult_error& error) {
+        if (error.code() == http_not_found) {
+            return {.channel = channel, .status = UpdateCheckStatus::not_published};
+        }
+        return failed_channel(channel, std::wstring(error.message()));
+    } catch (const std::exception& error) {
+        return failed_channel(channel, widen_error(error));
+    } catch (...) {
+        return failed_channel(channel, L"unknown update-check error");
+    }
 }
 
 UpdateCheckResult perform_check() {
@@ -172,83 +297,14 @@ UpdateCheckResult perform_check() {
     headers.TryAppendWithoutValidation(L"Cache-Control", L"no-cache, no-store");
     headers.TryAppendWithoutValidation(L"Pragma", L"no-cache");
 
-    const auto operation = client.GetStringAsync(Uri(latest_manifest_url));
-    if (operation.wait_for(update_timeout) == AsyncStatus::Started) {
-        operation.Cancel();
-        throw std::runtime_error("update check timed out after 2 seconds");
-    }
-    const winrt::hstring body = operation.GetResults();
-
-    JsonObject manifest{nullptr};
-    if (!JsonObject::TryParse(body, manifest) || !manifest.HasKey(L"schema") ||
-        !manifest.HasKey(L"build") || !manifest.HasKey(L"commit") ||
-        !manifest.HasKey(L"version")) {
-        throw std::runtime_error("latest.json is missing required fields");
-    }
-    if (json_unsigned(manifest, L"schema") != 1) {
-        throw std::runtime_error("latest.json uses an unsupported schema");
-    }
-
-    result.latest_build = json_unsigned(manifest, L"build");
-    const winrt::hstring remote_commit = manifest.GetNamedString(L"commit");
-    result.latest_commit.assign(remote_commit.c_str(), remote_commit.size());
-    const winrt::hstring remote_version = manifest.GetNamedString(L"version");
-    result.latest_version.assign(remote_version.c_str(), remote_version.size());
-    result.release_url = latest_release_url;
-    const auto parsed_latest_version = parse_calver(result.latest_version);
-    if (!is_commit_id(result.latest_commit) || result.latest_build == 0 ||
-        !parsed_latest_version) {
-        throw std::runtime_error("latest.json contains invalid build identity");
-    }
-    if (manifest.HasKey(L"major_update")) {
-        const auto major = manifest.GetNamedObject(L"major_update");
-        result.major_update_build = json_unsigned(major, L"build");
-        const winrt::hstring message = major.GetNamedString(L"message");
-        result.major_update_message.assign(message.c_str(), message.size());
-        if (result.major_update_build == 0 ||
-            result.major_update_build > result.latest_build ||
-            result.major_update_message.empty() ||
-            result.major_update_message.size() > 200 ||
-            result.major_update_message.find_first_of(L"\r\n\t") != std::wstring::npos) {
-            throw std::runtime_error("latest.json contains invalid major update metadata");
-        }
-    }
-    // Existing schema-1 releases have no setup field. They remain readable so
-    // development builds can check for updates before the first new release.
-    if (manifest.HasKey(L"setup")) {
-        const auto setup = manifest.GetNamedObject(L"setup");
-        const auto remote_url = setup.GetNamedString(L"url");
-        result.setup_url.assign(remote_url.c_str(), remote_url.size());
-        const auto remote_sha256 = setup.GetNamedString(L"sha256");
-        result.setup_sha256.assign(remote_sha256.c_str(), remote_sha256.size());
-        result.setup_size = json_unsigned(setup, L"size");
-        if (!is_release_setup_url(result.setup_url, result.latest_version) ||
-            !is_sha256(result.setup_sha256) || result.setup_size == 0) {
-            throw std::runtime_error("latest.json contains invalid setup metadata");
-        }
-    }
-
-    // The installed WiX version is fixed; release tags are display metadata.
-    // GitHub run numbers, not installer versions, order published builds.
-    if (result.current_build == 0) {
-        result.status = result.current_commit == result.latest_commit
-                            ? UpdateCheckStatus::up_to_date
-                            : UpdateCheckStatus::development_build;
-    } else if (result.current_build < result.latest_build) {
-        result.status = UpdateCheckStatus::update_available;
-    } else if (result.current_build > result.latest_build) {
-        result.status = UpdateCheckStatus::local_newer;
-    } else if (result.current_commit == result.latest_commit) {
-        result.status = UpdateCheckStatus::up_to_date;
-    } else {
-        throw std::runtime_error("build number matches latest but commit id differs");
-    }
+    const auto deadline = std::chrono::steady_clock::now() + update_timeout;
+    const auto stable =
+        client.GetStringAsync(Uri(endpoint(ReleaseChannel::stable).manifest_url));
+    const auto rolling =
+        client.GetStringAsync(Uri(endpoint(ReleaseChannel::rolling).manifest_url));
+    result.stable = resolve_channel(ReleaseChannel::stable, stable, deadline, result);
+    result.rolling = resolve_channel(ReleaseChannel::rolling, rolling, deadline, result);
     return result;
-}
-
-std::wstring widen_error(const std::exception& error) {
-    const std::string_view message(error.what());
-    return std::wstring(message.begin(), message.end());
 }
 
 }  // namespace
@@ -291,20 +347,20 @@ bool UpdateChecker::check_async(Completion completion) {
 }
 
 UpdateCheckResult UpdateChecker::check_now() noexcept {
+    const auto fail_all = [](std::wstring message) {
+        UpdateCheckResult result = base_result();
+        result.stable = failed_channel(ReleaseChannel::stable, message);
+        result.rolling = failed_channel(ReleaseChannel::rolling, std::move(message));
+        return result;
+    };
     try {
         return perform_check();
     } catch (const winrt::hresult_error& error) {
-        UpdateCheckResult result = base_result();
-        result.error_message = error.message();
-        return result;
+        return fail_all(std::wstring(error.message()));
     } catch (const std::exception& error) {
-        UpdateCheckResult result = base_result();
-        result.error_message = widen_error(error);
-        return result;
+        return fail_all(widen_error(error));
     } catch (...) {
-        UpdateCheckResult result = base_result();
-        result.error_message = L"unknown update-check error";
-        return result;
+        return fail_all(L"unknown update-check error");
     }
 }
 

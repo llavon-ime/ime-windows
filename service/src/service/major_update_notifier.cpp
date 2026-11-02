@@ -53,10 +53,11 @@ void MajorUpdateNotifier::run(std::stop_token stop) noexcept {
         }
 
         const auto result = settings::UpdateChecker::check_now();
+        const auto& stable = result.stable;
         if (stop.stop_requested() ||
-            result.status != settings::UpdateCheckStatus::update_available ||
-            result.major_update_build == 0 ||
-            result.current_build >= result.major_update_build) {
+            stable.status != settings::UpdateCheckStatus::update_available ||
+            stable.major_update_build == 0 ||
+            result.current_build >= stable.major_update_build) {
             return;
         }
 
@@ -64,7 +65,7 @@ void MajorUpdateNotifier::run(std::stop_token stop) noexcept {
         auto xml = ToastNotificationManager::GetTemplateContent(ToastTemplateType::ToastText02);
         const auto text = xml.GetElementsByTagName(L"text");
         text.Item(0).AppendChild(xml.CreateTextNode(L"Llavon 輸入法重大更新"));
-        text.Item(1).AppendChild(xml.CreateTextNode(result.major_update_message));
+        text.Item(1).AppendChild(xml.CreateTextNode(stable.major_update_message));
         const auto audio = xml.CreateElement(L"audio");
         audio.SetAttribute(L"silent", L"true");
         xml.DocumentElement().AppendChild(audio);

@@ -1,0 +1,161 @@
+name: Promote Stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Rolling version to promote, e.g. 2026.11.02.1250. Leave empty for the current rolling build.
+        required: false
+        type: string
+      major_update:
+        description: Major update notice shown to stable users (at most 200 characters). Leave empty for none.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ime-windows-promote-stable
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote rolling build to stable
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Promote
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          MAJOR_UPDATE: ${{ inputs.major_update }}
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP "promote-$env:GITHUB_RUN_ID"
+          $source = Join-Path $work 'source'
+          $previous = Join-Path $work 'previous'
+          New-Item -ItemType Directory -Path $source, $previous -Force | Out-Null
+
+          $version = $env:VERSION.Trim() -replace '^v', ''
+          if ($version -eq '') {
+            gh release download latest --pattern latest.json --dir $previous
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not read the current rolling latest.json"
+            }
+            $version = [string](Get-Content -Raw -Encoding utf8 (Join-Path $previous 'latest.json') |
+              ConvertFrom-Json).version
+            Remove-Item (Join-Path $previous 'latest.json')
+          }
+          if ($version -notmatch '^\d{4}\.\d{2}\.\d{2}\.\d+$') {
+            throw "Invalid version: $version"
+          }
+          $releaseTag = "v$version"
+
+          gh release download $releaseTag --pattern latest.json --pattern '*.exe' --pattern '*.msi' --dir $source
+          if ($LASTEXITCODE -ne 0) {
+            throw "$releaseTag does not have a manifest, setup and MSI to promote"
+          }
+          $rolling = Get-Content -Raw -Encoding utf8 (Join-Path $source 'latest.json') | ConvertFrom-Json
+          if ($rolling.version -ne $version -or $null -eq $rolling.setup) {
+            throw "$releaseTag has an unexpected manifest"
+          }
+          $setups = @(Get-ChildItem $source -Filter *.exe)
+          $msis = @(Get-ChildItem $source -Filter *.msi)
+          if ($setups.Count -ne 1 -or $msis.Count -ne 1) {
+            throw "Expected one setup and one MSI in $releaseTag"
+          }
+          $setupSha256 = (Get-FileHash -LiteralPath $setups[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($setupSha256 -ne $rolling.setup.sha256 -or $setups[0].Length -ne [long]$rolling.setup.size) {
+            throw "Setup in $releaseTag does not match its manifest"
+          }
+          $build = [long]$rolling.build
+
+          # Without a new notice, keep the last one so stable users who missed
+          # that release can still be notified.
+          $majorUpdate = $null
+          $notice = $env:MAJOR_UPDATE.Trim()
+          gh release view stable --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release download stable --pattern stable.json --dir $previous
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not download the previous stable.json"
+            }
+            $current = Get-Content -Raw -Encoding utf8 (Join-Path $previous 'stable.json') | ConvertFrom-Json
+            if ($build -lt [long]$current.build) {
+              throw "Stable is already build $($current.build); refusing to move it back to $build"
+            }
+            if ($null -ne $current.major_update) {
+              $majorUpdate = [ordered]@{
+                build = [long]$current.major_update.build
+                message = [string]$current.major_update.message
+              }
+            }
+          }
+          if ($notice -ne '') {
+            if ($notice.Length -gt 200 -or $notice -match '[\r\n\t]') {
+              throw "Major update notice must be one line of at most 200 characters"
+            }
+            $majorUpdate = [ordered]@{ build = $build; message = $notice }
+          }
+
+          $manifest = [ordered]@{
+            schema = 1
+            version = $version
+            build = $build
+            commit = [string]$rolling.commit
+            published_at = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8)).ToString("o")
+            setup = [ordered]@{
+              url = [string]$rolling.setup.url
+              size = [long]$rolling.setup.size
+              sha256 = [string]$rolling.setup.sha256
+            }
+          }
+          if ($null -ne $majorUpdate) {
+            $manifest.major_update = $majorUpdate
+          }
+          $manifestPath = Join-Path $work 'stable.json'
+          [System.IO.File]::WriteAllText(
+            $manifestPath,
+            ($manifest | ConvertTo-Json -Depth 4 -Compress),
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+          $releaseNotes = Get-Content -Raw -Encoding utf8 '.github/release-notes.md'
+          if ($notice -ne '') {
+            $releaseNotes = "## 重大更新`n`n$notice`n`n$releaseNotes"
+          }
+          $releaseNotesPath = Join-Path $work 'release-notes.md'
+          [System.IO.File]::WriteAllText(
+            $releaseNotesPath, $releaseNotes, [System.Text.UTF8Encoding]::new($false))
+
+          gh release edit $releaseTag --prerelease=false --latest=false
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --force stable $rolling.commit
+          git push --force origin refs/tags/stable
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          gh release view stable *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete stable --yes
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+          gh release create stable $setups[0].FullName $msis[0].FullName $manifestPath `
+            --title "Stable Windows build $version" `
+            --notes-file $releaseNotesPath `
+            --latest

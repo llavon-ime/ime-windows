@@ -79,32 +79,37 @@ LoRA Trainer 不打包進安裝檔。CMake 只記錄 LoRA Trainer 子模組的 c
 
 ### 版本號
 
-- CI 以台北時區產生 CalVer：`YYYY.MM.DD.<1000 + GITHUB_RUN_NUMBER>`，用於 GitHub Release tag（`v<CalVer>`）與 `latest.json`。
+- CI 以台北時區產生 CalVer：`YYYY.MM.DD.<1000 + GITHUB_RUN_NUMBER>`，用於 GitHub Release tag（`v<CalVer>`）與 manifest。
 - MSI 與 setup.exe 的內部版本固定為 `1.0.0`，本機改版不需要重新 configure。
+
+### 發布通道
+
+| 通道 | 如何發布 | 浮動 tag | manifest |
+| --- | --- | --- | --- |
+| 滾動發布 | push 到預設分支時自動 build 並發布 | `latest`（標為 pre-release） | `latest.json` |
+| 穩定版 | 手動執行 **Promote Stable** workflow | `stable`（GitHub 標為 Latest） | `stable.json` |
+
+- 穩定版不會重新 build，而是把某個已發布的滾動版原封不動升級：沿用同一份 setup.exe、MSI、build 號與 commit。因此兩個通道的 build 號可以直接比較新舊，用滾動版的使用者不會因為穩定版發布而被誤判為有更新。
+- 在 GitHub 的 Actions 頁面選擇 **Promote Stable** → **Run workflow**，`version` 填要升級的版本（例如 `2026.11.02.1250`），留空則升級目前的滾動版。
+- 不能把穩定版退回比目前更舊的 build。
+- 第一次升級前，設定頁的穩定版會顯示「尚未發布」。
 
 ### 更新流程
 
-1. 設定頁面開啟時讀取 `latest.json`，其中記錄最新版 setup.exe 的網址、大小與 SHA-256。
-2. 使用者按下「立即更新」後，下載至 LocalAppData 並驗證大小與 SHA-256；不符則中止。
+1. 設定頁面開啟時同時讀取 `stable.json` 與 `latest.json`，其中記錄各通道最新版 setup.exe 的網址、大小與 SHA-256，並分別顯示兩個通道的狀態。
+2. 使用者在穩定版或滾動版那一列按下「更新」後，下載至 LocalAppData 並驗證大小與 SHA-256；不符則中止。
 3. 以 `runas` 啟動 setup.exe，帶入 `-quiet -norestart`。Windows 會跳出 UAC，但不會顯示安裝介面。
 
-更新資訊透過 HTTPS 從 GitHub Release 取得，`latest.json` 本身沒有另外簽章。
+更新資訊透過 HTTPS 從 GitHub Release 取得，manifest 本身沒有另外簽章。
 
 ### 重大更新通知
 
-要把某次發布標為重大更新，在主分支**該次發布的最後一筆 commit** 訊息末尾加上 trailer：
+重大更新只會出現在穩定版。執行 **Promote Stable** 時在 `major_update` 欄位填入訊息，即可把這次升級標為重大更新。
 
-```text
-改善輸入法候選字與設定體驗
+- 訊息只能一行、最多 200 字元，CI 會將它寫入 `stable.json` 的 `major_update` 與 Release 說明。
+- 之後沒填訊息的升級會保留最近一次重大更新，讓較晚檢查的舊版仍會收到通知；已經是該版或更新版本的使用者不會收到。
 
-Major-Update: 候選字選取與自訂詞庫已全面更新，請開啟設定頁安裝新版。
-```
-
-- 訊息最多 200 字元，且每次發布只能有一行，CI 會將它寫入 `latest.json` 的 `major_update` 與 Release 說明。
-- 之後的一般發布會保留最近一次重大更新，讓較晚檢查的舊版仍會收到通知；已經是該版或更新版本的使用者不會收到。
-- squash 或 merge 時，記得確認 trailer 仍在最後一筆 commit 的結尾。
-
-後端啟動約 10 分鐘後會在背景檢查一次，若有尚未安裝的重大更新且使用者開啟「更新通知」（預設開啟），就顯示 Windows Toast 通知。通知不會自動安裝。
+後端啟動約 10 分鐘後會在背景檢查一次，若穩定版有尚未安裝的重大更新且使用者開啟「更新通知」（預設開啟），就顯示 Windows Toast 通知。通知不會自動安裝。
 
 Toast 需要安裝程式建立的開始功能表捷徑，直接執行建置目錄裡的服務程式不會顯示通知。目前沒有註冊通知中心需要的 COM 啟用程式，所以通知消失後不一定會留在通知中心。
 
