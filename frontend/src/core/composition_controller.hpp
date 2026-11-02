@@ -55,7 +55,7 @@ public:
     void type_text(DocumentId document, std::u16string_view text, E2eTrace trace = {});
     bool discard_reading(DocumentId document);
     void backspace(DocumentId document, E2eTrace trace = {});
-    void move_caret(DocumentId document, bool forward);
+    void move_caret(DocumentId document, bool forward, bool to_edge = false);
     void enter(DocumentId document, E2eTrace trace = {});
     void escape(DocumentId document);
     // Backspace outside a composition while sealed text may sit at the caret

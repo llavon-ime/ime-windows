@@ -45,7 +45,7 @@ std::u16string text_of(const KeyAction& action) {
             } else if constexpr (requires { value.symbol; }) {
                 return std::u16string(1, value.symbol);
             } else if constexpr (requires { value.forward; }) {
-                return value.forward ? u"forward" : u"back";
+                return std::u16string(value.forward ? u"forward" : u"back") + (value.to_edge ? u" to edge" : u"");
             } else {
                 return {};
             }
@@ -114,12 +114,26 @@ void decisions() {
         {"Escape outside a composition", key(VK_ESCAPE), chinese, PassThrough{}},
         {"Left", key(VK_LEFT), composing, MoveCaret{false}},
         {"Right", key(VK_RIGHT), composing, MoveCaret{true}},
+        {"Home", key(VK_HOME), composing, MoveCaret{.forward = false, .to_edge = true}},
+        {"End", key(VK_END), composing, MoveCaret{.forward = true, .to_edge = true}},
+        {"Home outside a composition", key(VK_HOME), chinese, PassThrough{}},
+        {"Shift+End while composing", key(VK_END, std::nullopt, shift), composing, PassThrough{}},
+        {"Tab while composing", key(VK_TAB), composing, Ignore{}},
+        {"Tab outside a composition", key(VK_TAB), chinese, PassThrough{}},
+        {"Shift+Tab while composing", key(VK_TAB, std::nullopt, shift), composing, Ignore{}},
+        {"Ctrl+Tab while composing", key(VK_TAB, std::nullopt, ctrl), composing, Ignore{}},
+        {"Alt+Tab while composing", key(VK_TAB, std::nullopt, {.alt = true}), composing, PassThrough{}},
+        {"Ctrl+Tab outside a composition", key(VK_TAB, std::nullopt, ctrl), chinese, PassThrough{}},
+        {"Shift+Tab with candidates open", key(VK_TAB, std::nullopt, shift),
+         with(composing, [](auto& c) { c.candidates_open = c.candidates_take_key = true; }), Candidates{}},
+        {"Ctrl+Tab with candidates open", key(VK_TAB, std::nullopt, ctrl),
+         with(composing, [](auto& c) { c.candidates_open = c.candidates_take_key = true; }), Candidates{}},
         {"Down opens candidates", key(VK_DOWN), composing, OpenCandidates{}},
         {"candidate key", key('1', u"1"),
          with(composing, [](auto& c) { c.candidates_open = c.candidates_take_key = true; }), Candidates{}},
         {"Backspace with candidates open", key(VK_BACK),
          with(composing, [](auto& c) { c.candidates_open = true; }), Backspace{}},
-        {"other key with candidates open", key(VK_HOME),
+        {"other key with candidates open", key(VK_INSERT),
          with(composing, [](auto& c) { c.candidates_open = true; }), PassThrough{}},
     };
     for (const auto& test : cases) check(test);

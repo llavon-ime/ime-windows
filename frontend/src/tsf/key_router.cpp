@@ -72,6 +72,9 @@ KeyAction composing_key(const KeyPress& press, const KeyContext& context) {
         case VK_DOWN: return action::OpenCandidates{};
         case VK_LEFT: return action::MoveCaret{false};
         case VK_RIGHT: return action::MoveCaret{true};
+        case VK_HOME: return action::MoveCaret{.forward = false, .to_edge = true};
+        case VK_END: return action::MoveCaret{.forward = true, .to_edge = true};
+        case VK_TAB: return action::Ignore{};
         case VK_SPACE:
             if (context.reading_complete) return action::Compose{context.full_width ? u"　" : u" "};
             break;
@@ -158,8 +161,10 @@ KeyAction route(const KeyPress& press, const KeyContext& context) {
     }
 
     const bool editing = (key == VK_BACK || key == VK_RETURN) && !modifiers.ctrl && !modifiers.alt;
+    // Shift+Tab and Ctrl+Tab act as Tab; Alt+Tab stays with the system.
+    const bool tab = key == VK_TAB && !modifiers.alt;
     const bool modified = is_modifier(key) || modifiers.ctrl || modifiers.alt || modifiers.shift;
-    if (modified && !(context.composing && editing)) return action::PassThrough{};
+    if (modified && !(context.composing && (editing || tab))) return action::PassThrough{};
 
     if (context.composing && context.candidates_open) {
         if (context.candidates_take_key) return action::Candidates{};

@@ -285,7 +285,8 @@ public:
     }
 
     bool can_handle_key(WPARAM wParam) const {
-        return wParam == VK_UP || wParam == VK_DOWN || wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_RETURN ||
+        return wParam == VK_UP || wParam == VK_DOWN || wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_HOME ||
+               wParam == VK_END || wParam == VK_PRIOR || wParam == VK_NEXT || wParam == VK_TAB || wParam == VK_RETURN ||
                wParam == VK_SPACE || wParam == VK_ESCAPE || (wParam >= '1' && wParam <= '9') ||
                (wParam >= VK_NUMPAD1 && wParam <= VK_NUMPAD9);
     }
@@ -317,6 +318,22 @@ public:
             } else {
                 page_next();
             }
+            return CandidateKeyResult::navigated;
+        }
+        if (wParam == VK_HOME || wParam == VK_END) {
+            SetSelection(wParam == VK_HOME ? 0 : static_cast<UINT>(candidates.size() - 1));
+            return CandidateKeyResult::navigated;
+        }
+        if (wParam == VK_PRIOR) {
+            page_prev();
+            return CandidateKeyResult::navigated;
+        }
+        if (wParam == VK_NEXT) {
+            page_next();
+            return CandidateKeyResult::navigated;
+        }
+        if (wParam == VK_TAB) {
+            if (!collapse()) expand();
             return CandidateKeyResult::navigated;
         }
         if (wParam == VK_RETURN || wParam == VK_SPACE) {

@@ -1191,7 +1191,7 @@ bool TextService::perform(ITfContext* context, DocumentId document, const keys::
             },
             [&](const act::MoveCaret& move) {
                 candidate_ui_->hide();
-                controller_.move_caret(document, move.forward);
+                controller_.move_caret(document, move.forward, move.to_edge);
                 return true;
             },
             [&](const act::Backspace&) {
@@ -1212,6 +1212,7 @@ bool TextService::perform(ITfContext* context, DocumentId document, const keys::
                 controller_.escape(document);
                 return true;
             },
+            [](const act::Ignore&) { return true; },
         },
         action);
 }
