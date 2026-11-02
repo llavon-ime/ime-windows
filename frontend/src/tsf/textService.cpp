@@ -633,7 +633,13 @@ void TextService::discard(DocumentId document, std::uint64_t epoch) {
         return;
     }
     const auto context = context_of(document);
-    if (!context || !itfComposition || termination_) {
+    if (termination_) {
+        // Already ended by the host; its text still has to go.
+        if (termination_->range) termination_->range->SetText(termination_->cookie, 0, L"", 0) | win::check();
+        drop_composition();
+        return;
+    }
+    if (!context || !itfComposition) {
         drop_composition();
         return;
     }
@@ -1385,8 +1391,12 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfCompo
     // Input typed before the host ended the composition ends with it, even
     // when the document still shows an earlier composition. Edits queued for
     // the shown composition run now, with the host's cookie, so its text is
-    // complete before it is sealed.
-    if (controller_.owns(document)) controller_.seal();
+    // complete before it is sealed. The unfinished reading ends with it, just
+    // like on a Shift switch (switching input methods ends it this way).
+    if (controller_.owns(document)) {
+        controller_.discard_reading(document);
+        controller_.seal();
+    }
     run_queued(document, [&] { return itfComposition && composition_epoch_ == terminated; });
     drop_composition();
     if (has_queued_edits(document)) request_edits(document);
