@@ -682,8 +682,7 @@ void SettingsWindow::show() noexcept {
     SetForegroundWindow(window_);
     try {
         if (xaml_source_ && !xaml_source_.HasFocus()) {
-            xaml_source_.NavigateFocus(Hosting::XamlSourceFocusNavigationRequest(
-                Hosting::XamlSourceFocusNavigationReason::First));
+            named<ScrollViewer>(shell_, L"PageScrollViewer").Focus(FocusState::Programmatic);
         }
     } catch (...) {
         OutputDebugStringW(L"[settings-ui] unable to focus WinUI island\n");
