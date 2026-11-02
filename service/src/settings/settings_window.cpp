@@ -75,6 +75,8 @@ constexpr wchar_t window_class_name[] = L"LlavonImeSettingsWindow";
 constexpr UINT update_result_message = WM_APP + 10;
 constexpr UINT update_install_message = WM_APP + 11;
 constexpr UINT history_preview_message = WM_APP + 12;
+constexpr int window_width = 860;
+constexpr int window_height = 760;
 constexpr double body_text_size = 14;
 constexpr double caption_text_size = 12;
 constexpr std::size_t training_page_size = 100;
@@ -116,6 +118,39 @@ void show_setup_icon(const Grid& icons, SetupIcon icon) {
 
 SolidColorBrush solid_brush(std::uint8_t red, std::uint8_t green, std::uint8_t blue) {
     return SolidColorBrush(winrt::Windows::UI::Color{255, red, green, blue});
+}
+
+Style settings_style(const wchar_t* key) {
+    return Application::Current().Resources().Lookup(winrt::box_value(key)).as<Style>();
+}
+
+void bind_setting_toggle(const ToggleSwitch& toggle, const TextBlock& failure_note,
+                         bool initial, std::function<bool(bool)> save,
+                         const wchar_t* failure) {
+    auto saved = std::make_shared<bool>(initial);
+    toggle.IsOn(initial);
+    toggle.Toggled([failure_note, saved, save = std::move(save), failure](
+                       const auto& sender, const auto&) {
+        const auto toggle = sender.template as<ToggleSwitch>();
+        const bool enabled = toggle.IsOn();
+        if (enabled == *saved) return;
+        if (save(enabled)) {
+            *saved = enabled;
+            failure_note.Visibility(Visibility::Collapsed);
+            return;
+        }
+        toggle.IsOn(*saved);
+        failure_note.Text(failure);
+        failure_note.Visibility(Visibility::Visible);
+    });
+}
+
+void bind_toggle_state(const ToggleSwitch& toggle, const TextBlock& state) {
+    const auto show = [state](bool on) { state.Text(on ? L"開啟" : L"關閉"); };
+    show(toggle.IsOn());
+    toggle.Toggled([show](const auto& sender, const auto&) {
+        show(sender.template as<ToggleSwitch>().IsOn());
+    });
 }
 
 TextBlock make_text(const wchar_t* value, double size, FontWeight weight = FontWeights::Normal()) {
@@ -608,10 +643,15 @@ bool SettingsWindow::create(HINSTANCE instance) {
     }
 
     window_ = CreateWindowExW(0, window_class_name, L"Llavon 輸入法設定", WS_OVERLAPPEDWINDOW,
-                              CW_USEDEFAULT, CW_USEDEFAULT, 860, 760, nullptr, nullptr, instance, this);
+                              CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, nullptr, nullptr, instance, this);
     if (!window_) {
         return false;
     }
+    const auto dpi = static_cast<int>(GetDpiForWindow(window_));
+    SetWindowPos(window_, nullptr, 0, 0,
+                 MulDiv(window_width, dpi, USER_DEFAULT_SCREEN_DPI),
+                 MulDiv(window_height, dpi, USER_DEFAULT_SCREEN_DPI),
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 
     update_target_ = std::make_shared<UpdateNotificationTarget>();
     update_target_->window = window_;
@@ -651,11 +691,15 @@ void SettingsWindow::show() noexcept {
 }
 
 void SettingsWindow::set_pending_count(std::size_t count) {
-    if (!pending_summary_) return;
-    std::wstring text = L"尚未訓練：";
-    text += std::to_wstring(count);
-    text += L" 筆";
-    pending_summary_.Text(text);
+    pending_count_ = count;
+    refresh_pending_summary();
+}
+
+void SettingsWindow::refresh_pending_summary() {
+    if (!pending_summary_ || !encrypted_recording_) return;
+    pending_summary_.Text(std::format(L"尚未訓練：{} 筆", pending_count_));
+    const bool visible = pending_count_ != 0 || encrypted_recording_.IsOn();
+    pending_summary_.Visibility(visible ? Visibility::Visible : Visibility::Collapsed);
 }
 
 void SettingsWindow::hide() const noexcept {
@@ -798,19 +842,16 @@ void SettingsWindow::build_page() {
     save_model_button_.Click([this](const auto&, const auto&) { save_model_path(); });
     model_note_ = named<TextBlock>(shell_, L"ModelNote");
 
-    const auto active_row = named<Grid>(shell_, L"ActiveDeviceRow");
-    active_device_status_ = named<TextBlock>(shell_, L"ActiveDeviceStatus");
-    active_backend_ = named<TextBlock>(shell_, L"ActiveBackend");
+    active_device_ = named<TextBlock>(shell_, L"ActiveDevice");
     const ToolTip active_tooltip;
     active_device_tooltip_ = active_tooltip;
-    ToolTipService::SetToolTip(active_row, active_tooltip);
-    active_row.PointerEntered([active_tooltip](const auto&, const auto&) {
+    ToolTipService::SetToolTip(active_device_, active_tooltip);
+    active_device_.PointerEntered([active_tooltip](const auto&, const auto&) {
         active_tooltip.IsOpen(true);
     });
-    active_row.PointerExited([active_tooltip](const auto&, const auto&) {
+    active_device_.PointerExited([active_tooltip](const auto&, const auto&) {
         active_tooltip.IsOpen(false);
     });
-    show_active_inference();
 
     inference_options_.clear();
     inference_options_.push_back(InferenceDeviceOption{
@@ -847,6 +888,7 @@ void SettingsWindow::build_page() {
         });
     }
     inference_device_ = named<ComboBox>(shell_, L"InferenceDevice");
+    show_active_inference();
     inference_device_.Items().Append(winrt::box_value(L"自動選擇（效能最佳）"));
     inference_device_.Items().Append(winrt::box_value(L"CPU"));
     for (std::size_t index = 2; index < inference_options_.size(); ++index) {
@@ -873,89 +915,31 @@ void SettingsWindow::build_page() {
     apply_inference_button_.Click([this](const auto&, const auto&) { apply_inference_setting(); });
     note_ = named<TextBlock>(shell_, L"InferenceNote");
 
-    const auto gpu_boost_toggle = named<ToggleSwitch>(shell_, L"GpuBoostToggle");
-    auto saved_gpu_boost = std::make_shared<bool>(configuration_.gpu_boost_enabled);
-    auto updating_gpu_boost = std::make_shared<bool>(false);
-    gpu_boost_toggle.IsOn(*saved_gpu_boost);
-    const auto gpu_boost_note = named<TextBlock>(shell_, L"GpuBoostNote");
-    gpu_boost_toggle.Toggled(
-        [this, gpu_boost_note, saved_gpu_boost, updating_gpu_boost](
-            const auto& sender, const auto&) {
-            if (*updating_gpu_boost) return;
-            const auto toggle = sender.template as<ToggleSwitch>();
-            const bool enabled = toggle.IsOn();
-            if (enabled == *saved_gpu_boost) return;
-            const bool result = configuration_.actions.save_gpu_boost
-                                    ? configuration_.actions.save_gpu_boost(enabled)
-                                    : false;
-            if (result) {
-                *saved_gpu_boost = enabled;
-                gpu_boost_note.Text(enabled
-                    ? L"已儲存；下次 GPU 推論時啟用。"
-                    : L"已儲存；目前的 Boost 會在約 2 秒內結束。");
-            } else {
-                *updating_gpu_boost = true;
-                toggle.IsOn(*saved_gpu_boost);
-                *updating_gpu_boost = false;
-                gpu_boost_note.Text(L"無法儲存 GPU Boost 設定，請稍後再試。");
-            }
-            gpu_boost_note.Visibility(Visibility::Visible);
-        });
-
-    const auto full_width_toggle = named<ToggleSwitch>(shell_, L"FullWidthToggle");
-    auto saved_full_width =
-        std::make_shared<bool>(configuration_.shift_space_width_toggle_enabled);
-    auto updating_full_width = std::make_shared<bool>(false);
-    full_width_toggle.IsOn(*saved_full_width);
-    const auto full_width_note = named<TextBlock>(shell_, L"FullWidthNote");
-    full_width_toggle.Toggled(
-        [this, full_width_note, saved_full_width, updating_full_width](
-            const auto& sender, const auto&) {
-            if (*updating_full_width) return;
-            const auto toggle = sender.template as<ToggleSwitch>();
-            const bool enabled = toggle.IsOn();
-            if (enabled == *saved_full_width) return;
-            const bool result = configuration_.actions.save_width_toggle
-                                    ? configuration_.actions.save_width_toggle(enabled)
-                                    : false;
-            if (result) {
-                *saved_full_width = enabled;
-                full_width_note.Text(L"已儲存；切回輸入中的應用程式後套用。");
-            } else {
-                *updating_full_width = true;
-                toggle.IsOn(*saved_full_width);
-                *updating_full_width = false;
-                full_width_note.Text(L"無法儲存全形設定，請稍後再試。");
-            }
-            full_width_note.Visibility(Visibility::Visible);
-        });
-
-    const auto prediction_toggle = named<ToggleSwitch>(shell_, L"ImmediateConversionToggle");
-    auto saved_prediction = std::make_shared<bool>(configuration_.immediate_conversion_enabled);
-    auto updating_prediction = std::make_shared<bool>(false);
-    prediction_toggle.IsOn(*saved_prediction);
-    const auto prediction_note = named<TextBlock>(shell_, L"ImmediateConversionNote");
-    prediction_toggle.Toggled(
-        [this, prediction_note, saved_prediction, updating_prediction](
-            const auto& sender, const auto&) {
-            if (*updating_prediction) return;
-            const auto toggle = sender.template as<ToggleSwitch>();
-            const bool enabled = toggle.IsOn();
-            if (enabled == *saved_prediction) return;
-            const auto result = configuration_.actions.save_immediate_conversion
-                                    ? configuration_.actions.save_immediate_conversion(enabled)
-                                    : false;
-            if (result) {
-                *saved_prediction = enabled;
-                prediction_note.Text(L"已儲存；切回輸入中的應用程式後套用。");
-            } else {
-                *updating_prediction = true;
-                toggle.IsOn(*saved_prediction);
-                *updating_prediction = false;
-                prediction_note.Text(L"無法儲存轉換顯示設定，請稍後再試。");
-            }
-            prediction_note.Visibility(Visibility::Visible);
-        });
+    bind_setting_toggle(
+        named<ToggleSwitch>(shell_, L"GpuBoostToggle"), named<TextBlock>(shell_, L"GpuBoostNote"),
+        configuration_.gpu_boost_enabled,
+        [this](bool enabled) {
+            return configuration_.actions.save_gpu_boost &&
+                   configuration_.actions.save_gpu_boost(enabled);
+        },
+        L"無法儲存 GPU Boost 設定，請稍後再試。");
+    bind_setting_toggle(
+        named<ToggleSwitch>(shell_, L"FullWidthToggle"), named<TextBlock>(shell_, L"FullWidthNote"),
+        configuration_.shift_space_width_toggle_enabled,
+        [this](bool enabled) {
+            return configuration_.actions.save_width_toggle &&
+                   configuration_.actions.save_width_toggle(enabled);
+        },
+        L"無法儲存全形設定，請稍後再試。");
+    bind_setting_toggle(
+        named<ToggleSwitch>(shell_, L"ImmediateConversionToggle"),
+        named<TextBlock>(shell_, L"ImmediateConversionNote"),
+        configuration_.immediate_conversion_enabled,
+        [this](bool enabled) {
+            return configuration_.actions.save_immediate_conversion &&
+                   configuration_.actions.save_immediate_conversion(enabled);
+        },
+        L"無法儲存轉換顯示設定，請稍後再試。");
 
     custom_names_panel_ = named<StackPanel>(shell_, L"CustomNamesPanel");
     add_custom_name_button_ = named<Button>(shell_, L"AddCustomNameButton");
@@ -979,13 +963,18 @@ void SettingsWindow::build_page() {
     }
 
     pending_summary_ = named<TextBlock>(shell_, L"PendingSummary");
-    set_pending_count(configuration_.training_items.size());
     lora_note_ = named<TextBlock>(shell_, L"LoraNote");
+    encrypted_recording_ = named<ToggleSwitch>(shell_, L"EncryptedRecording");
+    pending_count_ = configuration_.training_items.size();
     refresh_protection_controls();
-    const auto recording = named<CheckBox>(shell_, L"EncryptedRecording");
-    recording.Checked([this](const auto&, const auto&) {
+    encrypted_recording_.Toggled([this](const auto&, const auto&) {
         if (updating_protection_) return;
         const auto& protection = configuration_.actions.protection;
+        if (!encrypted_recording_.IsOn()) {
+            if (protection.set_enabled) protection.set_enabled(false);
+            refresh_protection_controls();
+            return;
+        }
         const auto status = protection.status ? protection.status() : std::nullopt;
         if (!status) {
             refresh_protection_controls();
@@ -998,12 +987,6 @@ void SettingsWindow::build_page() {
             if (protection.set_enabled) protection.set_enabled(true);
             refresh_protection_controls();
         }
-    });
-    recording.Unchecked([this](const auto&, const auto&) {
-        if (updating_protection_) return;
-        if (configuration_.actions.protection.set_enabled)
-            configuration_.actions.protection.set_enabled(false);
-        refresh_protection_controls();
     });
     named<Button>(shell_, L"LoraButton").Click(
         [this](const auto&, const auto&) {
@@ -1030,41 +1013,23 @@ void SettingsWindow::build_page() {
             }
         });
 
-    const std::wstring build_label =
-        L"目前：" + build_identity(UpdateChecker::installed_version(),
-                                    UpdateChecker::installed_build_number(),
-                                    UpdateChecker::installed_commit());
-    named<TextBlock>(shell_, L"BuildLabel").Text(build_label);
-    const auto update_notifications_toggle =
-        named<ToggleSwitch>(shell_, L"UpdateNotificationsToggle");
-    auto saved_update_notifications =
-        std::make_shared<bool>(configuration_.major_update_notifications_enabled);
-    auto updating_update_notifications = std::make_shared<bool>(false);
-    update_notifications_toggle.IsOn(*saved_update_notifications);
-    const auto update_notifications_note =
-        named<TextBlock>(shell_, L"UpdateNotificationsNote");
-    update_notifications_toggle.Toggled(
-        [this, update_notifications_note, saved_update_notifications,
-         updating_update_notifications](const auto& sender, const auto&) {
-            if (*updating_update_notifications) return;
-            const auto toggle = sender.template as<ToggleSwitch>();
-            const bool enabled = toggle.IsOn();
-            if (enabled == *saved_update_notifications) return;
-            const bool result = configuration_.actions.save_update_notifications
-                                    ? configuration_.actions.save_update_notifications(enabled)
-                                    : false;
-            if (result) {
-                *saved_update_notifications = enabled;
-                configuration_.major_update_notifications_enabled = enabled;
-                update_notifications_note.Visibility(Visibility::Collapsed);
-            } else {
-                *updating_update_notifications = true;
-                toggle.IsOn(*saved_update_notifications);
-                *updating_update_notifications = false;
-                update_notifications_note.Text(L"無法儲存更新通知設定，請再試一次。");
-                update_notifications_note.Visibility(Visibility::Visible);
+    named<TextBlock>(shell_, L"BuildLabel").Text(
+        build_identity(UpdateChecker::installed_version(),
+                       UpdateChecker::installed_build_number(),
+                       UpdateChecker::installed_commit()));
+    bind_setting_toggle(
+        named<ToggleSwitch>(shell_, L"UpdateNotificationsToggle"),
+        named<TextBlock>(shell_, L"UpdateNotificationsNote"),
+        configuration_.major_update_notifications_enabled,
+        [this](bool enabled) {
+            if (!configuration_.actions.save_update_notifications ||
+                !configuration_.actions.save_update_notifications(enabled)) {
+                return false;
             }
-        });
+            configuration_.major_update_notifications_enabled = enabled;
+            return true;
+        },
+        L"無法儲存更新通知設定，請再試一次。");
     update_button_ = named<Button>(shell_, L"UpdateButton");
     update_button_.Click([this](const auto&, const auto&) { begin_update_check(); });
     update_status_ = named<TextBlock>(shell_, L"UpdateStatus");
@@ -1078,20 +1043,28 @@ void SettingsWindow::build_page() {
     rolling_update_.install.Click([this](const auto&, const auto&) {
         begin_update_install(ReleaseChannel::rolling);
     });
+    for (const std::wstring name : {L"GpuBoostToggle", L"FullWidthToggle",
+                                    L"ImmediateConversionToggle", L"EncryptedRecording",
+                                    L"UpdateNotificationsToggle"}) {
+        bind_toggle_state(named<ToggleSwitch>(shell_, name.c_str()),
+                          named<TextBlock>(shell_, (name + L"State").c_str()));
+    }
     xaml_source_.Content(shell_);
 }
 
 void SettingsWindow::refresh_protection_controls() {
+    if (!encrypted_recording_) return;
     const auto& protection = configuration_.actions.protection;
     const auto result = protection.status ? protection.status() : std::nullopt;
     const bool ok = result.has_value();
     const auto status = result.value_or(ProtectionStatus{});
     updating_protection_ = true;
-    named<CheckBox>(shell_, L"EncryptedRecording").IsChecked(ok && status.enabled);
-    named<CheckBox>(shell_, L"EncryptedRecording").IsEnabled(ok);
+    encrypted_recording_.IsOn(ok && status.enabled);
+    encrypted_recording_.IsEnabled(ok);
     named<TextBlock>(shell_, L"PasswordStatus")
         .Text(!ok ? L"無法讀取密碼狀態" : (status.configured ? L"密碼已設定" : L"密碼未設定"));
     updating_protection_ = false;
+    refresh_pending_summary();
 }
 
 winrt::Windows::Foundation::IAsyncOperation<bool> SettingsWindow::run_in_background(
@@ -2796,15 +2769,14 @@ void SettingsWindow::save_custom_names() {
     custom_names.reserve(entries.size());
     for (const auto& entry : entries)
         custom_names.push_back({entry.name, entry.readings});
-    const bool result = configuration_.actions.save_custom_names(custom_names);
-    if (result) {
+    if (configuration_.actions.save_custom_names(custom_names)) {
         saved_custom_names_ = std::move(entries);
         save_custom_names_button_.IsEnabled(false);
-        custom_names_note_.Text(L"已儲存");
+        custom_names_note_.Visibility(Visibility::Collapsed);
     } else {
         custom_names_note_.Text(L"無法儲存自訂名字，請稍後再試。");
+        custom_names_note_.Visibility(Visibility::Visible);
     }
-    custom_names_note_.Visibility(Visibility::Visible);
 }
 
 void SettingsWindow::update_custom_names_save_state() {
@@ -3240,11 +3212,11 @@ void SettingsWindow::save_model_path() {
         model_path_.Text(to_hstring(path));
         save_model_button_.IsEnabled(false);
         update_default_model_button();
-        model_note_.Text(L"已載入並儲存模型檔案位置。");
+        model_note_.Visibility(Visibility::Collapsed);
     } else {
         model_note_.Text(L"無法載入模型；請確認檔案存在且為有效的 GGUF 模型。");
+        model_note_.Visibility(Visibility::Visible);
     }
-    model_note_.Visibility(Visibility::Visible);
 }
 
 void SettingsWindow::switch_to_default_model() {
@@ -3287,46 +3259,41 @@ void SettingsWindow::update_model_path_save_state() {
 }
 
 void SettingsWindow::show_active_inference() {
-    if (!active_device_status_ || !active_backend_ || !active_device_tooltip_) return;
+    if (!active_device_ || !active_device_tooltip_ || !inference_device_) return;
     const auto& runtime = configuration_.active_inference;
     const auto& active = runtime.device;
     const std::u16string active_name =
         !active.description.empty() ? active.description
                                     : (!active.name.empty() ? active.name : active.device_id);
     const auto active_name_text = to_hstring(active_name);
-    active_device_status_.Text(active_name_text);
-    std::u16string active_state = u"使用中 · ";
-    active_state += backend_label(active.backend);
-    active_backend_.Text(to_hstring(active_state));
+    const std::wstring backend(to_hstring(backend_label(active.backend)));
+    active_device_.Text(std::format(L"使用中：{} · {}", std::wstring_view(active_name_text), backend));
+
+    std::vector<std::wstring> details{L"後端：" + backend};
+    if (active.backend != InferenceBackend::cpu && active.memory_total != 0) {
+        details.push_back(std::format(L"顯示記憶體：{:.1f} GB",
+            static_cast<double>(active.memory_total) / 1024.0 / 1024.0 / 1024.0));
+    }
+    if (!active.device_id.empty()) {
+        details.push_back(L"裝置 ID：" + std::wstring(to_hstring(active.device_id)));
+    }
+    details.emplace_back(runtime.gpu_offload ? L"GPU offload：啟用" : L"GPU offload：未啟用");
+    if (runtime.fell_back_to_cpu) {
+        details.emplace_back(L"偏好裝置目前無法使用，已改用 CPU。");
+    }
 
     StackPanel tooltip_content;
     tooltip_content.Spacing(4);
     tooltip_content.Children().Append(
         make_text(active_name_text.c_str(), body_text_size, FontWeights::SemiBold()));
-    std::u16string backend_detail = u"後端：";
-    backend_detail += backend_label(active.backend);
-    const auto backend_detail_text = to_hstring(backend_detail);
-    tooltip_content.Children().Append(make_text(backend_detail_text.c_str(), caption_text_size));
-    if (active.backend != InferenceBackend::cpu && active.memory_total != 0) {
-        std::wostringstream memory;
-        memory << L"顯示記憶體：" << std::fixed << std::setprecision(1)
-               << static_cast<double>(active.memory_total) / 1024.0 / 1024.0 / 1024.0
-               << L" GB";
-        tooltip_content.Children().Append(make_text(memory.str().c_str(), caption_text_size));
-    }
-    if (!active.device_id.empty()) {
-        const std::u16string device_id = u"裝置 ID：" + active.device_id;
-        const auto device_id_text = to_hstring(device_id);
-        tooltip_content.Children().Append(make_text(device_id_text.c_str(), caption_text_size));
-    }
-    const wchar_t* offload = runtime.gpu_offload ? L"GPU offload：啟用"
-                                                 : L"GPU offload：未啟用";
-    tooltip_content.Children().Append(make_text(offload, caption_text_size));
-    if (runtime.fell_back_to_cpu) {
-        tooltip_content.Children().Append(
-            make_text(L"偏好裝置目前無法使用，已改用 CPU。", caption_text_size));
+    for (const auto& detail : details) {
+        tooltip_content.Children().Append(make_text(detail.c_str(), caption_text_size));
     }
     active_device_tooltip_.Content(tooltip_content);
+
+    std::wstring help(active_name_text);
+    for (const auto& detail : details) help += L"，" + detail;
+    Automation::AutomationProperties::SetHelpText(inference_device_, help);
 }
 
 void SettingsWindow::apply_inference_setting() {
@@ -3348,8 +3315,7 @@ void SettingsWindow::apply_inference_setting() {
         configuration_.active_inference = std::move(*runtime);
         show_active_inference();
         apply_inference_button_.IsEnabled(false);
-        note_.Text(L"已套用並儲存");
-        note_.Visibility(Visibility::Visible);
+        note_.Visibility(Visibility::Collapsed);
     } else {
         note_.Text(L"無法套用或儲存推論裝置設定，請稍後再試。");
         note_.Visibility(Visibility::Visible);
@@ -3387,7 +3353,7 @@ void SettingsWindow::begin_update_check() {
     update_button_.IsEnabled(false);
     update_status_.Text(L"正在檢查更新…");
     update_status_.Visibility(Visibility::Visible);
-    set_update_status_tone(UpdateStatusTone::secondary);
+    paint_status_tone(update_status_, UpdateStatusTone::secondary);
     for (auto* row : {&stable_update_, &rolling_update_}) {
         row->setup.reset();
         row->install.Visibility(Visibility::Collapsed);
@@ -3434,7 +3400,6 @@ void SettingsWindow::show_channel_result(ChannelCheckResult result) {
                 return {UpdateStatusTone::error, L"檢查失敗", false};
         }
     }();
-    row.tone = tone;
     row.status.Text(text + L"　" + verdict);
     ToolTipService::SetToolTip(
         row.status, result.error_message.empty()
@@ -3445,7 +3410,7 @@ void SettingsWindow::show_channel_result(ChannelCheckResult result) {
             std::move(result.setup_url), std::move(result.setup_sha256), result.setup_size};
         row.install.Visibility(Visibility::Visible);
     }
-    paint_status_tone(row.status, row.tone);
+    paint_status_tone(row.status, tone);
 }
 
 void SettingsWindow::apply_update_result(UpdateCheckResult result) {
@@ -3485,7 +3450,7 @@ void SettingsWindow::start_update_download(ReleaseChannel channel) {
     set_update_controls_enabled(false);
     update_status_.Text(L"正在下載更新…");
     update_status_.Visibility(Visibility::Visible);
-    set_update_status_tone(UpdateStatusTone::secondary);
+    paint_status_tone(update_status_, UpdateStatusTone::secondary);
 
     const auto target = update_target_;
     if (!update_installer_.install_async(*setup, [target](UpdateInstallEvent event) {
@@ -3513,11 +3478,11 @@ void SettingsWindow::apply_update_install_event(UpdateInstallEvent event) {
             break;
         case UpdateInstallStage::launched:
             update_status_.Text(L"更新程式已在背景執行；若其他程式仍占用輸入法檔案，可能需要重新啟動 Windows。");
-            set_update_status_tone(UpdateStatusTone::information);
+            paint_status_tone(update_status_, UpdateStatusTone::information);
             break;
         case UpdateInstallStage::failed:
             update_status_.Text(L"更新失敗：" + event.error);
-            set_update_status_tone(UpdateStatusTone::error);
+            paint_status_tone(update_status_, UpdateStatusTone::error);
             set_update_controls_enabled(true);
             break;
     }
@@ -3573,55 +3538,27 @@ void SettingsWindow::update_theme() {
     const BOOL dark = dark_theme_ ? TRUE : FALSE;
     DwmSetWindowAttribute(window_, 20, &dark, sizeof(dark));
 
-    const DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_MAINWINDOW;
-    DwmSetWindowAttribute(
-        window_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
-
     if (shell_) {
         shell_.RequestedTheme(dark_theme_ ? ElementTheme::Dark : ElementTheme::Light);
     }
-    apply_theme_colors();
 }
 
-void SettingsWindow::apply_theme_colors() {
-    set_update_status_tone(update_status_tone_);
-    for (const auto* row : {&stable_update_, &rolling_update_}) {
-        paint_status_tone(row->status, row->tone);
-    }
-}
-
-void SettingsWindow::set_update_status_tone(UpdateStatusTone tone) {
-    update_status_tone_ = tone;
-    paint_status_tone(update_status_, tone);
-}
-
-void SettingsWindow::paint_status_tone(const TextBlock& status, UpdateStatusTone tone) const {
+void SettingsWindow::paint_status_tone(const TextBlock& status, UpdateStatusTone tone) {
     if (!status) {
         return;
     }
 
-    switch (tone) {
-        case UpdateStatusTone::update_available:
-            status.Foreground(
-                dark_theme_ ? solid_brush(96, 205, 255) : solid_brush(0, 95, 184));
-            break;
-        case UpdateStatusTone::success:
-            status.Foreground(
-                dark_theme_ ? solid_brush(108, 203, 95) : solid_brush(48, 120, 72));
-            break;
-        case UpdateStatusTone::information:
-            status.Foreground(
-                dark_theme_ ? solid_brush(117, 182, 231) : solid_brush(48, 96, 156));
-            break;
-        case UpdateStatusTone::error:
-            status.Foreground(
-                dark_theme_ ? solid_brush(255, 153, 164) : solid_brush(180, 54, 54));
-            break;
-        case UpdateStatusTone::secondary:
-        default:
-            status.ClearValue(TextBlock::ForegroundProperty());
-            break;
-    }
+    const wchar_t* style = [tone] {
+        switch (tone) {
+            case UpdateStatusTone::update_available: return L"SettingsUpdateAvailableStyle";
+            case UpdateStatusTone::success: return L"SettingsSuccessStyle";
+            case UpdateStatusTone::information: return L"SettingsInformationStyle";
+            case UpdateStatusTone::error: return L"SettingsErrorStyle";
+            case UpdateStatusTone::secondary:
+            default: return L"SettingsCaptionStyle";
+        }
+    }();
+    status.Style(settings_style(style));
 }
 
 void SettingsWindow::close_xaml() noexcept {
@@ -3651,8 +3588,7 @@ void SettingsWindow::close_xaml() noexcept {
     default_model_button_ = nullptr;
     save_model_button_ = nullptr;
     model_note_ = nullptr;
-    active_device_status_ = nullptr;
-    active_backend_ = nullptr;
+    active_device_ = nullptr;
     active_device_tooltip_ = nullptr;
     inference_device_ = nullptr;
     apply_inference_button_ = nullptr;
@@ -3667,6 +3603,7 @@ void SettingsWindow::close_xaml() noexcept {
     save_custom_names_button_ = nullptr;
     custom_names_note_ = nullptr;
     pending_summary_ = nullptr;
+    encrypted_recording_ = nullptr;
     history_picker_overlay_ = nullptr;
     history_picker_tree_ = nullptr;
     history_picker_graph_view_ = nullptr;

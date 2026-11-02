@@ -62,6 +62,7 @@ private:
         const winrt::Microsoft::UI::Xaml::Controls::TextBox& name_box);
     void save_custom_names();
     void update_custom_names_save_state();
+    void refresh_pending_summary();
     void show_lora_training_dialog();
     void show_model_history_tree();
     void show_history_picker(
@@ -103,7 +104,6 @@ private:
     void discard_pending_update_results() noexcept;
     void resize_island() const noexcept;
     void update_theme();
-    void apply_theme_colors();
     void close_xaml() noexcept;
 
     enum class UpdateStatusTone {
@@ -117,13 +117,11 @@ private:
     struct UpdateChannelRow {
         winrt::Microsoft::UI::Xaml::Controls::TextBlock status{nullptr};
         winrt::Microsoft::UI::Xaml::Controls::Button install{nullptr};
-        UpdateStatusTone tone = UpdateStatusTone::secondary;
         std::optional<SetupAsset> setup;
     };
 
-    void set_update_status_tone(UpdateStatusTone tone);
-    void paint_status_tone(const winrt::Microsoft::UI::Xaml::Controls::TextBlock& status,
-                           UpdateStatusTone tone) const;
+    static void paint_status_tone(const winrt::Microsoft::UI::Xaml::Controls::TextBlock& status,
+                                  UpdateStatusTone tone);
     void show_channel_result(ChannelCheckResult result);
     UpdateChannelRow& update_row(ReleaseChannel channel) noexcept;
 
@@ -157,8 +155,7 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::Button model_history_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button save_model_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock model_note_{nullptr};
-    winrt::Microsoft::UI::Xaml::Controls::TextBlock active_device_status_{nullptr};
-    winrt::Microsoft::UI::Xaml::Controls::TextBlock active_backend_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock active_device_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::ToolTip active_device_tooltip_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::ComboBox inference_device_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Button apply_inference_button_{nullptr};
@@ -170,7 +167,8 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::Button save_custom_names_button_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock custom_names_note_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::TextBlock pending_summary_{nullptr};
-    UpdateStatusTone update_status_tone_ = UpdateStatusTone::secondary;
+    winrt::Microsoft::UI::Xaml::Controls::ToggleSwitch encrypted_recording_{nullptr};
+    std::size_t pending_count_ = 0;
     bool dark_theme_ = false;
     SettingsConfiguration configuration_;
     std::vector<InferenceDeviceOption> inference_options_;
