@@ -4,354 +4,358 @@
       TabFocusNavigation="Cycle">
   <ScrollViewer HorizontalScrollBarVisibility="Disabled"
       VerticalScrollBarVisibility="Auto">
-    <StackPanel MaxWidth="1000"
-        Padding="40,28,40,40"
-        Spacing="4">
-      <TextBlock Text="設定"
-          Style="{StaticResource SettingsPageTitleStyle}"/>
+    <!-- Keep the MaxWidth panel inside a full-width Grid to avoid ScrollViewer layout offsets. -->
+    <Grid x:Name="PageViewport">
+      <StackPanel x:Name="PageContent"
+          MaxWidth="1000"
+          Padding="40,28,40,40"
+          Spacing="4">
+        <TextBlock Text="設定"
+            Style="{StaticResource SettingsPageTitleStyle}"/>
 
-      <TextBlock Text="模型"
-          Style="{StaticResource SettingsSectionHeaderStyle}"/>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <StackPanel Spacing="12">
-          <TextBlock Text="模型檔案"
-              Style="{StaticResource SettingsCardHeaderStyle}"/>
-          <Grid ColumnSpacing="8">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <TextBox x:Name="ModelPath"
-                Grid.Column="0"
-                PlaceholderText="選擇 .gguf 模型檔案"
-                AutomationProperties.Name="模型檔案"/>
-            <Button x:Name="BrowseModelButton"
-                Grid.Column="1"
-                Content="瀏覽…"
-                MinWidth="88"/>
-          </Grid>
-          <Grid ColumnSpacing="8">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <Button x:Name="ModelHistoryButton"
-                Grid.Column="0"
-                Content="從訓練歷程選擇"/>
-            <Button x:Name="DefaultModelButton"
-                Grid.Column="1"
-                Content="切換回預設"/>
-            <Button x:Name="SaveModelButton"
-                Grid.Column="3"
-                Style="{StaticResource AccentButtonStyle}"
-                Content="套用"
-                MinWidth="96"
-                IsEnabled="False"/>
-          </Grid>
-          <TextBlock x:Name="ModelNote"
-              Style="{StaticResource SettingsCaptionStyle}"
-              Visibility="Collapsed"/>
-        </StackPanel>
-      </Border>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <StackPanel Spacing="12">
-          <StackPanel>
-            <TextBlock Text="推論裝置"
+        <TextBlock Text="模型"
+            Style="{StaticResource SettingsSectionHeaderStyle}"/>
+        <Border Style="{StaticResource SettingsCardStyle}">
+          <StackPanel Spacing="12">
+            <TextBlock Text="模型檔案"
                 Style="{StaticResource SettingsCardHeaderStyle}"/>
-            <TextBlock x:Name="ActiveDevice"
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBox x:Name="ModelPath"
+                  Grid.Column="0"
+                  PlaceholderText="選擇 .gguf 模型檔案"
+                  AutomationProperties.Name="模型檔案"/>
+              <Button x:Name="BrowseModelButton"
+                  Grid.Column="1"
+                  Content="瀏覽…"
+                  MinWidth="88"/>
+            </Grid>
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <Button x:Name="ModelHistoryButton"
+                  Grid.Column="0"
+                  Content="從訓練歷程選擇"/>
+              <Button x:Name="DefaultModelButton"
+                  Grid.Column="1"
+                  Content="切換回預設"/>
+              <Button x:Name="SaveModelButton"
+                  Grid.Column="3"
+                  Style="{StaticResource AccentButtonStyle}"
+                  Content="套用"
+                  MinWidth="96"
+                  IsEnabled="False"/>
+            </Grid>
+            <TextBlock x:Name="ModelNote"
                 Style="{StaticResource SettingsCaptionStyle}"
-                TextTrimming="CharacterEllipsis"
-                TextWrapping="NoWrap"/>
-          </StackPanel>
-          <Grid ColumnSpacing="8">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <ComboBox x:Name="InferenceDevice"
-                Grid.Column="0"
-                HorizontalAlignment="Stretch"
-                AutomationProperties.Name="推論裝置"/>
-            <Button x:Name="ApplyInferenceButton"
-                Grid.Column="1"
-                Style="{StaticResource AccentButtonStyle}"
-                Content="套用"
-                MinWidth="96"
-                IsEnabled="False"/>
-          </Grid>
-          <TextBlock x:Name="InferenceNote"
-              Style="{StaticResource SettingsCaptionStyle}"
-              Visibility="Collapsed"/>
-        </StackPanel>
-      </Border>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <Grid ColumnSpacing="16">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <StackPanel VerticalAlignment="Center">
-            <TextBlock Text="GPU Boost"
-                Style="{StaticResource SettingsCardHeaderStyle}"/>
-            <TextBlock Text="GPU 推論時提高時脈，可能增加耗電與溫度"
-                Style="{StaticResource SettingsCaptionStyle}"/>
-            <TextBlock x:Name="GpuBoostNote"
-                Style="{StaticResource SettingsErrorStyle}"
                 Visibility="Collapsed"/>
           </StackPanel>
-          <StackPanel Grid.Column="1"
-              Orientation="Horizontal"
-              HorizontalAlignment="Right"
-              Spacing="12">
-            <TextBlock x:Name="GpuBoostToggleState"
-                Style="{StaticResource SettingsToggleStateStyle}"/>
-            <ToggleSwitch x:Name="GpuBoostToggle"
-                MinWidth="0"
-                Style="{StaticResource SettingsToggleStyle}"
-                AutomationProperties.Name="GPU Boost"/>
-          </StackPanel>
-        </Grid>
-      </Border>
-
-      <TextBlock Text="輸入"
-          Style="{StaticResource SettingsSectionHeaderStyle}"/>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <Grid ColumnSpacing="16">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <StackPanel VerticalAlignment="Center">
-            <TextBlock Text="使用 Shift + 空格鍵切換字元寬度"
-                Style="{StaticResource SettingsCardHeaderStyle}"/>
-            <TextBlock x:Name="FullWidthNote"
-                Style="{StaticResource SettingsErrorStyle}"
+        </Border>
+        <Border Style="{StaticResource SettingsCardStyle}">
+          <StackPanel Spacing="12">
+            <StackPanel>
+              <TextBlock Text="推論裝置"
+                  Style="{StaticResource SettingsCardHeaderStyle}"/>
+              <TextBlock x:Name="ActiveDevice"
+                  Style="{StaticResource SettingsCaptionStyle}"
+                  TextTrimming="CharacterEllipsis"
+                  TextWrapping="NoWrap"/>
+            </StackPanel>
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <ComboBox x:Name="InferenceDevice"
+                  Grid.Column="0"
+                  HorizontalAlignment="Stretch"
+                  AutomationProperties.Name="推論裝置"/>
+              <Button x:Name="ApplyInferenceButton"
+                  Grid.Column="1"
+                  Style="{StaticResource AccentButtonStyle}"
+                  Content="套用"
+                  MinWidth="96"
+                  IsEnabled="False"/>
+            </Grid>
+            <TextBlock x:Name="InferenceNote"
+                Style="{StaticResource SettingsCaptionStyle}"
                 Visibility="Collapsed"/>
           </StackPanel>
-          <StackPanel Grid.Column="1"
-              Orientation="Horizontal"
-              HorizontalAlignment="Right"
-              Spacing="12">
-            <TextBlock x:Name="FullWidthToggleState"
-                Style="{StaticResource SettingsToggleStateStyle}"/>
-            <ToggleSwitch x:Name="FullWidthToggle"
-                MinWidth="0"
-                Style="{StaticResource SettingsToggleStyle}"
-                AutomationProperties.Name="使用 Shift + 空格鍵切換字元寬度"/>
-          </StackPanel>
-        </Grid>
-      </Border>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <Grid ColumnSpacing="16">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <StackPanel VerticalAlignment="Center">
-            <TextBlock Text="立即顯示中文"
-                Style="{StaticResource SettingsCardHeaderStyle}"/>
-            <TextBlock Text="打完字立刻顯示常用字，模型選好後可能會再換字。可能會增加體感延遲，不建議開啟。"
-                Style="{StaticResource SettingsCaptionStyle}"/>
-            <TextBlock x:Name="ImmediateConversionNote"
-                Style="{StaticResource SettingsErrorStyle}"
-                Visibility="Collapsed"/>
-          </StackPanel>
-          <StackPanel Grid.Column="1"
-              Orientation="Horizontal"
-              HorizontalAlignment="Right"
-              Spacing="12">
-            <TextBlock x:Name="ImmediateConversionToggleState"
-                Style="{StaticResource SettingsToggleStateStyle}"/>
-            <ToggleSwitch x:Name="ImmediateConversionToggle"
-                MinWidth="0"
-                Style="{StaticResource SettingsToggleStyle}"
-                AutomationProperties.Name="立即顯示中文"/>
-          </StackPanel>
-        </Grid>
-      </Border>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <StackPanel Spacing="10">
-          <TextBlock Text="自訂名字"
-              Style="{StaticResource SettingsCardHeaderStyle}"/>
-          <Grid>
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="180"/>
-              <ColumnDefinition Width="12"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="12"/>
-              <ColumnDefinition Width="84"/>
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="名字"
-                Grid.Column="0"
-                Style="{StaticResource SettingsCaptionStyle}"/>
-            <TextBlock Text="注音"
-                Grid.Column="2"
-                Style="{StaticResource SettingsCaptionStyle}"/>
-          </Grid>
-          <StackPanel x:Name="CustomNamesPanel"
-              Spacing="8"/>
-          <Grid ColumnSpacing="8">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <Button x:Name="AddCustomNameButton"
-                Grid.Column="0"
-                Content="＋ 新增名字"
-                MinWidth="120"/>
-            <Button x:Name="SaveCustomNamesButton"
-                Grid.Column="2"
-                Style="{StaticResource AccentButtonStyle}"
-                Content="儲存"
-                MinWidth="96"
-                IsEnabled="False"/>
-          </Grid>
-          <TextBlock x:Name="CustomNamesNote"
-              Style="{StaticResource SettingsCaptionStyle}"
-              Visibility="Collapsed"/>
-        </StackPanel>
-      </Border>
-
-      <TextBlock Text="LoRA 個人化模型"
-          Style="{StaticResource SettingsSectionHeaderStyle}"/>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <Grid ColumnSpacing="16">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <StackPanel VerticalAlignment="Center">
-            <TextBlock Text="資料蒐集（加密保存）"
-                Style="{StaticResource SettingsCardHeaderStyle}"/>
-            <TextBlock x:Name="PasswordStatus"
-                Text="密碼未設定"
-                Style="{StaticResource SettingsCaptionStyle}"/>
-          </StackPanel>
-          <StackPanel Grid.Column="1"
-              Orientation="Horizontal"
-              HorizontalAlignment="Right"
-              Spacing="12">
-            <TextBlock x:Name="EncryptedRecordingState"
-                Style="{StaticResource SettingsToggleStateStyle}"/>
-            <ToggleSwitch x:Name="EncryptedRecording"
-                MinWidth="0"
-                Style="{StaticResource SettingsToggleStyle}"
-                AutomationProperties.Name="資料蒐集"/>
-          </StackPanel>
-        </Grid>
-      </Border>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <Grid ColumnSpacing="16">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <StackPanel VerticalAlignment="Center">
-            <TextBlock Text="改進模型"
-                Style="{StaticResource SettingsCardHeaderStyle}"/>
-            <TextBlock x:Name="PendingSummary"
-                Style="{StaticResource SettingsCaptionStyle}"/>
-            <TextBlock x:Name="LoraNote"
-                Style="{StaticResource SettingsErrorStyle}"
-                Visibility="Collapsed"/>
-          </StackPanel>
-          <Button x:Name="LoraButton"
-              Grid.Column="1"
-              Content="開始改進模型"
-              VerticalAlignment="Center"/>
-        </Grid>
-      </Border>
-
-      <TextBlock Text="軟體更新"
-          Style="{StaticResource SettingsSectionHeaderStyle}"/>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <StackPanel Spacing="10">
+        </Border>
+        <Border Style="{StaticResource SettingsCardStyle}">
           <Grid ColumnSpacing="16">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
-              <TextBlock Text="目前版本"
+              <TextBlock Text="GPU Boost"
                   Style="{StaticResource SettingsCardHeaderStyle}"/>
-              <TextBlock x:Name="BuildLabel"
-                  Style="{StaticResource SettingsCaptionStyle}"
-                  IsTextSelectionEnabled="True"/>
+              <TextBlock Text="GPU 推論時提高時脈，可能增加耗電與溫度"
+                  Style="{StaticResource SettingsCaptionStyle}"/>
+              <TextBlock x:Name="GpuBoostNote"
+                  Style="{StaticResource SettingsErrorStyle}"
+                  Visibility="Collapsed"/>
             </StackPanel>
-            <Button x:Name="UpdateButton"
-                Grid.Column="1"
-                Content="檢查更新"
-                AllowFocusOnInteraction="False"
-                MinWidth="112"
-                VerticalAlignment="Center"/>
+            <StackPanel Grid.Column="1"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="12">
+              <TextBlock x:Name="GpuBoostToggleState"
+                  Style="{StaticResource SettingsToggleStateStyle}"/>
+              <ToggleSwitch x:Name="GpuBoostToggle"
+                  MinWidth="0"
+                  Style="{StaticResource SettingsToggleStyle}"
+                  AutomationProperties.Name="GPU Boost"/>
+            </StackPanel>
           </Grid>
-          <TextBlock x:Name="UpdateStatus"
-              Style="{StaticResource SettingsCaptionStyle}"
-              Visibility="Collapsed"/>
-          <Grid ColumnSpacing="12">
+        </Border>
+
+        <TextBlock Text="輸入"
+            Style="{StaticResource SettingsSectionHeaderStyle}"/>
+        <Border Style="{StaticResource SettingsCardStyle}">
+          <Grid ColumnSpacing="16">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock x:Name="StableUpdateStatus"
-                Grid.Column="0"
-                Style="{StaticResource SettingsCaptionStyle}"
-                VerticalAlignment="Center"/>
-            <Button x:Name="StableUpdateInstall"
-                Grid.Column="1"
-                Content="更新"
-                AllowFocusOnInteraction="False"
-                Visibility="Collapsed"
-                Style="{StaticResource AccentButtonStyle}"/>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="使用 Shift + 空格鍵切換字元寬度"
+                  Style="{StaticResource SettingsCardHeaderStyle}"/>
+              <TextBlock x:Name="FullWidthNote"
+                  Style="{StaticResource SettingsErrorStyle}"
+                  Visibility="Collapsed"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="12">
+              <TextBlock x:Name="FullWidthToggleState"
+                  Style="{StaticResource SettingsToggleStateStyle}"/>
+              <ToggleSwitch x:Name="FullWidthToggle"
+                  MinWidth="0"
+                  Style="{StaticResource SettingsToggleStyle}"
+                  AutomationProperties.Name="使用 Shift + 空格鍵切換字元寬度"/>
+            </StackPanel>
           </Grid>
-          <Grid ColumnSpacing="12">
+        </Border>
+        <Border Style="{StaticResource SettingsCardStyle}">
+          <Grid ColumnSpacing="16">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock x:Name="RollingUpdateStatus"
-                Grid.Column="0"
-                Style="{StaticResource SettingsCaptionStyle}"
-                VerticalAlignment="Center"/>
-            <Button x:Name="RollingUpdateInstall"
-                Grid.Column="1"
-                Content="更新"
-                AllowFocusOnInteraction="False"
-                Visibility="Collapsed"/>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="立即顯示中文"
+                  Style="{StaticResource SettingsCardHeaderStyle}"/>
+              <TextBlock Text="打完字立刻顯示常用字，模型選好後可能會再換字。可能會增加體感延遲，不建議開啟。"
+                  Style="{StaticResource SettingsCaptionStyle}"/>
+              <TextBlock x:Name="ImmediateConversionNote"
+                  Style="{StaticResource SettingsErrorStyle}"
+                  Visibility="Collapsed"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="12">
+              <TextBlock x:Name="ImmediateConversionToggleState"
+                  Style="{StaticResource SettingsToggleStateStyle}"/>
+              <ToggleSwitch x:Name="ImmediateConversionToggle"
+                  MinWidth="0"
+                  Style="{StaticResource SettingsToggleStyle}"
+                  AutomationProperties.Name="立即顯示中文"/>
+            </StackPanel>
           </Grid>
-        </StackPanel>
-      </Border>
-      <Border Style="{StaticResource SettingsCardStyle}">
-        <Grid ColumnSpacing="16">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <StackPanel VerticalAlignment="Center">
-            <TextBlock Text="更新通知"
+        </Border>
+        <Border Style="{StaticResource SettingsCardStyle}">
+          <StackPanel Spacing="10">
+            <TextBlock Text="自訂名字"
                 Style="{StaticResource SettingsCardHeaderStyle}"/>
-            <TextBlock Text="只在重大更新時通知"
-                Style="{StaticResource SettingsCaptionStyle}"/>
-            <TextBlock x:Name="UpdateNotificationsNote"
-                Style="{StaticResource SettingsErrorStyle}"
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="180"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="84"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="名字"
+                  Grid.Column="0"
+                  Style="{StaticResource SettingsCaptionStyle}"/>
+              <TextBlock Text="注音"
+                  Grid.Column="2"
+                  Style="{StaticResource SettingsCaptionStyle}"/>
+            </Grid>
+            <StackPanel x:Name="CustomNamesPanel"
+                Spacing="8"/>
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <Button x:Name="AddCustomNameButton"
+                  Grid.Column="0"
+                  Content="＋ 新增名字"
+                  MinWidth="120"/>
+              <Button x:Name="SaveCustomNamesButton"
+                  Grid.Column="2"
+                  Style="{StaticResource AccentButtonStyle}"
+                  Content="儲存"
+                  MinWidth="96"
+                  IsEnabled="False"/>
+            </Grid>
+            <TextBlock x:Name="CustomNamesNote"
+                Style="{StaticResource SettingsCaptionStyle}"
                 Visibility="Collapsed"/>
           </StackPanel>
-          <StackPanel Grid.Column="1"
-              Orientation="Horizontal"
-              HorizontalAlignment="Right"
-              Spacing="12">
-            <TextBlock x:Name="UpdateNotificationsToggleState"
-                Style="{StaticResource SettingsToggleStateStyle}"/>
-            <ToggleSwitch x:Name="UpdateNotificationsToggle"
-                MinWidth="0"
-                Style="{StaticResource SettingsToggleStyle}"
-                AutomationProperties.Name="更新通知"/>
+        </Border>
+
+        <TextBlock Text="LoRA 個人化模型"
+            Style="{StaticResource SettingsSectionHeaderStyle}"/>
+        <Border Style="{StaticResource SettingsCardStyle}">
+          <Grid ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="資料蒐集（加密保存）"
+                  Style="{StaticResource SettingsCardHeaderStyle}"/>
+              <TextBlock x:Name="PasswordStatus"
+                  Text="密碼未設定"
+                  Style="{StaticResource SettingsCaptionStyle}"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="12">
+              <TextBlock x:Name="EncryptedRecordingState"
+                  Style="{StaticResource SettingsToggleStateStyle}"/>
+              <ToggleSwitch x:Name="EncryptedRecording"
+                  MinWidth="0"
+                  Style="{StaticResource SettingsToggleStyle}"
+                  AutomationProperties.Name="資料蒐集"/>
+            </StackPanel>
+          </Grid>
+        </Border>
+        <Border Style="{StaticResource SettingsCardStyle}">
+          <Grid ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="改進模型"
+                  Style="{StaticResource SettingsCardHeaderStyle}"/>
+              <TextBlock x:Name="PendingSummary"
+                  Style="{StaticResource SettingsCaptionStyle}"/>
+              <TextBlock x:Name="LoraNote"
+                  Style="{StaticResource SettingsErrorStyle}"
+                  Visibility="Collapsed"/>
+            </StackPanel>
+            <Button x:Name="LoraButton"
+                Grid.Column="1"
+                Content="開始改進模型"
+                VerticalAlignment="Center"/>
+          </Grid>
+        </Border>
+
+        <TextBlock Text="軟體更新"
+            Style="{StaticResource SettingsSectionHeaderStyle}"/>
+        <Border Style="{StaticResource SettingsCardStyle}">
+          <StackPanel Spacing="10">
+            <Grid ColumnSpacing="16">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="目前版本"
+                    Style="{StaticResource SettingsCardHeaderStyle}"/>
+                <TextBlock x:Name="BuildLabel"
+                    Style="{StaticResource SettingsCaptionStyle}"
+                    IsTextSelectionEnabled="True"/>
+              </StackPanel>
+              <Button x:Name="UpdateButton"
+                  Grid.Column="1"
+                  Content="檢查更新"
+                  AllowFocusOnInteraction="False"
+                  MinWidth="112"
+                  VerticalAlignment="Center"/>
+            </Grid>
+            <TextBlock x:Name="UpdateStatus"
+                Style="{StaticResource SettingsCaptionStyle}"
+                Visibility="Collapsed"/>
+            <Grid ColumnSpacing="12">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock x:Name="StableUpdateStatus"
+                  Grid.Column="0"
+                  Style="{StaticResource SettingsCaptionStyle}"
+                  VerticalAlignment="Center"/>
+              <Button x:Name="StableUpdateInstall"
+                  Grid.Column="1"
+                  Content="更新"
+                  AllowFocusOnInteraction="False"
+                  Visibility="Collapsed"
+                  Style="{StaticResource AccentButtonStyle}"/>
+            </Grid>
+            <Grid ColumnSpacing="12">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock x:Name="RollingUpdateStatus"
+                  Grid.Column="0"
+                  Style="{StaticResource SettingsCaptionStyle}"
+                  VerticalAlignment="Center"/>
+              <Button x:Name="RollingUpdateInstall"
+                  Grid.Column="1"
+                  Content="更新"
+                  AllowFocusOnInteraction="False"
+                  Visibility="Collapsed"/>
+            </Grid>
           </StackPanel>
-        </Grid>
-      </Border>
-    </StackPanel>
+        </Border>
+        <Border Style="{StaticResource SettingsCardStyle}">
+          <Grid ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="更新通知"
+                  Style="{StaticResource SettingsCardHeaderStyle}"/>
+              <TextBlock Text="只在重大更新時通知"
+                  Style="{StaticResource SettingsCaptionStyle}"/>
+              <TextBlock x:Name="UpdateNotificationsNote"
+                  Style="{StaticResource SettingsErrorStyle}"
+                  Visibility="Collapsed"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="12">
+              <TextBlock x:Name="UpdateNotificationsToggleState"
+                  Style="{StaticResource SettingsToggleStateStyle}"/>
+              <ToggleSwitch x:Name="UpdateNotificationsToggle"
+                  MinWidth="0"
+                  Style="{StaticResource SettingsToggleStyle}"
+                  AutomationProperties.Name="更新通知"/>
+            </StackPanel>
+          </Grid>
+        </Border>
+      </StackPanel>
+    </Grid>
   </ScrollViewer>
 </Grid>

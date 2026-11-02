@@ -51,7 +51,7 @@ void report_settings_error(std::wstring_view message) noexcept {
             }
             return;
         }
-        MessageBoxW(nullptr, detail.c_str(), L"Llavon IME Settings", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr, detail.c_str(), L"拉風輸入法設定", MB_OK | MB_ICONERROR);
     } catch (...) {
         OutputDebugStringW(L"[settings-ui] unable to report settings error\n");
     }

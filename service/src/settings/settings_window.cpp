@@ -77,6 +77,7 @@ constexpr UINT update_install_message = WM_APP + 11;
 constexpr UINT history_preview_message = WM_APP + 12;
 constexpr int window_width = 860;
 constexpr int window_height = 760;
+constexpr double page_leading_share = 2.0 / 3.0;
 constexpr double body_text_size = 14;
 constexpr double caption_text_size = 12;
 constexpr std::size_t training_page_size = 100;
@@ -642,7 +643,7 @@ bool SettingsWindow::create(HINSTANCE instance) {
         return false;
     }
 
-    window_ = CreateWindowExW(0, window_class_name, L"Llavon 輸入法設定", WS_OVERLAPPEDWINDOW,
+    window_ = CreateWindowExW(0, window_class_name, L"拉風輸入法設定", WS_OVERLAPPEDWINDOW,
                               CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, nullptr, nullptr, instance, this);
     if (!window_) {
         return false;
@@ -822,6 +823,13 @@ void SettingsWindow::initialize_xaml_island() {
 
 void SettingsWindow::build_page() {
     shell_ = ui::load_xaml_resource(IDR_SETTINGS_PAGE_XAML).as<Grid>();
+    const auto page_content = named<StackPanel>(shell_, L"PageContent");
+    const auto page_viewport = named<Grid>(shell_, L"PageViewport");
+    page_viewport.SizeChanged([page_content](const auto&, const SizeChangedEventArgs& args) {
+        const double spare = std::max(0.0, args.NewSize().Width - page_content.MaxWidth());
+        page_content.Margin(ThicknessHelper::FromLengths(
+            spare * page_leading_share, 0, spare * (1 - page_leading_share), 0));
+    });
 
     model_path_ = named<TextBox>(shell_, L"ModelPath");
     model_path_.Text(to_hstring(configuration_.model_path));
