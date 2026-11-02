@@ -68,18 +68,22 @@ struct Candidates {};
 struct OpenCandidates {};
 struct MoveCaret {
     bool forward = false;
+    // All the way to the start or end of the composition.
+    bool to_edge = false;
 };
 struct Backspace {};
 // Backspace that must take effect after everything queued before it.
 struct BackspaceInOrder {};
 struct Enter {};
 struct Escape {};
+// Eaten without effect.
+struct Ignore {};
 }  // namespace action
 
 using KeyAction = std::variant<action::PassThrough, action::ShiftDown, action::ToggleWidth, action::ArmBacktick,
                                action::Insert, action::Compose, action::ComposeEnglish, action::Reading,
                                action::Candidates, action::OpenCandidates, action::MoveCaret, action::Backspace,
-                               action::BackspaceInOrder, action::Enter, action::Escape>;
+                               action::BackspaceInOrder, action::Enter, action::Escape, action::Ignore>;
 
 bool is_shift(WPARAM key) noexcept;
 // Keys whose text the layout decides, given the modifiers held.

@@ -114,11 +114,14 @@ void CompositionController::backspace(DocumentId document, E2eTrace trace) {
     }
 }
 
-void CompositionController::move_caret(DocumentId document, bool forward) {
+void CompositionController::move_caret(DocumentId document, bool forward, bool to_edge) {
     auto* composition = live(document);
     if (!composition) return;
     auto& buffer = composition->buffer;
-    if (forward ? buffer.next() : buffer.pre()) show(*composition);
+    const auto step = [&] { return forward ? buffer.next() : buffer.pre(); };
+    if (!step()) return;
+    while (to_edge && step()) {}
+    show(*composition);
 }
 
 void CompositionController::enter(DocumentId document, E2eTrace trace) {
