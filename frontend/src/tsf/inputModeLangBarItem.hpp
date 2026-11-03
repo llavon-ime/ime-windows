@@ -13,6 +13,7 @@
 #include "engine/engine_types.hpp"
 #include "system/globals.h"
 #include "system/sysutil.hpp"
+#include "system/taskbar_theme.hpp"
 
 namespace tsf {
 
@@ -27,6 +28,7 @@ public:
     HRESULT add_to_language_bar(ITfThreadMgr* thread_mgr);
     HRESULT remove_from_language_bar(ITfThreadMgr* thread_mgr);
     void set_mode(InputMode mode);
+    void refresh_theme();
 
     STDMETHODIMP GetInfo(TF_LANGBARITEMINFO* info) override;
     STDMETHODIMP GetStatus(DWORD* status) override;
@@ -46,6 +48,7 @@ private:
     void notify_update(DWORD flags);
     const wchar_t* mode_label() const;
     const wchar_t* tooltip_text() const;
+    int icon_id() const;
 
     TF_LANGBARITEMINFO info_ = {};
     winrt::com_ptr<ITfLangBarItemSink> sink_;
@@ -53,6 +56,7 @@ private:
     std::function<void()> on_open_settings_;
     std::function<void(POINT)> on_open_menu_;
     InputMode mode_ = InputMode::Chinese;
+    TaskbarTheme theme_ = current_taskbar_theme();
     DWORD status_ = 0;
     bool added_ = false;
 };

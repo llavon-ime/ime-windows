@@ -1,5 +1,7 @@
 #include "resource.h"
 
-IDI_TEXT_SERVICE ICON "assets\\text_service.ico"
+IDI_TEXT_SERVICE ICON "..\\..\\service\\src\\assets\\llavon_tray.ico"
 IDI_INPUT_MODE_CHINESE ICON "assets\\input_mode_zh.ico"
 IDI_INPUT_MODE_ENGLISH ICON "assets\\input_mode_en.ico"
+IDI_INPUT_MODE_CHINESE_WHITE ICON "assets\\input_mode_zh_white.ico"
+IDI_INPUT_MODE_ENGLISH_WHITE ICON "assets\\input_mode_en_white.ico"

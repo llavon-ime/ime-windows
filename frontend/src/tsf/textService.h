@@ -28,6 +28,7 @@ namespace tsf {
 class CandidateUiController;
 class InputModeLangBarItem;
 class UiDispatcher;
+class TaskbarThemeWatcher;
 
 // clang-format off
 class TextService :
@@ -142,6 +143,7 @@ private:
 
     void start_engine_worker();
     void stop_engine_worker() noexcept;
+    void watch_taskbar_theme();
     DocumentId document_of(ITfContext* context);
     winrt::com_ptr<ITfContext> context_of(DocumentId document) const;
     void leave_other_document(DocumentId document);
@@ -195,6 +197,7 @@ private:
     winrt::com_ptr<InputModeLangBarItem> input_mode_lang_bar_item_;
     CompositionController controller_{*this};
     std::unique_ptr<UiDispatcher> ui_dispatcher_;
+    std::unique_ptr<TaskbarThemeWatcher> theme_watcher_;
     std::unique_ptr<EngineWorker> engine_worker_;
     std::map<DocumentId, winrt::com_ptr<ITfContext>> documents_;
     std::map<std::uint64_t, SealedRange> sealed_ranges_;

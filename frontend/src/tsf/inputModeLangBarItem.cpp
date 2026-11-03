@@ -95,6 +95,16 @@ void InputModeLangBarItem::set_mode(InputMode mode) {
     notify_update(TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP);
 }
 
+void InputModeLangBarItem::refresh_theme() {
+    const TaskbarTheme theme = current_taskbar_theme();
+    if (theme_ == theme) {
+        return;
+    }
+
+    theme_ = theme;
+    notify_update(TF_LBI_ICON);
+}
+
 STDMETHODIMP InputModeLangBarItem::GetInfo(TF_LANGBARITEMINFO* info) {
     if (!info) {
         return E_INVALIDARG;
@@ -169,10 +179,9 @@ STDMETHODIMP InputModeLangBarItem::GetIcon(HICON* icon) {
         return E_INVALIDARG;
     }
 
-    const int icon_id = mode_ == InputMode::Chinese ? IDI_INPUT_MODE_CHINESE : IDI_INPUT_MODE_ENGLISH;
     const int icon_width = GetSystemMetrics(SM_CXSMICON);
     const int icon_height = GetSystemMetrics(SM_CYSMICON);
-    *icon = reinterpret_cast<HICON>(LoadImageW(Globals::hinstance, MAKEINTRESOURCEW(icon_id), IMAGE_ICON, icon_width,
+    *icon = reinterpret_cast<HICON>(LoadImageW(Globals::hinstance, MAKEINTRESOURCEW(icon_id()), IMAGE_ICON, icon_width,
                                                icon_height, LR_DEFAULTCOLOR));
     return *icon ? S_OK : E_FAIL;
 }
@@ -234,6 +243,13 @@ const wchar_t* InputModeLangBarItem::mode_label() const {
 
 const wchar_t* InputModeLangBarItem::tooltip_text() const {
     return mode_ == InputMode::Chinese ? L"Chinese input mode" : L"English input mode";
+}
+
+int InputModeLangBarItem::icon_id() const {
+    if (theme_ == TaskbarTheme::Dark) {
+        return mode_ == InputMode::Chinese ? IDI_INPUT_MODE_CHINESE_WHITE : IDI_INPUT_MODE_ENGLISH_WHITE;
+    }
+    return mode_ == InputMode::Chinese ? IDI_INPUT_MODE_CHINESE : IDI_INPUT_MODE_ENGLISH;
 }
 
 }  // namespace tsf

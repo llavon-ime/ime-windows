@@ -35,6 +35,18 @@ SearchHost 等 AppContainer 宿主程序會依據宿主自身的套件相依關�
 即可檢查在只有系統相依項目時前端能否成功載入。此測試僅驗證 DLL 載入邊界；
 互動切換與實際打字仍需在真正的 AppContainer 宿主中測試。
 
+## 工作列圖示
+
+「中／英」按鈕依工作列主題選用黑字或白字圖示。主題由唯讀的
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\SystemUsesLightTheme`
+判斷，並監聽該 key 的變更，取得焦點時也會重新檢查；讀不到時視為深色。
+Windows 11 工作列不會依 `TF_LBI_STYLE_TEXTCOLORICON` 替圖示配色，因此不使用該旗標。
+
+品牌圖示沿用服務的 `service/src/assets/llavon_tray.ico`。工作列只對微軟內建輸入法
+依主題重繪品牌圖示，第三方輸入法的圖示會原樣顯示，因此使用白底圖示以適應深淺色。
+
+`input_mode_*_white.ico` 與 `input_mode_*.ico` 為同一字形，修改其中一組時需一併更新另一組。
+
 `TextService` 直接擁有一個來自共用非同步函式庫 `llavon::debug-client`
 的 `llavon::debug::Logger`。每個 TSF 宿主程序都會以獨立記錄產生端的身分
 連線至 `\\.\pipe\llavon-ime-debugger`。若宿主提供對應的 test 回呼，前端計時

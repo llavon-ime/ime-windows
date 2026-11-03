@@ -22,6 +22,7 @@
 #include "engine/impl/engine.h"
 #include "inputModeLangBarItem.hpp"
 #include "system/globals.h"
+#include "system/taskbar_theme.hpp"
 #include "system/ui_dispatcher.hpp"
 #include "utils/healper.hpp"
 
@@ -441,7 +442,21 @@ void TextService::start_engine_worker() {
     }
 }
 
+void TextService::watch_taskbar_theme() {
+    try {
+        theme_watcher_ = std::make_unique<TaskbarThemeWatcher>([this, dispatcher = ui_dispatcher_.get()] {
+            dispatcher->post([this] {
+                auto lifetime = get_strong();
+                if (input_mode_lang_bar_item_) input_mode_lang_bar_item_->refresh_theme();
+            });
+        });
+    } catch (...) {
+        handle_com_exception();
+    }
+}
+
 void TextService::stop_engine_worker() noexcept {
+    theme_watcher_.reset();
     controller_.set_backend(nullptr);
     // Results still queued for this thread must not run against a stopped worker.
     if (ui_dispatcher_) ui_dispatcher_->close();
@@ -824,6 +839,7 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
         [](POINT location) { request_settings_menu(location); });
     input_mode_lang_bar_item_->add_to_language_bar(threadMgr.get());
     refresh_input_mode_indicator();
+    watch_taskbar_theme();
 
     winrt::com_ptr<ITfSource> itfSource;
     HRESULT hr = threadMgr->QueryInterface<ITfSource>(itfSource.put());
@@ -1068,6 +1084,7 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocume
     forget_recent_commit();
     refresh_input_settings();
     refresh_input_mode_indicator();
+    if (input_mode_lang_bar_item_) input_mode_lang_bar_item_->refresh_theme();
     return S_OK;
 } catch (...) {
     return handle_com_exception();
@@ -1117,6 +1134,7 @@ STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
     if (fForeground) {
         refresh_input_settings();
         refresh_input_mode_indicator();
+        if (input_mode_lang_bar_item_) input_mode_lang_bar_item_->refresh_theme();
     } else {
         forget_recent_commit();
     }
