@@ -293,20 +293,13 @@ bool system_uses_dark_theme() {
     return 5u * foreground.G + 2u * foreground.R + foreground.B > 8u * 128u;
 }
 
-std::wstring short_commit(std::wstring_view commit) {
-    if (commit == L"unknown" || commit.size() < 7) {
-        return L"開發版本";
-    }
-    return std::wstring(commit.substr(0, 7));
-}
-
 std::wstring build_identity(
-    std::wstring_view version, std::uint64_t build, std::wstring_view commit) {
-    if (build == 0) {
-        return std::wstring(version) + L"（" + short_commit(commit) + L"）";
+    std::optional<std::wstring_view> release_version, std::wstring_view commit) {
+    const std::wstring name = release_version ? std::wstring(*release_version) : L"開發版本";
+    if (commit == L"unknown" || commit.size() < 7) {
+        return name;
     }
-    return std::wstring(version) + L"（建置 #" + std::to_wstring(build) + L"、" +
-           short_commit(commit) + L"）";
+    return name + L"（" + std::wstring(commit.substr(0, 7)) + L"）";
 }
 
 const char16_t* backend_label(InferenceBackend backend) {
@@ -1021,8 +1014,7 @@ void SettingsWindow::build_page() {
         });
 
     named<TextBlock>(shell_, L"BuildLabel").Text(
-        build_identity(UpdateChecker::installed_version(),
-                       UpdateChecker::installed_build_number(),
+        build_identity(UpdateChecker::installed_release_version(),
                        UpdateChecker::installed_commit()));
     bind_setting_toggle(
         named<ToggleSwitch>(shell_, L"UpdateNotificationsToggle"),

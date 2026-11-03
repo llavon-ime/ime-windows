@@ -53,7 +53,7 @@ constexpr ChannelEndpoint endpoint(ReleaseChannel channel) noexcept {
 
 constexpr std::uint64_t current_build = LLAVON_IME_BUILD_NUMBER;
 constexpr wchar_t current_commit[] = LLAVON_WIDEN(LLAVON_IME_BUILD_COMMIT);
-constexpr wchar_t current_version[] = LLAVON_WIDEN(LLAVON_IME_VERSION);
+constexpr std::wstring_view current_release_version = LLAVON_WIDEN(LLAVON_IME_RELEASE_VERSION);
 constexpr auto update_timeout = std::chrono::seconds(2);
 constexpr winrt::hresult http_not_found{static_cast<std::int32_t>(0x80190194)};
 constexpr double largest_exact_json_integer = 9007199254740991.0;
@@ -180,7 +180,6 @@ UpdateCheckResult base_result() {
     UpdateCheckResult result;
     result.current_build = current_build;
     result.current_commit = current_commit;
-    result.current_version = current_version;
     return result;
 }
 
@@ -323,8 +322,11 @@ std::wstring_view UpdateChecker::installed_commit() noexcept {
     return current_commit;
 }
 
-std::wstring_view UpdateChecker::installed_version() noexcept {
-    return current_version;
+std::optional<std::wstring_view> UpdateChecker::installed_release_version() noexcept {
+    if (current_release_version.empty()) {
+        return std::nullopt;
+    }
+    return current_release_version;
 }
 
 bool UpdateChecker::check_async(Completion completion) {

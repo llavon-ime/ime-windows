@@ -102,7 +102,7 @@ foreach(target llavon-ime-ui llavon-ime-service)
     target_compile_features(${target} PRIVATE cxx_std_23)
     set_target_properties(${target} PROPERTIES CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
     target_compile_definitions(${target} PRIVATE
-        LLAVON_IME_VERSION="${LLAVON_IME_VERSION}"
+        LLAVON_IME_RELEASE_VERSION="${LLAVON_IME_RELEASE_VERSION}"
         LLAVON_IME_BUILD_COMMIT="${IME_WINDOWS_SERVICE_BUILD_COMMIT}"
         LLAVON_IME_BUILD_NUMBER=${IME_WINDOWS_SERVICE_BUILD_NUMBER}
         LLAVON_LORA_SUBMODULE_COMMIT="${LLAVON_LORA_SUBMODULE_COMMIT}"

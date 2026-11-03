@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -41,7 +42,6 @@ struct ChannelCheckResult {
 struct UpdateCheckResult {
     std::uint64_t current_build = 0;
     std::wstring current_commit;
-    std::wstring current_version;
     ChannelCheckResult stable{.channel = ReleaseChannel::stable};
     ChannelCheckResult rolling{.channel = ReleaseChannel::rolling};
 
@@ -64,7 +64,7 @@ public:
 
     static std::uint64_t installed_build_number() noexcept;
     static std::wstring_view installed_commit() noexcept;
-    static std::wstring_view installed_version() noexcept;
+    static std::optional<std::wstring_view> installed_release_version() noexcept;
     static UpdateCheckResult check_now() noexcept;
     bool check_async(Completion completion);
 

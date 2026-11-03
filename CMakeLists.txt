@@ -70,6 +70,12 @@ if(NOT LLAVON_IME_BUILD_COMMIT)
         "Root repository commit embedded in the package" FORCE)
 endif()
 
+set(LLAVON_IME_RELEASE_VERSION "" CACHE STRING "Asia/Taipei CalVer of the published release")
+if(LLAVON_IME_RELEASE_VERSION AND
+   NOT LLAVON_IME_RELEASE_VERSION MATCHES "^[0-9][0-9][0-9][0-9]\\.[0-9][0-9]\\.[0-9][0-9]\\.[0-9]+$")
+    message(FATAL_ERROR "LLAVON_IME_RELEASE_VERSION must look like YYYY.MM.DD.N")
+endif()
+
 set(IME_WINDOWS_SERVICE_BUILD_COMMIT "${LLAVON_IME_BUILD_COMMIT}")
 set(IME_WINDOWS_SERVICE_BUILD_NUMBER "${LLAVON_IME_BUILD_NUMBER}")
 

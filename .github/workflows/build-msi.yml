@@ -45,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $date = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8))
-          # This version is only for release tags and latest.json, not WiX.
+          # This version is for release tags, latest.json and the settings UI, not WiX.
           $revision = 1000 + [long]"${{ github.run_number }}"
           $version = "$($date.ToString('yyyy.MM.dd')).$revision"
           "version=$version" >> $env:GITHUB_OUTPUT
@@ -123,6 +123,7 @@ jobs:
           "-DLLAVON_IME_MODEL_REVISION=${{ steps.model.outputs.revision }}"
           "-DLLAVON_IME_MODEL_SHA256=${{ steps.model.outputs.sha256 }}"
           "-DLLAVON_IME_MODEL_SIZE=${{ steps.model.outputs.size }}"
+          "-DLLAVON_IME_RELEASE_VERSION=${{ steps.release-version.outputs.version }}"
 
       - name: Upload vcpkg ABI diagnostics
         if: ${{ always() && steps.configure.outcome != 'skipped' }}
