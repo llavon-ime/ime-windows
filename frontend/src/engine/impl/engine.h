@@ -30,6 +30,8 @@ public:
     // InputMode as its underlying value.
     virtual IAsyncOperation<std::uint8_t> toggle_input_mode() = 0;
     virtual IAsyncOperation<std::uint8_t> current_input_mode() = 0;
+    // Whether the backend answered the last request; read on the worker thread.
+    virtual BackendState backend_state() const noexcept = 0;
     // Any thread, used on shutdown: fails outstanding and later I/O.
     virtual void abort() noexcept = 0;
 };

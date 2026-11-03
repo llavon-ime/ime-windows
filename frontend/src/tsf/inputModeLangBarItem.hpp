@@ -17,6 +17,8 @@
 
 namespace tsf {
 
+enum class InputIndicator { Chinese, English, Unavailable };
+
 class InputModeLangBarItem
     : public winrt::implements<InputModeLangBarItem, ITfLangBarItem, ITfLangBarItemButton, ITfSource>,
       public module_lock_updater {
@@ -27,7 +29,8 @@ public:
 
     HRESULT add_to_language_bar(ITfThreadMgr* thread_mgr);
     HRESULT remove_from_language_bar(ITfThreadMgr* thread_mgr);
-    void set_mode(InputMode mode);
+    void set_indicator(InputIndicator indicator);
+    void set_icon_color(TaskbarIconColor color);
     void refresh_theme();
 
     STDMETHODIMP GetInfo(TF_LANGBARITEMINFO* info) override;
@@ -55,7 +58,8 @@ private:
     std::function<void()> on_click_;
     std::function<void()> on_open_settings_;
     std::function<void(POINT)> on_open_menu_;
-    InputMode mode_ = InputMode::Chinese;
+    InputIndicator indicator_ = InputIndicator::Chinese;
+    TaskbarIconColor icon_color_ = TaskbarIconColor::System;
     TaskbarTheme theme_ = current_taskbar_theme();
     DWORD status_ = 0;
     bool added_ = false;

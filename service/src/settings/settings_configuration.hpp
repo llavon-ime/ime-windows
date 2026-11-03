@@ -2,6 +2,7 @@
 
 #include "../service/lora_types.hpp"
 #include "../service/training_data_writer.hpp"
+#include "../service/user_settings.hpp"
 
 #include <ime-core/core.hpp>
 
@@ -22,6 +23,7 @@ using LoraTrainingOptions = service::LoraTrainingOptions;
 using LoraOperationStatus = service::LoraOperationStatus;
 using LoraOperationStage = service::LoraOperationStage;
 using CudaRuntimeState = service::CudaRuntimeState;
+using TaskbarIconColor = service::TaskbarIconColor;
 
 enum class ModelPreparation { prepare, discard };
 enum class LoraAction {
@@ -76,6 +78,7 @@ struct SettingsActions {
     std::function<bool(bool)> save_immediate_conversion;
     std::function<bool(bool)> save_gpu_boost;
     std::function<bool(bool)> save_update_notifications;
+    std::function<bool(TaskbarIconColor)> save_taskbar_icon_color;
     std::function<std::optional<std::vector<TrainingDataOption>>(std::u16string_view, std::int64_t)>
         load_training_items;
     std::function<bool(std::u16string_view)> delete_training_item;
@@ -102,6 +105,7 @@ struct SettingsConfiguration {
     bool immediate_conversion_enabled = false;
     bool gpu_boost_enabled = true;
     bool major_update_notifications_enabled = true;
+    TaskbarIconColor taskbar_icon_color = TaskbarIconColor::system;
     std::vector<TrainingDataOption> training_items;
     SettingsActions actions;
 };

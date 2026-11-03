@@ -211,4 +211,20 @@ bool save_major_update_notifications_setting(bool enabled) noexcept {
     }
 }
 
+bool save_taskbar_icon_color_setting(TaskbarIconColor color) noexcept {
+    try {
+        std::lock_guard lock(settings_mutex);
+        auto settings = load_settings_unlocked();
+        settings.taskbar_icon_color = color;
+        return save_settings_unlocked(settings);
+    } catch (const std::exception& error) {
+        std::clog << "[SRV] unable to save taskbar icon color setting: "
+                  << error.what() << '\n';
+        return false;
+    } catch (...) {
+        std::clog << "[SRV] unable to save taskbar icon color setting\n";
+        return false;
+    }
+}
+
 }  // namespace llavon::service

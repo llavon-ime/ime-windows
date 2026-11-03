@@ -40,6 +40,8 @@ SearchHost 等 AppContainer 宿主程序會依據宿主自身的套件相依關�
 「中／英」按鈕依工作列主題選用黑字或白字圖示。主題由唯讀的
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\SystemUsesLightTheme`
 判斷，並監聽該 key 的變更，取得焦點時也會重新檢查；讀不到時視為深色。
+設定中的「工作列圖示顏色」可改為固定黑色或白色，供工作列被第三方工具改色的環境使用。
+無法連線至後端時改顯示 X，避免看起來像是停在英文模式。
 Windows 11 工作列不會依 `TF_LBI_STYLE_TEXTCOLORICON` 替圖示配色，因此不使用該旗標。
 
 品牌圖示沿用服務的 `service/src/assets/llavon_tray.ico`。工作列只對微軟內建輸入法

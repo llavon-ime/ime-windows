@@ -37,6 +37,7 @@ struct SettingsDocument {
     bool immediate_conversion_enabled = false;
     bool gpu_boost_enabled = true;
     bool major_update_notifications_enabled = true;
+    std::string taskbar_icon_color = "system";
 };
 
 const char* backend_name(InferenceBackend backend) {
@@ -60,6 +61,23 @@ std::optional<InferenceBackend> parse_backend(const std::string& value) {
     if (value == "cuda") return InferenceBackend::cuda;
     if (value == "vulkan") return InferenceBackend::vulkan;
     return std::nullopt;
+}
+
+const char* taskbar_icon_color_name(TaskbarIconColor color) {
+    switch (color) {
+        case TaskbarIconColor::black:
+            return "black";
+        case TaskbarIconColor::white:
+            return "white";
+        default:
+            return "system";
+    }
+}
+
+TaskbarIconColor parse_taskbar_icon_color(const std::string& value) {
+    if (value == "black") return TaskbarIconColor::black;
+    if (value == "white") return TaskbarIconColor::white;
+    return TaskbarIconColor::system;
 }
 
 }  // namespace
@@ -113,6 +131,7 @@ std::optional<UserSettings> decode(std::string_view json) {
         .gpu_boost_enabled = document.gpu_boost_enabled,
         .major_update_notifications_enabled =
             document.major_update_notifications_enabled,
+        .taskbar_icon_color = parse_taskbar_icon_color(document.taskbar_icon_color),
     };
 }
 
@@ -153,6 +172,7 @@ std::string encode(const UserSettings& settings) {
         .gpu_boost_enabled = settings.gpu_boost_enabled,
         .major_update_notifications_enabled =
             settings.major_update_notifications_enabled,
+        .taskbar_icon_color = taskbar_icon_color_name(settings.taskbar_icon_color),
     };
     return rfl::json::write(document, YYJSON_WRITE_PRETTY);
 }

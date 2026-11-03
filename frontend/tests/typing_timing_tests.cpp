@@ -1377,6 +1377,7 @@ public:
     IAsyncAction discard_commit(std::uint64_t) override { co_return; }
     IAsyncOperation<std::uint8_t> toggle_input_mode() override { co_return 0; }
     IAsyncOperation<std::uint8_t> current_input_mode() override { co_return 0; }
+    tsf::BackendState backend_state() const noexcept override { return tsf::BackendState::Connected; }
     void abort() noexcept override {}
 
 private:

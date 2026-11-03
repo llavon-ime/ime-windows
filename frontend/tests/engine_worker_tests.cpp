@@ -60,7 +60,10 @@ public:
             co_await winrt::resume_on_signal(state_->release.handle);
             if (aborted_) co_return false;
         }
-        if (context == u"lost") co_return false;
+        if (context == u"lost") {
+            backend_ = tsf::BackendState::Unavailable;
+            co_return false;
+        }
         for (auto& entry : padding) {
             entry.candidates = {U'新', U'舊'};
             entry.predicted = true;
@@ -86,6 +89,7 @@ public:
         ++state_->mode_queries;
         co_return static_cast<std::uint8_t>(mode_);
     }
+    tsf::BackendState backend_state() const noexcept override { return backend_; }
     void abort() noexcept override {
         aborted_ = true;
         state_->release.signal();
@@ -94,6 +98,7 @@ public:
 private:
     std::shared_ptr<State> state_;
     tsf::InputMode mode_ = tsf::InputMode::Chinese;
+    tsf::BackendState backend_ = tsf::BackendState::Connected;
     std::atomic_bool aborted_ = false;
 };
 
@@ -126,11 +131,13 @@ struct Harness {
     UiQueue ui;
     std::vector<tsf::EngineWorker::Prediction> results;
     std::vector<tsf::InputMode> modes;
+    std::vector<tsf::BackendState> backend_states;
     std::unique_ptr<tsf::EngineWorker> worker = std::make_unique<tsf::EngineWorker>(
         [state = state] { return std::make_unique<FakeEngine>(state); }, ui.poster(),
         tsf::EngineWorker::Callbacks{
             .prediction = [this](tsf::EngineWorker::Prediction result) { results.push_back(std::move(result)); },
             .input_mode_changed = [this](tsf::InputMode mode) { modes.push_back(mode); },
+            .backend_state_changed = [this](tsf::BackendState state) { backend_states.push_back(state); },
         });
 
     ~Harness() {
@@ -224,6 +231,9 @@ void backend_lost_test() {
     require(h.worker->cached_input_mode() == tsf::InputMode::English && !h.modes.empty() &&
                 h.modes.back() == tsf::InputMode::English,
             "a lost backend did not switch to English");
+    require(h.worker->cached_backend_state() == tsf::BackendState::Unavailable &&
+                h.backend_states == std::vector{tsf::BackendState::Unavailable},
+            "a lost backend was not reported as unavailable");
 }
 
 void shutdown_test() {

@@ -130,6 +130,10 @@ public:
         return query_input_mode(PipeCommand::GetInputMode);
     }
 
+    BackendState backend_state() const noexcept override {
+        return pipe_ != INVALID_HANDLE_VALUE ? BackendState::Connected : BackendState::Unavailable;
+    }
+
     void abort() noexcept override {
         aborted_ = true;
         std::lock_guard lock(handle_mutex_);

@@ -177,6 +177,30 @@
           </Grid>
         </Border>
         <Border Style="{StaticResource SettingsCardStyle}">
+          <Grid ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock Text="工作列圖示顏色"
+                  Style="{StaticResource SettingsCardHeaderStyle}"/>
+              <TextBlock x:Name="TaskbarIconColorNote"
+                  Style="{StaticResource SettingsErrorStyle}"
+                  Visibility="Collapsed"/>
+            </StackPanel>
+            <ComboBox x:Name="TaskbarIconColor"
+                Grid.Column="1"
+                MinWidth="140"
+                VerticalAlignment="Center"
+                AutomationProperties.Name="工作列圖示顏色">
+              <x:String>跟隨系統</x:String>
+              <x:String>黑色</x:String>
+              <x:String>白色</x:String>
+            </ComboBox>
+          </Grid>
+        </Border>
+        <Border Style="{StaticResource SettingsCardStyle}">
           <StackPanel Spacing="10">
             <TextBlock Text="自訂名字"
                 Style="{StaticResource SettingsCardHeaderStyle}"/>

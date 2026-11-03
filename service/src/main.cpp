@@ -329,6 +329,7 @@ int main(int argc, char* argv[]) {
         }
         settings.shift_space_width_toggle_enabled = user_settings.shift_space_width_toggle_enabled;
         settings.immediate_conversion_enabled = user_settings.immediate_conversion_enabled;
+        settings.taskbar_icon_color = user_settings.taskbar_icon_color;
         settings.gpu_boost_enabled = user_settings.gpu_boost_enabled;
         settings.major_update_notifications_enabled =
             user_settings.major_update_notifications_enabled;
@@ -422,6 +423,9 @@ int main(int argc, char* argv[]) {
         };
         settings.actions.save_immediate_conversion = [](bool enabled) {
             return llavon::service::save_immediate_conversion_setting(enabled);
+        };
+        settings.actions.save_taskbar_icon_color = [](llavon::service::TaskbarIconColor color) {
+            return llavon::service::save_taskbar_icon_color_setting(color);
         };
         settings.actions.save_gpu_boost = [&server](bool enabled) {
             try {

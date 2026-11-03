@@ -9,6 +9,7 @@
 namespace tsf {
 
 enum class TaskbarTheme { Light, Dark };
+enum class TaskbarIconColor { System, Black, White };
 
 inline constexpr wchar_t kPersonalizeKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 

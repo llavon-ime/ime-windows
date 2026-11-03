@@ -29,6 +29,7 @@ class CandidateUiController;
 class InputModeLangBarItem;
 class UiDispatcher;
 class TaskbarThemeWatcher;
+enum class InputIndicator;
 
 // clang-format off
 class TextService :
@@ -174,6 +175,7 @@ private:
                                             std::optional<std::uint64_t> epoch);
     InputMode read_backend_input_mode();
     InputMode refresh_input_mode_indicator(bool query_backend = true);
+    InputIndicator input_indicator(InputMode mode) const noexcept;
     void sync_input_mode_compartments(InputMode mode);
     void refresh_input_settings();
     bool context_accepts_input(ITfContext* context) const;

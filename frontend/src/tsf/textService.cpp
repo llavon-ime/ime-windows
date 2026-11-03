@@ -73,7 +73,14 @@ bool has_private_input_scope(ITfContext* context, TfEditCookie cookie,
 struct InputSettings {
     bool shift_space_width_toggle_enabled = false;
     bool immediate_conversion_enabled = false;
+    std::string taskbar_icon_color = "system";
 };
+
+tsf::TaskbarIconColor parse_taskbar_icon_color(std::string_view value) noexcept {
+    if (value == "black") return tsf::TaskbarIconColor::Black;
+    if (value == "white") return tsf::TaskbarIconColor::White;
+    return tsf::TaskbarIconColor::System;
+}
 
 InputSettings load_input_settings() noexcept {
     try {
@@ -429,6 +436,12 @@ void TextService::start_engine_worker() {
                     },
                 .input_mode_changed =
                     [this](InputMode) {
+                        auto lifetime = get_strong();
+                        try { refresh_input_mode_indicator(false); }
+                        catch (...) { handle_com_exception(); }
+                    },
+                .backend_state_changed =
+                    [this](BackendState) {
                         auto lifetime = get_strong();
                         try { refresh_input_mode_indicator(false); }
                         catch (...) { handle_com_exception(); }
@@ -827,7 +840,6 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
     start_engine_worker();
     threadMgr.copy_from(pThreadMgr);
     _tfClientId = tfClientId;
-    refresh_input_settings();
     candidate_ui_->attach(pThreadMgr, tfClientId);
 
     input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>(
@@ -838,6 +850,7 @@ HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
         [] { request_settings_window(); },
         [](POINT location) { request_settings_menu(location); });
     input_mode_lang_bar_item_->add_to_language_bar(threadMgr.get());
+    refresh_input_settings();
     refresh_input_mode_indicator();
     watch_taskbar_theme();
 
@@ -925,7 +938,7 @@ InputMode TextService::refresh_input_mode_indicator(bool query_backend) {
     const InputMode mode = engine_worker_ ? engine_worker_->cached_input_mode() : InputMode::English;
     key_state_.mode_changed(mode);
     if (input_mode_lang_bar_item_) {
-        input_mode_lang_bar_item_->set_mode(mode);
+        input_mode_lang_bar_item_->set_indicator(input_indicator(mode));
     }
     sync_input_mode_compartments(mode);
     return mode;
@@ -960,9 +973,19 @@ void TextService::sync_input_mode_compartments(InputMode mode) {
     set_compartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION, conversion_mode);
 }
 
+InputIndicator TextService::input_indicator(InputMode mode) const noexcept {
+    if (!engine_worker_ || engine_worker_->cached_backend_state() == BackendState::Unavailable) {
+        return InputIndicator::Unavailable;
+    }
+    return mode == InputMode::Chinese ? InputIndicator::Chinese : InputIndicator::English;
+}
+
 void TextService::refresh_input_settings() {
     const auto settings = load_input_settings();
     controller_.set_immediate_conversion(settings.immediate_conversion_enabled);
+    if (input_mode_lang_bar_item_) {
+        input_mode_lang_bar_item_->set_icon_color(parse_taskbar_icon_color(settings.taskbar_icon_color));
+    }
     const bool enabled = settings.shift_space_width_toggle_enabled;
     if (!enabled && shift_space_width_toggle_enabled_ && full_width_mode_) {
         full_width_mode_ = false;

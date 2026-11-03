@@ -146,6 +146,29 @@ void bind_setting_toggle(const ToggleSwitch& toggle, const TextBlock& failure_no
     });
 }
 
+// ComboBox item order matches the enumerator order.
+void bind_taskbar_icon_color(const ComboBox& choice, const TextBlock& failure_note,
+                             TaskbarIconColor initial,
+                             std::function<bool(TaskbarIconColor)> save) {
+    auto saved = std::make_shared<TaskbarIconColor>(initial);
+    choice.SelectedIndex(static_cast<std::int32_t>(std::to_underlying(initial)));
+    choice.SelectionChanged([failure_note, saved, save = std::move(save)](
+                                const auto& sender, const auto&) {
+        const auto choice = sender.template as<ComboBox>();
+        if (choice.SelectedIndex() < 0) return;
+        const auto color = static_cast<TaskbarIconColor>(choice.SelectedIndex());
+        if (color == *saved) return;
+        if (save(color)) {
+            *saved = color;
+            failure_note.Visibility(Visibility::Collapsed);
+            return;
+        }
+        choice.SelectedIndex(static_cast<std::int32_t>(std::to_underlying(*saved)));
+        failure_note.Text(L"無法儲存工作列圖示顏色，請稍後再試。");
+        failure_note.Visibility(Visibility::Visible);
+    });
+}
+
 void bind_toggle_state(const ToggleSwitch& toggle, const TextBlock& state) {
     const auto show = [state](bool on) { state.Text(on ? L"開啟" : L"關閉"); };
     show(toggle.IsOn());
@@ -940,6 +963,13 @@ void SettingsWindow::build_page() {
                    configuration_.actions.save_immediate_conversion(enabled);
         },
         L"無法儲存轉換顯示設定，請稍後再試。");
+    bind_taskbar_icon_color(
+        named<ComboBox>(shell_, L"TaskbarIconColor"), named<TextBlock>(shell_, L"TaskbarIconColorNote"),
+        configuration_.taskbar_icon_color,
+        [this](TaskbarIconColor color) {
+            return configuration_.actions.save_taskbar_icon_color &&
+                   configuration_.actions.save_taskbar_icon_color(color);
+        });
 
     custom_names_panel_ = named<StackPanel>(shell_, L"CustomNamesPanel");
     add_custom_name_button_ = named<Button>(shell_, L"AddCustomNameButton");

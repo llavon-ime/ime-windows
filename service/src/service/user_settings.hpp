@@ -14,6 +14,8 @@ struct CustomNameSetting {
     bool operator==(const CustomNameSetting&) const = default;
 };
 
+enum class TaskbarIconColor { system, black, white };
+
 struct UserSettings {
     llavon::ime::core::InferenceDeviceSelection inference;
     std::string model_path;
@@ -22,6 +24,7 @@ struct UserSettings {
     bool immediate_conversion_enabled = false;
     bool gpu_boost_enabled = true;
     bool major_update_notifications_enabled = true;
+    TaskbarIconColor taskbar_icon_color = TaskbarIconColor::system;
 };
 
 UserSettings load_settings() noexcept;
@@ -35,5 +38,6 @@ bool save_shift_space_width_toggle_setting(bool enabled) noexcept;
 bool save_immediate_conversion_setting(bool enabled) noexcept;
 bool save_gpu_boost_setting(bool enabled) noexcept;
 bool save_major_update_notifications_setting(bool enabled) noexcept;
+bool save_taskbar_icon_color_setting(TaskbarIconColor color) noexcept;
 
 }  // namespace llavon::service

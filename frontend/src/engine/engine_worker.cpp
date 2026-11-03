@@ -79,6 +79,14 @@ struct EngineWorker::Impl {
         });
     }
 
+    void publish_backend(BackendState backend) {
+        to_ui([backend](UiState& state) {
+            if (state.backend == backend) return;
+            state.backend = backend;
+            if (state.callbacks.backend_state_changed) state.callbacks.backend_state_changed(backend);
+        });
+    }
+
     void publish_prediction(Prediction prediction) {
         to_ui([prediction = std::move(prediction)](UiState& state) mutable {
             // Without a backend there is no Bopomofo engine: English, at once,
@@ -166,11 +174,16 @@ InputMode EngineWorker::cached_input_mode() const noexcept {
     return ui_->mode;
 }
 
+BackendState EngineWorker::cached_backend_state() const noexcept {
+    return ui_->backend;
+}
+
 void EngineWorker::refresh_input_mode() {
     const auto revision = ui_->mode_revision;
     impl_->submit(Impl::Kind::Query, [impl = impl_.get(), revision](IEngine& engine)
                                          -> winrt::Windows::Foundation::IAsyncAction {
         const auto mode = co_await engine.current_input_mode();
+        impl->publish_backend(engine.backend_state());
         impl->publish_mode(static_cast<InputMode>(mode), revision);
     });
 }
@@ -181,6 +194,7 @@ void EngineWorker::toggle_input_mode() {
     impl_->submit(Impl::Kind::Other, [impl = impl_.get(), revision](IEngine& engine)
                                          -> winrt::Windows::Foundation::IAsyncAction {
         const auto mode = co_await engine.toggle_input_mode();
+        impl->publish_backend(engine.backend_state());
         impl->publish_mode(static_cast<InputMode>(mode), revision);
     });
 }
@@ -213,6 +227,7 @@ void EngineWorker::predict(std::uint64_t sequence, std::uint64_t group, std::u16
             }
             result.status = answered ? Prediction::Status::Converted : Prediction::Status::BackendLost;
             result.finished = std::chrono::steady_clock::now();
+            impl->publish_backend(engine.backend_state());
             impl->publish_prediction(std::move(result));
         },
         sequence, group);

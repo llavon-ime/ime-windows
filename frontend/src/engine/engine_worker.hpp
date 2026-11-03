@@ -26,6 +26,7 @@ public:
     struct Callbacks {
         std::function<void(Prediction)> prediction;
         std::function<void(InputMode)> input_mode_changed;
+        std::function<void(BackendState)> backend_state_changed;
     };
 
     using UiTask = std::move_only_function<void()>;
@@ -38,6 +39,7 @@ public:
     EngineWorker& operator=(const EngineWorker&) = delete;
 
     InputMode cached_input_mode() const noexcept;
+    BackendState cached_backend_state() const noexcept;
     void refresh_input_mode();
     void toggle_input_mode();
     void ready();
@@ -54,6 +56,7 @@ private:
         Callbacks callbacks;
         InputMode mode = InputMode::English;
         std::uint64_t mode_revision = 0;
+        BackendState backend = BackendState::Connected;
     };
     struct Impl;
 

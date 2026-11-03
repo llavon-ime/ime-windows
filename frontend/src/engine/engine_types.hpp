@@ -11,6 +11,11 @@ enum class InputMode : std::uint8_t {
     English = 1,
 };
 
+enum class BackendState : std::uint8_t {
+    Connected,
+    Unavailable,
+};
+
 struct CommitInputEntry {
     std::u16string reading;
     std::u16string output;

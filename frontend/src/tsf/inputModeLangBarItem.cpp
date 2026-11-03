@@ -86,13 +86,22 @@ HRESULT InputModeLangBarItem::remove_from_language_bar(ITfThreadMgr* thread_mgr)
     return hr;
 }
 
-void InputModeLangBarItem::set_mode(InputMode mode) {
-    if (mode_ == mode) {
+void InputModeLangBarItem::set_indicator(InputIndicator indicator) {
+    if (indicator_ == indicator) {
         return;
     }
 
-    mode_ = mode;
+    indicator_ = indicator;
     notify_update(TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP);
+}
+
+void InputModeLangBarItem::set_icon_color(TaskbarIconColor color) {
+    if (icon_color_ == color) {
+        return;
+    }
+
+    icon_color_ = color;
+    notify_update(TF_LBI_ICON);
 }
 
 void InputModeLangBarItem::refresh_theme() {
@@ -238,18 +247,38 @@ void InputModeLangBarItem::notify_update(DWORD flags) {
 }
 
 const wchar_t* InputModeLangBarItem::mode_label() const {
-    return mode_ == InputMode::Chinese ? L"\x4E2D" : L"\x82F1";
+    switch (indicator_) {
+        case InputIndicator::Chinese:
+            return L"\x4E2D";
+        case InputIndicator::English:
+            return L"\x82F1";
+        default:
+            return L"X";
+    }
 }
 
 const wchar_t* InputModeLangBarItem::tooltip_text() const {
-    return mode_ == InputMode::Chinese ? L"Chinese input mode" : L"English input mode";
+    switch (indicator_) {
+        case InputIndicator::Chinese:
+            return L"Chinese input mode";
+        case InputIndicator::English:
+            return L"English input mode";
+        default:
+            return L"Input service unavailable";
+    }
 }
 
 int InputModeLangBarItem::icon_id() const {
-    if (theme_ == TaskbarTheme::Dark) {
-        return mode_ == InputMode::Chinese ? IDI_INPUT_MODE_CHINESE_WHITE : IDI_INPUT_MODE_ENGLISH_WHITE;
+    const bool white = icon_color_ == TaskbarIconColor::White ||
+                       (icon_color_ == TaskbarIconColor::System && theme_ == TaskbarTheme::Dark);
+    switch (indicator_) {
+        case InputIndicator::Chinese:
+            return white ? IDI_INPUT_MODE_CHINESE_WHITE : IDI_INPUT_MODE_CHINESE;
+        case InputIndicator::English:
+            return white ? IDI_INPUT_MODE_ENGLISH_WHITE : IDI_INPUT_MODE_ENGLISH;
+        default:
+            return white ? IDI_INPUT_MODE_UNAVAILABLE_WHITE : IDI_INPUT_MODE_UNAVAILABLE;
     }
-    return mode_ == InputMode::Chinese ? IDI_INPUT_MODE_CHINESE : IDI_INPUT_MODE_ENGLISH;
 }
 
 }  // namespace tsf
