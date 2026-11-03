@@ -662,12 +662,13 @@ class PredictionPipeServer final {
 public:
     PredictionPipeServer(std::shared_ptr<llavon::ime::core::Core> core,
         candidate::CandidateUi& candidate_ui, std::shared_ptr<CustomNameMatcher> custom_names,
+        std::shared_ptr<TrainingDataWriter> training_data,
         bool gpu_boost_enabled = true)
         : sessions_(std::make_shared<prediction_pipe::SessionLru>(
               inference_.get_executor(), std::move(core), gpu_boost_enabled)),
           candidate_ui_(candidate_ui), custom_names_(std::move(custom_names)),
-          training_data_(std::make_shared<TrainingDataWriter>()) {
-        if (!custom_names_) {
+          training_data_(std::move(training_data)) {
+        if (!custom_names_ || !training_data_) {
             throw std::invalid_argument("prediction server dependencies are required");
         }
     }

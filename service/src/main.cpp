@@ -12,6 +12,7 @@
 #include "service/lora_training_manager.hpp"
 #include "service/major_update_notifier.hpp"
 #include "service/process_mta.hpp"
+#include "service/training_data_writer.hpp"
 #include "service/user_settings.hpp"
 #include "settings/settings_ui.hpp"
 #include "service/tray_icon.hpp"
@@ -26,8 +27,10 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -273,18 +276,52 @@ int main(int argc, char* argv[]) {
             loaded.core = std::make_shared<llavon::ime::core::Core>(config);
             return loaded;
         });
-        llavon::ui::UiThread ui_thread;
-        auto [inference_devices, core] = core_loading.get();
-        const auto active_inference = core->inference_runtime_info();
+        auto training_data_loading = std::async(std::launch::async, [] {
+            return std::make_shared<llavon::service::TrainingDataWriter>();
+        });
 
+        // UI clients stay on their STA while model and database loading run independently.
+        llavon::ui::UiThread ui_thread;
         llavon::candidate::CandidateUi candidate_ui(ui_thread);
         auto custom_names =
             std::make_shared<llavon::service::CustomNameMatcher>(user_settings.custom_names);
+        auto training_data = training_data_loading.get();
+        llavon::service::LoraTrainingManager lora_training(training_data, config.tables_dir);
+
+        // Core construction includes Vulkan pipeline preparation. Do not expose either
+        // pipe until it has completed successfully.
+        auto [inference_devices, core] = core_loading.get();
+        const auto active_inference = core->inference_runtime_info();
         llavon::service::PredictionPipeServer server(
             std::move(core), candidate_ui, custom_names,
+            std::move(training_data),
             user_settings.gpu_boost_enabled);
-        llavon::service::LoraTrainingManager lora_training(
-            server.training_data_writer(), config.tables_dir);
+
+        // These outlive the server thread, including when settings initialization throws.
+        std::unique_ptr<llavon::settings::SettingsUi> settings_ui;
+        llavon::service::TrayIcon tray;
+        const bool tray_created = tray.create(
+            GetModuleHandleW(nullptr),
+            [&settings_ui] {
+                if (settings_ui) settings_ui->show();
+            },
+            [] { launch_debugger(); },
+            [&settings_ui](POINT location) {
+                if (settings_ui) settings_ui->show_context_menu(location);
+            },
+            [&server] { server.stop(); });
+        if (!tray_created) {
+            std::cerr << "[WARN] tray initialization failed: " << GetLastError() << '\n';
+        }
+
+        int server_result = 1;
+        std::jthread server_thread([&tray, &server, &server_result](std::stop_token stop) {
+            const std::stop_callback stop_server(stop, [&server] { server.stop(); });
+            server_result = run_server(server);
+            tray.notify_server_stopped(server_result);
+        });
+
+        // Settings are optional for transport startup and can initialize while it runs.
         auto custom_names_update_mutex = std::make_shared<std::mutex>();
         llavon::settings::SettingsConfiguration settings;
         auto active_config = std::make_shared<llavon::ime::core::CoreConfig>(config);
@@ -542,7 +579,7 @@ int main(int argc, char* argv[]) {
             }
         };
         settings.training_items = server.training_data_writer()->pending_items();
-        llavon::settings::SettingsUi settings_ui(ui_thread, std::move(settings));
+        settings_ui = std::make_unique<llavon::settings::SettingsUi>(ui_thread, std::move(settings));
 
         struct PendingCountRegistration {
             std::shared_ptr<llavon::service::TrainingDataWriter> writer;
@@ -551,30 +588,16 @@ int main(int argc, char* argv[]) {
             }
         } pending_count_registration{server.training_data_writer()};
         pending_count_registration.writer->set_pending_count_callback(
-            [&settings_ui](std::size_t count) {
-                settings_ui.notify_pending_count(count);
+            [ui = settings_ui.get()](std::size_t count) {
+                ui->notify_pending_count(count);
             });
-        llavon::service::TrayIcon tray;
-        if (!tray.create(GetModuleHandleW(nullptr), [&settings_ui] { settings_ui.show(); },
-                         [] { launch_debugger(); },
-                         [&settings_ui](POINT location) {
-                             settings_ui.show_context_menu(location);
-                         },
-                         [&server] { server.stop(); })) {
-            std::cerr << "[WARN] tray initialization failed: " << GetLastError() << '\n';
-            return run_server(server);
+        if (show_settings) settings_ui->show();
+        if (tray_created) {
+            llavon::service::MajorUpdateNotifier update_notifier(
+                [&tray] { tray.request_open_settings(); });
+            tray.run_message_loop();
+            server_thread.request_stop();
         }
-        if (show_settings) settings_ui.show();
-        llavon::service::MajorUpdateNotifier update_notifier(
-            [&tray] { tray.request_open_settings(); });
-
-        int server_result = 1;
-        std::thread server_thread([&tray, &server, &server_result] {
-            server_result = run_server(server);
-            tray.notify_server_stopped(server_result);
-        });
-
-        tray.run_message_loop();
         server_thread.join();
         return server_result;
     } catch (const winrt::hresult_error& error) {
