@@ -98,6 +98,7 @@ target_link_libraries(llavon-ime PRIVATE
     utf8cpp::utf8cpp
 )
 target_link_libraries(llavon-ime-lifecycle PRIVATE
+    llavon::ipc
     advapi32
     msi
     ole32

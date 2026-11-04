@@ -29,7 +29,6 @@ private:
     void accept_clients() noexcept;
     void handle_client(HANDLE pipe) noexcept;
     bool read_exact(HANDLE pipe, HANDLE event, void* buffer, std::size_t size) noexcept;
-    HANDLE create_pipe() const noexcept;
     void reap_clients() noexcept;
 
     struct ClientThread {

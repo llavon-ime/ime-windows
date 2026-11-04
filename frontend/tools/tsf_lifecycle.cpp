@@ -5,6 +5,7 @@
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include <windows.h>
+#include <llavon-ipc/pipe_security.hpp>
 
 #include <filesystem>
 #include <string>
@@ -85,19 +86,10 @@ private:
 class ScopedLaunchMutex {
 public:
     ScopedLaunchMutex() noexcept {
-        handle_ = UniqueHandle(OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE,
+        handle_ = UniqueHandle(OpenMutexW(SYNCHRONIZE, FALSE,
                                           tsf::service_launch_mutex_name));
         if (!handle_) {
-            PSECURITY_DESCRIPTOR descriptor = nullptr;
-            if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                    L"D:(A;;GA;;;WD)S:(ML;;NW;;;LW)", SDDL_REVISION_1,
-                    &descriptor, nullptr)) {
-                return;
-            }
-            SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
-            handle_ = UniqueHandle(CreateMutexW(&security, FALSE,
-                                                tsf::service_launch_mutex_name));
-            LocalFree(descriptor);
+            handle_ = UniqueHandle(llavon::ipc::create_shared_mutex(tsf::service_launch_mutex_name));
         }
         if (handle_) {
             const DWORD result = WaitForSingleObject(handle_.get(), 30000);

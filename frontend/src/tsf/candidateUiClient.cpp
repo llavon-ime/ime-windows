@@ -80,7 +80,7 @@ bool CandidateUiClient::ensure_pipe() {
         return true;
     }
 
-    HANDLE launch_mutex = CreateMutexW(nullptr, FALSE, service_launch_mutex_name);
+    HANDLE launch_mutex = llavon::ipc::create_shared_mutex(service_launch_mutex_name);
     if (!launch_mutex) {
         launch_service_backend();
         return retry_connect_pipe();
@@ -103,13 +103,8 @@ bool CandidateUiClient::ensure_pipe() {
 }
 
 bool CandidateUiClient::connect_pipe() {
-    const auto pipe_name = llavon::ipc::session_pipe_name(pipe_base_name);
-    pipe_ = CreateFileW(pipe_name.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    pipe_ = connect_service_pipe(pipe_base_name, llavon::ipc::pipe_client_write_access, 0);
     if (pipe_ == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-    if (!llavon::ipc::is_trusted_pipe_server(pipe_)) {
-        disconnect();
         return false;
     }
     return true;

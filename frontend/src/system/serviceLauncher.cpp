@@ -3,9 +3,11 @@
 #include "globals.h"
 
 #include <windows.h>
+#include <llavon-ipc/pipe_security.hpp>
 
 #include <cstddef>
 #include <filesystem>
+#include <format>
 #include <optional>
 #include <string>
 #include <utility>
@@ -76,17 +78,11 @@ std::optional<std::filesystem::path> environment_path(const wchar_t* name) {
 }
 
 std::optional<std::filesystem::path> service_executable_path() {
-    std::error_code error;
     if (auto configured = environment_path(L"LLAVON_IME_SERVICE_PATH")) {
-        if (std::filesystem::is_regular_file(*configured, error)) {
-            return configured;
-        }
+        return configured;
     }
     if (auto directory = module_directory()) {
-        auto candidate = *directory / "llavon-ime-service.exe";
-        if (std::filesystem::is_regular_file(candidate, error)) {
-            return candidate;
-        }
+        return *directory / "llavon-ime-service.exe";
     }
     return std::nullopt;
 }
@@ -170,6 +166,29 @@ bool create_service_process(const std::filesystem::path& executable,
 }
 
 }  // namespace
+
+HANDLE connect_service_pipe(std::wstring_view base_name, DWORD access, DWORD flags) noexcept {
+    try {
+        const auto name = llavon::ipc::session_pipe_name(base_name);
+        if (name.empty()) {
+            SetLastError(ERROR_PATH_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
+        const HANDLE pipe = CreateFileW(name.c_str(), access, 0, nullptr, OPEN_EXISTING,
+            flags | llavon::ipc::pipe_client_security_flags, nullptr);
+        if (pipe != INVALID_HANDLE_VALUE) return pipe;
+        const DWORD error = GetLastError();
+        const auto message = std::format(
+            L"[Llavon IPC] CreateFileW failed: error={} pid={} access=0x{:08X} flags=0x{:08X} pipe={}\n",
+            error, GetCurrentProcessId(), access, flags | llavon::ipc::pipe_client_security_flags, name);
+        OutputDebugStringW(message.c_str());
+        SetLastError(error);
+        return INVALID_HANDLE_VALUE;
+    } catch (...) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return INVALID_HANDLE_VALUE;
+    }
+}
 
 bool launch_service_backend() noexcept {
     try {

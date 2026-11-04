@@ -1,10 +1,15 @@
 #pragma once
 
+#include <windows.h>
 #include <filesystem>
+#include <string_view>
 
 namespace tsf {
 
 inline constexpr wchar_t service_launch_mutex_name[] = L"Local\\LlavonImeBackendStart";
+
+// Opens the session pipe with the requested client access and SQOS flags.
+HANDLE connect_service_pipe(std::wstring_view base_name, DWORD access, DWORD flags) noexcept;
 
 // Starts the backend with the interactive shell as its logical parent whenever
 // possible. The shell-created process context is required by the candidate

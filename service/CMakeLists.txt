@@ -127,6 +127,17 @@ set_target_properties(llavon-ime-service PROPERTIES WIN32_EXECUTABLE YES)
 target_link_options(llavon-ime-service PRIVATE /ENTRY:mainCRTStartup)
 
 if(BUILD_TESTING)
+    add_executable(service-pipe-listener-tests tests/pipe_listener_tests.cpp)
+    target_compile_features(service-pipe-listener-tests PRIVATE cxx_std_23)
+    target_compile_definitions(service-pipe-listener-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(service-pipe-listener-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    target_include_directories(service-pipe-listener-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(service-pipe-listener-tests PRIVATE llavon::ipc asio::asio ws2_32)
+    add_test(NAME service-pipe-listener COMMAND service-pipe-listener-tests)
+    set_tests_properties(service-pipe-listener PROPERTIES TIMEOUT 20)
+
     add_executable(prediction-display-settings-tests
         tests/prediction_display_settings_tests.cpp
         src/service/user_settings_codec.cpp)

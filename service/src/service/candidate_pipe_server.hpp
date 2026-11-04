@@ -5,6 +5,7 @@
 #include "candidate_ui_snapshot.hpp"
 #include "../candidate/candidate_ui.hpp"
 #include "candidate_pipe_protocol.hpp"
+#include "pipe_listener.hpp"
 
 #include <asio.hpp>
 #include <llavon-ipc/pipe_security.hpp>
@@ -28,62 +29,25 @@ public:
 
         const auto pipe_name =
             llavon::ipc::session_pipe_name(candidate_pipe_protocol::pipe_base_name);
-        llavon::ipc::PipeSecurity security;
-        if (pipe_name.empty() || !security) {
-            std::cerr << "[ERR] candidate pipe security setup failed" << std::endl;
-            co_return;
-        }
+        ipc::PipeListener listener(pipe_name, PIPE_ACCESS_INBOUND, pipe_buffer_size);
 
         while (true) {
-            HANDLE pipe_handle = CreateNamedPipeW(
-                pipe_name.c_str(), PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                PIPE_UNLIMITED_INSTANCES,
-                pipe_buffer_size, pipe_buffer_size, 0, security.attributes());
-            if (pipe_handle == INVALID_HANDLE_VALUE) {
-                std::cerr << "[ERR] CreateNamedPipe(candidate) failed: " << GetLastError()
-                          << std::endl;
-                co_return;
-            }
-
-            OVERLAPPED overlapped{};
-            overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-            if (!overlapped.hEvent) {
-                CloseHandle(pipe_handle);
+            try {
+                auto pipe = co_await accept_pipe(listener);
+                if (!pipe) co_return;
+                const uint64_t client_id = next_client_id_++;
+                asio::windows::stream_handle stream(executor);
+                stream.assign(pipe.get());
+                pipe.release();
+                asio::co_spawn(
+                    executor, handle_client(std::move(stream), client_id), asio::detached);
                 continue;
+            } catch (const std::exception& error) {
+                std::cerr << "[IPC] candidate listener error; retrying: " << error.what() << '\n';
+            } catch (...) {
+                std::cerr << "[IPC] candidate listener error; retrying\n";
             }
-
-            bool accepted = false;
-            const BOOL connected = ConnectNamedPipe(pipe_handle, &overlapped);
-            if (connected) {
-                accepted = true;
-                CloseHandle(overlapped.hEvent);
-            } else {
-                const DWORD error = GetLastError();
-                if (error == ERROR_PIPE_CONNECTED) {
-                    accepted = true;
-                    CloseHandle(overlapped.hEvent);
-                } else if (error == ERROR_IO_PENDING) {
-                    asio::windows::object_handle event(executor, overlapped.hEvent);
-                    const auto [wait_error] = co_await event.async_wait(
-                        asio::as_tuple(asio::use_awaitable));
-                    DWORD transferred = 0;
-                    accepted = !wait_error &&
-                               GetOverlappedResult(pipe_handle, &overlapped, &transferred, FALSE);
-                } else {
-                    CloseHandle(overlapped.hEvent);
-                }
-            }
-
-            if (!accepted) {
-                CloseHandle(pipe_handle);
-                continue;
-            }
-
-            const uint64_t client_id = next_client_id_++;
-            asio::windows::stream_handle stream(executor, pipe_handle);
-            asio::co_spawn(
-                executor, handle_client(std::move(stream), client_id), asio::detached);
+            if (!co_await pipe_retry_delay()) co_return;
         }
     }
 

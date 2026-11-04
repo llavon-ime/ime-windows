@@ -52,7 +52,7 @@ constexpr const wchar_t* kServiceInstanceMutexName = L"Local\\LlavonImeServiceIn
 class ServiceInstanceLock {
 public:
     ServiceInstanceLock() {
-        handle_ = CreateMutexW(nullptr, TRUE, kServiceInstanceMutexName);
+        handle_ = llavon::ipc::create_shared_mutex(kServiceInstanceMutexName, true);
         if (!handle_) {
             throw std::runtime_error(
                 "failed to create service instance mutex: " + std::to_string(GetLastError()));
@@ -237,7 +237,6 @@ int main(int argc, char* argv[]) {
         }
 
         std::clog << "[SRV] IME Windows Service starting\n";
-
         auto config = parse_core_config(service_argc, argv);
         config.logger = std::make_shared<llavon::service::debug::CoreLoggerAdapter>();
         config.sessions_per_context =

@@ -609,50 +609,28 @@ inline asio::awaitable<void> listener(
     SessionLru::ClientId next_client_id = 1;
 
     const auto pipe_name = llavon::ipc::session_pipe_name(pipe_base_name);
-    llavon::ipc::PipeSecurity security;
-    if (pipe_name.empty() || !security) {
-        std::cerr << "[ERR] pipe security setup failed" << std::endl;
-        co_return;
-    }
+    ipc::PipeListener pipe_listener(pipe_name, PIPE_ACCESS_DUPLEX);
 
     while (true) {
-        HANDLE hPipe = CreateNamedPipeW(
-            pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, security.attributes());
-
-        if (hPipe == INVALID_HANDLE_VALUE) {
-            std::cerr << "[ERR] CreateNamedPipe failed: " << GetLastError() << std::endl;
-            co_return;
-        }
-
-        OVERLAPPED ol{};
-        ol.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-
-        BOOL connected = ConnectNamedPipe(hPipe, &ol);
-        DWORD err = GetLastError();
-
-        if (!connected && err == ERROR_PIPE_CONNECTED) {
-            CloseHandle(ol.hEvent);
-        } else if (!connected && err == ERROR_IO_PENDING) {
-            asio::windows::object_handle ev(executor);
-            ev.assign(ol.hEvent);
-            co_await ev.async_wait(asio::use_awaitable);
-        } else {
-            std::cerr << "[ERR] ConnectNamedPipe failed: " << err << std::endl;
-            CloseHandle(ol.hEvent);
-            CloseHandle(hPipe);
+        try {
+            auto pipe = co_await accept_pipe(pipe_listener);
+            if (!pipe) co_return;
+            std::clog << "[SRV] client connected\n";
+            asio::windows::stream_handle stream(executor);
+            stream.assign(pipe.get());
+            pipe.release();
+            const SessionLru::ClientId client_id = next_client_id++;
+            co_spawn(executor,
+                     handle_client(std::move(stream), inference, sessions, custom_names,
+                                   training_data, new_collection_session_id(), client_id),
+                     asio::detached);
             continue;
+        } catch (const std::exception& error) {
+            std::cerr << "[IPC] prediction listener error; retrying: " << error.what() << '\n';
+        } catch (...) {
+            std::cerr << "[IPC] prediction listener error; retrying\n";
         }
-
-        std::clog << "[SRV] client connected\n";
-
-        asio::windows::stream_handle stream(executor, hPipe);
-        const SessionLru::ClientId client_id = next_client_id++;
-        co_spawn(executor,
-                 handle_client(std::move(stream), inference, sessions, custom_names,
-                               training_data, new_collection_session_id(), client_id),
-                 asio::detached);
+        if (!co_await pipe_retry_delay()) co_return;
     }
 }
 

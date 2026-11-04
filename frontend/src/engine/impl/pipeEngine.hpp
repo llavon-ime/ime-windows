@@ -185,14 +185,9 @@ private:
     }
 
     bool connect_pipe() {
-        const auto pipe_name = llavon::ipc::session_pipe_name(pipe_base_name);
-        const HANDLE handle = CreateFileW(pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                                          OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        const HANDLE handle = connect_service_pipe(
+            pipe_base_name, llavon::ipc::pipe_client_read_write_access, FILE_FLAG_OVERLAPPED);
         if (handle == INVALID_HANDLE_VALUE) return false;
-        if (!llavon::ipc::is_trusted_pipe_server(handle)) {
-            CloseHandle(handle);
-            return false;
-        }
         std::lock_guard lock(handle_mutex_);
         pipe_ = handle;
         return true;
@@ -206,7 +201,7 @@ private:
         if (last_launch_request_ && now - *last_launch_request_ < launch_retry_interval) return;
         last_launch_request_ = now;
 
-        const HANDLE launch_mutex = CreateMutexW(nullptr, FALSE, service_launch_mutex_name);
+        const HANDLE launch_mutex = llavon::ipc::create_shared_mutex(service_launch_mutex_name);
         if (!launch_mutex) return;
 
         // The updater holds this mutex while it replaces the backend.

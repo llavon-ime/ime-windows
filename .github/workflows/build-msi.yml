@@ -141,12 +141,12 @@ jobs:
         shell: pwsh
         run: cmake --build build/windows --config Release --target llavon-ime-setup --parallel
 
-      - name: Verify frontend DLL loading
+      - name: Verify frontend DLL loading and named pipe availability
         shell: pwsh
         run: |
-          cmake --build build/windows --config Release --target frontend-dll-load-tests --parallel
+          cmake --build build/windows --config Release --target frontend-dll-load-tests pipe-security-tests pipe-appcontainer-tests service-pipe-listener-tests logger-transport-tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --test-dir build/windows -C Release -R '^frontend-dll-load$' --output-on-failure --no-tests=error
+          ctest --test-dir build/windows -C Release -R '^(frontend-dll-load|pipe-security|pipe-appcontainer|service-pipe-listener|logger-transport)$' --output-on-failure --no-tests=error
 
       - name: Verify packaged CPU backends
         shell: pwsh

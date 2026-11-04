@@ -93,12 +93,8 @@ private:
         const auto pipe_name = ipc::session_pipe_name(pipe_protocol::pipe_base_name);
         while (!stopping()) {
             HANDLE pipe = CreateFileW(
-                pipe_name.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-                FILE_FLAG_OVERLAPPED, nullptr);
-            if (pipe != INVALID_HANDLE_VALUE && !ipc::is_trusted_pipe_server(pipe)) {
-                CloseHandle(pipe);
-                pipe = INVALID_HANDLE_VALUE;
-            }
+                pipe_name.c_str(), ipc::pipe_client_write_access, 0, nullptr, OPEN_EXISTING,
+                FILE_FLAG_OVERLAPPED | ipc::pipe_client_security_flags, nullptr);
             if (pipe == INVALID_HANDLE_VALUE) {
                 WaitForSingleObject(stop_event_, reconnect_delay_ms);
                 continue;
