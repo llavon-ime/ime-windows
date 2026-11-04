@@ -37,8 +37,8 @@ ctest --preset windows-x86
 開發版 x86 DLL 會尋找 `build/windows/bin/llavon-ime-service.exe`；
 也可透過 `LLAVON_IME_SERVICE_PATH` 指定後端路徑。
 
-CI 會執行兩種架構的 DLL／COM 載入、組字與 Pipe 測試，以及由 x64 Pipe server
-啟動 x86 AppContainer client 的跨架構測試。這些檢查不註冊輸入法；
+本機可執行兩種架構的 DLL／COM 載入、組字與 Pipe 測試，以及由 x64 Pipe server
+啟動 x86 AppContainer client 的跨架構測試；CI 不再執行這組檢查。這些測試不註冊輸入法；
 真正的 TSF 載入、輸入與安裝／解除安裝仍需在安裝後進行互動驗證。
 
 兩種前端都從共用的 `bin/../tables` 載入字表；x86 DLL 會先離開 `bin/x86`。
