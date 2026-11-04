@@ -152,6 +152,13 @@ void request_settings_menu(POINT location) noexcept {
 inline constexpr winrt::guid kCompositionDisplayAttributeGuid = {
     0x82769d2d, 0x9e5d, 0x4ace, {0x97, 0x53, 0x91, 0x3c, 0x0c, 0x7c, 0x4e, 0x38}};
 
+bool uses_qt_windows_platform() noexcept {
+    // Probe only this host's loaded modules; never load or inject a plugin.
+    // Do not cache: Qt can load its platform plugin after activating the TIP.
+    return GetModuleHandleW(L"qwindows.dll") != nullptr ||
+           GetModuleHandleW(L"qwindowsd.dll") != nullptr;
+}
+
 TF_DISPLAYATTRIBUTE make_composition_display_attribute() {
     TF_DISPLAYATTRIBUTE attribute = {};
     attribute.crText.type = TF_CT_NONE;
@@ -302,6 +309,16 @@ HRESULT get_composition_display_attribute_atom(TfGuidAtom* atom) {
 HRESULT apply_composition_display_attribute(ITfContext* context, TfEditCookie ec, ITfRange* range) {
     if (!context || !range) {
         return E_INVALIDARG;
+    }
+
+    if (uses_qt_windows_platform()) {
+        // Qt's IMM path renders TARGET_NOTCONVERTED as selection across the
+        // composition. Leave formatting to the host's native preedit
+        // markup, clearing any attribute inherited by SetText as well.
+        winrt::com_ptr<ITfProperty> attribute_property;
+        const HRESULT hr = context->GetProperty(GUID_PROP_ATTRIBUTE, attribute_property.put());
+        if (FAILED(hr)) return hr;
+        return attribute_property->Clear(ec, range);
     }
 
     TfGuidAtom atom = TF_INVALID_GUIDATOM;
