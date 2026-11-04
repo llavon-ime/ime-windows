@@ -31,6 +31,14 @@
 > [!TIP]
 > 若使用時察覺明顯卡頓，歡迎至 [GitHub Issues](https://github.com/llavon-ime/ime-windows/issues) 或 [Discord](https://discord.gg/ShMtdZGcmZ) 回報，並盡量附上 CPU、顯示卡型號與設定中顯示的推論裝置，方便我們排查問題。
 
+## 準確率
+
+反正肯定比微軟注音好。
+
+不過，單純比較字元準確率並不能完整反映實際打字體驗，因此我們仍在尋找以人機互動（HCI）為基礎的評估方法，例如選字修改次數、輸入流暢度等，來判斷輸入法的好壞。在找到合適的評估方式之前，暫不公佈內部測得的準確率數據。
+
+模型目前仍在持續訓練與改善中，選字表現會隨著後續版本更新逐步提升。
+
 ## 安裝
 
 1. 前往 [穩定版下載頁面](https://github.com/llavon-ime/ime-windows/releases/tag/stable)；想搶先體驗開發中功能，可改用 [滾動發布](https://github.com/llavon-ime/ime-windows/releases/tag/latest)。
