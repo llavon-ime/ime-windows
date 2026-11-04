@@ -1,6 +1,7 @@
 #include "serviceLauncher.hpp"
 
 #include "globals.h"
+#include "module_paths.hpp"
 
 #include <windows.h>
 #include <llavon-ipc/pipe_security.hpp>
@@ -42,26 +43,6 @@ private:
     HANDLE handle_ = nullptr;
 };
 
-std::optional<std::filesystem::path> module_directory() {
-    if (!Globals::hinstance) {
-        return std::nullopt;
-    }
-
-    std::wstring buffer(MAX_PATH, L'\0');
-    for (;;) {
-        const DWORD copied = GetModuleFileNameW(
-            Globals::hinstance, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (copied == 0) {
-            return std::nullopt;
-        }
-        if (copied < buffer.size() - 1) {
-            buffer.resize(copied);
-            return std::filesystem::path(buffer).parent_path();
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-}
-
 std::optional<std::filesystem::path> environment_path(const wchar_t* name) {
     const DWORD required = GetEnvironmentVariableW(name, nullptr, 0);
     if (required == 0) {
@@ -81,8 +62,8 @@ std::optional<std::filesystem::path> service_executable_path() {
     if (auto configured = environment_path(L"LLAVON_IME_SERVICE_PATH")) {
         return configured;
     }
-    if (auto directory = module_directory()) {
-        return *directory / "llavon-ime-service.exe";
+    if (auto directory = paths::module_directory(Globals::hinstance)) {
+        return paths::shared_binary_directory(*directory) / "llavon-ime-service.exe";
     }
     return std::nullopt;
 }

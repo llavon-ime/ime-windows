@@ -15,6 +15,7 @@
 
 #include <rfl/json.hpp>
 #include "system/globals.h"
+#include "system/module_paths.hpp"
 #include "utf8cpp/utf8/cpp20.h"
 
 namespace tsf {
@@ -179,28 +180,6 @@ private:
         return std::filesystem::path(value);
     }
 
-    static std::optional<std::filesystem::path> dll_dir() {
-        if (!tsf::Globals::hinstance) {
-            return std::nullopt;
-        }
-
-        std::wstring buffer(MAX_PATH, L'\0');
-        for (;;) {
-            const DWORD copied =
-                GetModuleFileNameW(tsf::Globals::hinstance, buffer.data(), static_cast<DWORD>(buffer.size()));
-            if (copied == 0) {
-                return std::nullopt;
-            }
-
-            if (copied < buffer.size() - 1) {
-                buffer.resize(copied);
-                return std::filesystem::path(buffer).parent_path();
-            }
-
-            buffer.resize(buffer.size() * 2);
-        }
-    }
-
     static std::optional<std::filesystem::path> first_existing_file(
         const std::vector<std::filesystem::path>& candidates) {
         for (const auto& candidate : candidates) {
@@ -218,8 +197,14 @@ private:
             candidates.push_back(*tables_dir / "bopomofo_char.json");
         }
 
-        if (auto module_dir = dll_dir()) {
-            candidates.push_back(module_dir->parent_path() / "tables" / "bopomofo_char.json");
+        if (auto module_dir = paths::module_directory(Globals::hinstance)) {
+            const auto bin = paths::shared_binary_directory(*module_dir);
+            candidates.push_back(bin.parent_path() / "tables" / "bopomofo_char.json");
+            // The repository presets place binaries in build/<preset>/bin.
+            const auto build_dir = bin.parent_path().parent_path();
+            if (build_dir.filename() == L"build") {
+                candidates.push_back(build_dir.parent_path() / "ime-core" / "table" / "bopomofo_char.json");
+            }
         }
 
         if (const auto mapping_file = first_existing_file(candidates)) {

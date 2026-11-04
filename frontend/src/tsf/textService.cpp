@@ -1099,7 +1099,7 @@ STDMETHODIMP TextService::OnUninitDocumentMgr(ITfDocumentMgr* /*pDocMgr*/) try {
 /**
  * @brief Implements ITfThreadMgrEventSink::OnSetFocus.
  *
- * Receives document focus changes but does not react to them yet.
+ * Refreshes settings and asynchronously synchronizes the backend input mode.
  */
 STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr* /*pDocMgrFocus*/, ITfDocumentMgr* /*pDocMgrPrevFocus*/) try {
     // Conversions keep running: their results land in the composition's own
@@ -1151,7 +1151,7 @@ STDMETHODIMP TextService::OnPopContext(ITfContext* pContext) try {
 /**
  * @brief Implements ITfKeyEventSink::OnSetFocus.
  *
- * Tracks foreground changes but currently keeps no extra state.
+ * Refreshes settings and input mode when entering the foreground.
  */
 STDMETHODIMP TextService::OnSetFocus(BOOL fForeground) try {
     if (fForeground) {

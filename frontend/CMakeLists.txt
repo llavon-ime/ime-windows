@@ -117,12 +117,38 @@ set_target_properties(llavon-ime PROPERTIES
     PREFIX      ""
 )
 
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    set(_llavon_frontend_install_dir bin/x86)
+else()
+    set(_llavon_frontend_install_dir bin)
+endif()
 install(TARGETS llavon-ime
-    RUNTIME DESTINATION bin
+    RUNTIME DESTINATION "${_llavon_frontend_install_dir}"
     COMPONENT Runtime
 )
 
 if(BUILD_TESTING)
+    add_executable(frontend-mapping-layout-tests tests/mapping_layout_tests.cpp)
+    target_compile_features(frontend-mapping-layout-tests PRIVATE cxx_std_23)
+    target_compile_definitions(frontend-mapping-layout-tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    target_compile_options(frontend-mapping-layout-tests PRIVATE /W4 /WX /utf-8 /permissive-)
+    set_target_properties(frontend-mapping-layout-tests PROPERTIES
+        CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+    target_link_libraries(frontend-mapping-layout-tests PRIVATE
+        reflectcpp::reflectcpp utf8::cpp utf8cpp::utf8cpp)
+    foreach(_layout IN ITEMS installed-x64 installed-x86 development-x64 development-x86)
+        add_test(NAME frontend-mapping-${_layout}
+            COMMAND "${CMAKE_COMMAND}"
+                "-DTEST_EXECUTABLE=$<TARGET_FILE:frontend-mapping-layout-tests>"
+                "-DMAPPING_FILE=${CMAKE_SOURCE_DIR}/ime-core/table/bopomofo_char.json"
+                "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/mapping-tests/$<CONFIG>/${_layout}"
+                "-DLAYOUT=${_layout}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_mapping_layout_test.cmake")
+        set_tests_properties(frontend-mapping-${_layout} PROPERTIES TIMEOUT 30)
+    endforeach()
+
     add_executable(frontend-engine-worker-tests
         tests/engine_worker_tests.cpp
         src/core/composition_controller.cpp
@@ -191,6 +217,7 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS NO
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     add_dependencies(frontend-dll-load-tests llavon-ime)
+    target_link_libraries(frontend-dll-load-tests PRIVATE uuid)
     add_test(NAME frontend-dll-load
         COMMAND frontend-dll-load-tests "$<TARGET_FILE:llavon-ime>")
 

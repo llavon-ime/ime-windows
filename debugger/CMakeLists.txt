@@ -33,6 +33,10 @@ target_include_directories(llavon-debug-client
 )
 target_link_libraries(llavon-debug-client PRIVATE llavon::ipc)
 
+if(LLAVON_IME_FRONTEND_ONLY)
+    return()
+endif()
+
 add_executable(llavon-ime-debugger WIN32
     src/debugger/debugger.manifest
     src/debugger/debugger.rc

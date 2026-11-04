@@ -19,9 +19,35 @@
         "VCPKG_INSTALL_OPTIONS": "--x-abi-tools-use-exact-versions",
         "LLAVON_IME_ENABLE_CUDA": false
       }
+    },
+    {
+      "name": "windows-x86",
+      "displayName": "Windows x86 TSF frontend",
+      "inherits": "windows",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/build/windows/frontend-x86",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x86-windows-static",
+        "LLAVON_IME_FRONTEND_ONLY": true
+      }
     }
   ],
   "buildPresets": [
+    {
+      "name": "windows-x86",
+      "configurePreset": "windows-x86",
+      "configuration": "Release",
+      "targets": [
+        "llavon-ime",
+        "frontend-dll-load-tests",
+        "frontend-engine-worker-tests",
+        "frontend-typing-timing-tests",
+        "frontend-key-router-tests",
+        "frontend-mapping-layout-tests",
+        "pipe-security-tests",
+        "pipe-appcontainer-tests"
+      ]
+    },
     {
       "name": "windows",
       "configurePreset": "windows",
@@ -40,6 +66,15 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "windows-x86",
+      "configurePreset": "windows-x86",
+      "configuration": "Release",
+      "filter": {
+        "include": { "name": "^(frontend-|pipe-)" }
+      },
+      "output": { "outputOnFailure": true }
+    },
     {
       "name": "windows",
       "configurePreset": "windows",

@@ -12,6 +12,8 @@ namespace {
 using llavon::ipc::detail::LocalPtr;
 using llavon::ipc::detail::UniqueHandle;
 
+std::wstring client_executable;
+
 void require(bool success, const char* operation) {
     if (!success) throw std::runtime_error(std::format("{}: {}", operation, GetLastError()));
 }
@@ -78,6 +80,7 @@ public:
             static_cast<DWORD>(executable.size()));
         require(length > 0 && length < executable.size(), "test executable path");
         executable.resize(length);
+        if (!client_executable.empty()) executable = client_executable;
         command = std::format(L"\"{}\" {}", executable, command);
         std::wstring directory(32768, L'\0');
         const UINT copied = GetSystemDirectoryW(directory.data(), static_cast<UINT>(directory.size()));
@@ -224,7 +227,16 @@ int client(int argc, wchar_t* argv[]) {
 }  // namespace
 
 int wmain(int argc, wchar_t* argv[]) try {
-    if (argc > 1) return client(argc, argv);
+    if (argc == 3 && std::wstring_view(argv[1]) == L"--client-executable") {
+        client_executable = argv[2];
+        DWORD binary_type = 0;
+        require(GetBinaryTypeW(client_executable.c_str(), &binary_type) != FALSE,
+                "inspect cross-architecture client");
+        require(binary_type == (sizeof(void*) == 8 ? SCS_32BIT_BINARY : SCS_64BIT_BINARY),
+                "client executable has the opposite architecture");
+    } else if (argc > 1) {
+        return client(argc, argv);
+    }
     const auto token = appcontainer_token();
     require(is_appcontainer(token.get()), "lowbox token is AppContainer");
     test_package_grant_required(token.get());

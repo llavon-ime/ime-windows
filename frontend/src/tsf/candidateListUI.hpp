@@ -29,7 +29,7 @@ class CandidateListUIElement
     // clang-format on
 public:
     // ITfUIElement
-    HRESULT GetDescription(BSTR* pbstrDescription) override {
+    STDMETHODIMP GetDescription(BSTR* pbstrDescription) override {
         if (!pbstrDescription) {
             return E_INVALIDARG;
         }
@@ -37,7 +37,7 @@ public:
         return (*pbstrDescription != nullptr) ? S_OK : E_OUTOFMEMORY;
     }
 
-    HRESULT GetGUID(GUID* pguid) override {
+    STDMETHODIMP GetGUID(GUID* pguid) override {
         if (!pguid) {
             return E_INVALIDARG;
         }
@@ -45,7 +45,7 @@ public:
         return S_OK;
     }
 
-    HRESULT Show(BOOL bShow) override {
+    STDMETHODIMP Show(BOOL bShow) override {
         shown_ = (bShow != FALSE);
         if (shown_) {
             refresh_window();
@@ -55,7 +55,7 @@ public:
         return S_OK;
     }
 
-    HRESULT IsShown(BOOL* pbShow) override {
+    STDMETHODIMP IsShown(BOOL* pbShow) override {
         if (!pbShow) {
             return E_INVALIDARG;
         }
@@ -64,7 +64,7 @@ public:
     }
 
     // ITfCandidateListUIElement
-    HRESULT GetUpdatedFlags(DWORD* pdwFlags) override {
+    STDMETHODIMP GetUpdatedFlags(DWORD* pdwFlags) override {
         if (!pdwFlags) {
             return E_INVALIDARG;
         }
@@ -72,7 +72,7 @@ public:
         return S_OK;
     }
 
-    HRESULT GetDocumentMgr(ITfDocumentMgr** ppdim) override {
+    STDMETHODIMP GetDocumentMgr(ITfDocumentMgr** ppdim) override {
         if (!ppdim) {
             return E_INVALIDARG;
         }
@@ -80,7 +80,7 @@ public:
         return S_OK;
     }
 
-    HRESULT GetSelection(UINT* pnIndex) override {
+    STDMETHODIMP GetSelection(UINT* pnIndex) override {
         if (!pnIndex) {
             return E_INVALIDARG;
         }
@@ -88,7 +88,7 @@ public:
         return S_OK;
     }
 
-    HRESULT GetCount(UINT* pnCount) override {
+    STDMETHODIMP GetCount(UINT* pnCount) override {
         if (!pnCount) {
             return E_INVALIDARG;
         }
@@ -96,7 +96,7 @@ public:
         return S_OK;
     }
 
-    HRESULT GetString(UINT uIndex, BSTR* pbstr) override {
+    STDMETHODIMP GetString(UINT uIndex, BSTR* pbstr) override {
         if (!pbstr || uIndex >= candidates.size()) {
             return E_INVALIDARG;
         }
@@ -107,7 +107,7 @@ public:
         return S_OK;
     }
 
-    HRESULT GetPageIndex(UINT* pIndex, UINT uSize, UINT* puPageCnt) override {
+    STDMETHODIMP GetPageIndex(UINT* pIndex, UINT uSize, UINT* puPageCnt) override {
         if (!puPageCnt) {
             return E_INVALIDARG;
         }
@@ -124,7 +124,7 @@ public:
         return S_OK;
     }
 
-    HRESULT SetPageIndex(UINT* pIndex, UINT uPageCnt) override {
+    STDMETHODIMP SetPageIndex(UINT* pIndex, UINT uPageCnt) override {
         if (!pIndex || uPageCnt == 0 || candidates.empty()) {
             return E_INVALIDARG;
         }
@@ -142,7 +142,7 @@ public:
         return S_OK;
     }
 
-    HRESULT GetCurrentPage(UINT* puPage) override {
+    STDMETHODIMP GetCurrentPage(UINT* puPage) override {
         if (!puPage) {
             return E_INVALIDARG;
         }
@@ -151,7 +151,7 @@ public:
     }
 
     // ITfCandidateListUIElementBehavior
-    HRESULT SetSelection(UINT nIndex) override {
+    STDMETHODIMP SetSelection(UINT nIndex) override {
         if (nIndex >= candidates.size()) {
             return E_INVALIDARG;
         }
@@ -161,7 +161,7 @@ public:
         return S_OK;
     }
 
-    HRESULT Finalize() override {
+    STDMETHODIMP Finalize() override {
         if (finalize_callback && !candidates.empty() && selection_index < candidates.size()) {
             finalize_callback(candidates[selection_index]);
         }
@@ -169,7 +169,7 @@ public:
         return S_OK;
     }
 
-    HRESULT Abort() override {
+    STDMETHODIMP Abort() override {
         candidate_ui_client_.hide();
         return S_OK;
     }

@@ -5,6 +5,8 @@
 #include <winrt/Windows.Foundation.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -100,6 +102,15 @@ struct EngineWorker::Impl {
         });
     }
 
+    void query_mode(std::uint64_t revision) {
+        submit(Kind::Query, [this, revision](IEngine& engine)
+                               -> winrt::Windows::Foundation::IAsyncAction {
+            const auto mode = co_await engine.current_input_mode();
+            publish_backend(engine.backend_state());
+            publish_mode(static_cast<InputMode>(mode), revision);
+        });
+    }
+
     winrt::Windows::Foundation::IAsyncAction pump() {
         for (;;) {
             std::optional<Job> job;
@@ -112,7 +123,21 @@ struct EngineWorker::Impl {
                 }
             }
             if (!job) {
-                co_await winrt::resume_on_signal(wake_.get());
+                // A launch request can finish before the backend's pipe exists.
+                // Keep probing while disconnected, even if the user types nothing.
+                const auto timeout = engine_->backend_state() == BackendState::Unavailable && !retry_posted_
+                                         ? std::chrono::milliseconds{500}
+                                         : std::chrono::milliseconds::zero();
+                if (!co_await winrt::resume_on_signal(wake_.get(), timeout)) {
+                    retry_posted_ = true;
+                    // Capture the current revision on the UI thread, so recovery
+                    // cannot apply a mode read from before a later Shift toggle.
+                    // Like all UI tasks, this is dropped once UiState expires.
+                    to_ui([this](UiState& state) {
+                        retry_posted_ = false;
+                        query_mode(state.mode_revision);
+                    });
+                }
                 continue;
             }
             try {
@@ -150,6 +175,7 @@ struct EngineWorker::Impl {
     std::mutex mutex_;
     std::deque<Job> jobs_;
     bool stopping_ = false;
+    std::atomic_bool retry_posted_ = false;
     // Created, used and destroyed by the worker; abort() is the only call from
     // another thread, under mutex_.
     std::unique_ptr<IEngine> engine_;
@@ -179,13 +205,7 @@ BackendState EngineWorker::cached_backend_state() const noexcept {
 }
 
 void EngineWorker::refresh_input_mode() {
-    const auto revision = ui_->mode_revision;
-    impl_->submit(Impl::Kind::Query, [impl = impl_.get(), revision](IEngine& engine)
-                                         -> winrt::Windows::Foundation::IAsyncAction {
-        const auto mode = co_await engine.current_input_mode();
-        impl->publish_backend(engine.backend_state());
-        impl->publish_mode(static_cast<InputMode>(mode), revision);
-    });
+    impl_->query_mode(ui_->mode_revision);
 }
 
 void EngineWorker::toggle_input_mode() {

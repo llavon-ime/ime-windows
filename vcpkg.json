@@ -3,33 +3,30 @@
   "version-string": "0.1.0",
   "dependencies": [
     {
-      "name": "asio",
-      "platform": "windows"
-    },
-    {
       "name": "cppwinrt",
       "platform": "windows"
     },
-    "llama-cpp",
-    { "name": "libsodium", "platform": "windows" },
     "reflectcpp",
     {
-      "name": "sqlite3",
-      "platform": "windows"
-    },
-    {
       "name": "utfcpp",
-      "platform": "windows"
-    },
-    {
-      "name": "vulkan-headers",
       "platform": "windows"
     }
   ],
   "default-features": [
+    "backend",
     "llama-vulkan"
   ],
   "features": {
+    "backend": {
+      "description": "Build the x64 inference service and its dependencies.",
+      "dependencies": [
+        { "name": "asio", "platform": "windows" },
+        "llama-cpp",
+        { "name": "libsodium", "platform": "windows" },
+        { "name": "sqlite3", "platform": "windows" },
+        { "name": "vulkan-headers", "platform": "windows" }
+      ]
+    },
     "llama-cuda": {
       "description": "Build llama.cpp with CUDA support for GPU offload.",
       "dependencies": [

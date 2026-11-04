@@ -132,6 +132,7 @@ jobs:
           name: llavon-ime-vcpkg-abi
           path: |
             build/windows/vcpkg_installed/**/share/*/vcpkg_abi_info.txt
+            build/windows/frontend-x86/vcpkg_installed/**/share/*/vcpkg_abi_info.txt
             vcpkg/buildtrees/**/*.vcpkg_abi_info.txt
             vcpkg/buildtrees/detect_compiler/**
           if-no-files-found: ignore
@@ -144,9 +145,13 @@ jobs:
       - name: Verify frontend DLL loading and named pipe availability
         shell: pwsh
         run: |
-          cmake --build build/windows --config Release --target frontend-dll-load-tests pipe-security-tests pipe-appcontainer-tests service-pipe-listener-tests logger-transport-tests --parallel
+          cmake --build build/windows --config Release --target frontend-dll-load-tests frontend-mapping-layout-tests pipe-security-tests pipe-appcontainer-tests service-pipe-listener-tests logger-transport-tests --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --test-dir build/windows -C Release -R '^(frontend-dll-load|pipe-security|pipe-appcontainer|service-pipe-listener|logger-transport)$' --output-on-failure --no-tests=error
+          cmake --build build/windows/frontend-x86 --config Release --target frontend-dll-load-tests frontend-engine-worker-tests frontend-typing-timing-tests frontend-key-router-tests frontend-mapping-layout-tests pipe-security-tests pipe-appcontainer-tests --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build/windows/frontend-x86 -C Release -R '^(frontend-|pipe-)' --output-on-failure --no-tests=error
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build/windows -C Release -R '^(frontend-dll-load|frontend-mapping-.*|pipe-security|pipe-appcontainer|pipe-cross-architecture-appcontainer|service-pipe-listener|logger-transport)$' --output-on-failure --no-tests=error
 
       - name: Verify packaged CPU backends
         shell: pwsh

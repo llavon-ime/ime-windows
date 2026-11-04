@@ -5,10 +5,18 @@ cmake_minimum_required(VERSION 3.31)
 set(LLAVON_IME_VERSION "1.0.0" CACHE STRING "Fixed installer version" FORCE)
 set(LLAVON_IME_MSI_VERSION "1.0.0" CACHE STRING "Fixed MSI product version" FORCE)
 option(LLAVON_IME_ENABLE_CUDA "Build ime-core with the CUDA backend" OFF)
+option(LLAVON_IME_FRONTEND_ONLY "Build the TSF frontend without the x64 backend" OFF)
+
+if(LLAVON_IME_FRONTEND_ONLY)
+    set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES ON)
+    if(VCPKG_TARGET_TRIPLET MATCHES "-static$")
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+endif()
 
 # vcpkg's toolchain is loaded by project(). Select optional manifest features
 # before that happens so one configure owns the complete dependency graph.
-if(LLAVON_IME_ENABLE_CUDA)
+if(LLAVON_IME_ENABLE_CUDA AND NOT LLAVON_IME_FRONTEND_ONLY)
     list(APPEND VCPKG_MANIFEST_FEATURES "llama-cuda")
     list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
 endif()
@@ -28,6 +36,19 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
 foreach(_configuration IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_configuration} "${CMAKE_CURRENT_BINARY_DIR}/bin")
 endforeach()
+
+# The Win32 sub-build only needs the frontend's dependencies. Do not configure
+# llama.cpp, GPU backends, WinUI, or installer tools for that architecture.
+if(LLAVON_IME_FRONTEND_ONLY)
+    add_subdirectory(ipc)
+    add_subdirectory(debugger)
+    add_subdirectory(frontend)
+    return()
+endif()
+
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "Build the backend as x64; use windows-x86 for the standalone frontend")
+endif()
 
 set(LLAVON_IME_BUILD_COMMIT "" CACHE STRING "Root repository commit embedded in the package")
 set(LLAVON_IME_BUILD_NUMBER "" CACHE STRING "CI build number embedded in the package")
@@ -166,6 +187,7 @@ add_subdirectory(ipc)
 add_subdirectory(debugger)
 add_subdirectory(service)
 add_subdirectory(frontend)
+include(cmake/FrontendX86.cmake)
 
 add_custom_target(llavon-ime-artifacts
     DEPENDS
@@ -174,6 +196,7 @@ add_custom_target(llavon-ime-artifacts
         llavon-ime-uninstaller
         llavon-ime-service
         llavon-ime-debugger
+        llavon-ime-frontend-x86
 )
 
 set(LLAVON_IME_VCPKG_LICENSE_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/licenses/vcpkg")

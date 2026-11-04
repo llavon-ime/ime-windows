@@ -55,7 +55,8 @@ cmake --build build/windows --config Release --target llavon-ime-service --paral
 ### MSI
 
 - 安裝至整台電腦（x64），內容為 `bin/`、`tables/`、`licenses/`。
-- 以 `regsvr32` 註冊 `llavon-ime.dll`，解除安裝時取消註冊。
+- 分別以 64 位元與 32 位元的 `regsvr32` 註冊 `bin/llavon-ime.dll` 和
+  `bin/x86/llavon-ime.dll`，解除安裝時取消兩種架構的註冊。
 - 新增後端服務的開機自動啟動項目。
 - 新增開始功能表的解除安裝捷徑（同時帶有 Toast 通知需要的 AppUserModelID）。
 - 授權協議包含本專案、`ime-core`、vcpkg 套件授權，以及模型的 CC BY-NC 4.0 條款。
@@ -118,7 +119,8 @@ Toast 需要安裝程式建立的開始功能表捷徑，直接執行建置目�
 ```text
 <install-root>/
   bin/
-    llavon-ime.dll                 TSF 前端
+    llavon-ime.dll                 x64 TSF 前端
+    x86/llavon-ime.dll             x86 TSF 前端
     llavon-ime-service.exe         背景服務（含設定與候選字視窗）
     llavon-ime-debugger.exe        診斷工具
     （Windows App SDK 執行階段 DLL 與資源）
@@ -144,9 +146,10 @@ Windows App SDK 以自含方式部署在 `bin/` 中，使用者不需要另外�
 **前端 DLL** 找 `bopomofo_char.json`：
 
 1. 環境變數 `LLAVON_IME_TABLES_DIR`
-2. `bin/../tables`
+2. 共用 `bin/../tables`；x86 前端會先從 `bin/x86` 回到共用的 `bin`
+3. 使用儲存庫 preset 的開發版：原始碼目錄的 `ime-core/table`
 
-前端與服務透過 `\\.\pipe\llavon-ime` 溝通。連不上時，前端會自行啟動服務（優先使用 `LLAVON_IME_SERVICE_PATH`，否則找 DLL 旁的 `llavon-ime-service.exe`）再重試。候選字視窗使用另一條 `\\.\pipe\llavon-ime-candidate-ui`。
+前端與服務透過 `\\.\pipe\llavon-ime` 溝通。連不上時，前端會自行啟動服務（優先使用 `LLAVON_IME_SERVICE_PATH`，否則找共用 `bin` 內的 `llavon-ime-service.exe`）再重試。兩種架構共用同一份字表與 x64 服務。候選字視窗使用另一條 `\\.\pipe\llavon-ime-candidate-ui`。
 
 ## 疑難排解
 

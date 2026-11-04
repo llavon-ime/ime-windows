@@ -36,6 +36,9 @@ struct State {
     std::atomic<int> ready_calls = 0;
     std::atomic<int> commits = 0;
     std::atomic<int> mode_queries = 0;
+    std::atomic<int> mode_toggles = 0;
+    std::atomic_bool available = true;
+    std::atomic<tsf::InputMode> mode = tsf::InputMode::Chinese;
 };
 
 class FakeEngine final : public tsf::IEngine {
@@ -82,12 +85,14 @@ public:
         co_return;
     }
     IAsyncOperation<std::uint8_t> toggle_input_mode() override {
-        mode_ = mode_ == tsf::InputMode::Chinese ? tsf::InputMode::English : tsf::InputMode::Chinese;
-        co_return static_cast<std::uint8_t>(mode_);
+        ++state_->mode_toggles;
+        state_->mode = state_->mode == tsf::InputMode::Chinese ? tsf::InputMode::English : tsf::InputMode::Chinese;
+        co_return static_cast<std::uint8_t>(state_->mode.load());
     }
     IAsyncOperation<std::uint8_t> current_input_mode() override {
         ++state_->mode_queries;
-        co_return static_cast<std::uint8_t>(mode_);
+        backend_ = state_->available ? tsf::BackendState::Connected : tsf::BackendState::Unavailable;
+        co_return static_cast<std::uint8_t>(state_->available ? state_->mode.load() : tsf::InputMode::English);
     }
     tsf::BackendState backend_state() const noexcept override { return backend_; }
     void abort() noexcept override {
@@ -97,7 +102,6 @@ public:
 
 private:
     std::shared_ptr<State> state_;
-    tsf::InputMode mode_ = tsf::InputMode::Chinese;
     tsf::BackendState backend_ = tsf::BackendState::Connected;
     std::atomic_bool aborted_ = false;
 };
@@ -158,6 +162,16 @@ struct Harness {
             ui.drain();
         }
         require(result(sequence) != nullptr, "prediction result never reached the UI thread");
+    }
+
+    template <typename Predicate>
+    void wait_until(Predicate condition, const char* message) {
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (!condition() && std::chrono::steady_clock::now() < deadline) {
+            WaitForSingleObject(ui.posted.handle, 100);
+            ui.drain();
+        }
+        require(condition(), message);
     }
 };
 
@@ -243,6 +257,55 @@ void shutdown_test() {
     const auto start = std::chrono::steady_clock::now();
     h.worker.reset();
     require(std::chrono::steady_clock::now() - start < 2s, "shutdown waited for the backend");
+}
+
+void backend_recovery_test(tsf::InputMode mode) {
+    Harness h;
+    h.state->available = false;
+    h.state->mode = mode;
+    h.worker->refresh_input_mode(); // The activation/focus query runs before the pipe exists.
+    h.wait_until([&] { return h.worker->cached_backend_state() == tsf::BackendState::Unavailable; },
+                 "initial connection failure was not reported");
+    require(h.worker->cached_input_mode() == tsf::InputMode::English,
+            "an unavailable backend did not pass English keys through");
+
+    h.state->available = true; // No key, focus change, or explicit refresh after this point.
+    h.wait_until([&] {
+        return h.worker->cached_backend_state() == tsf::BackendState::Connected &&
+               h.worker->cached_input_mode() == mode;
+    }, "backend recovery needed a key or focus event");
+    require(h.state->mode_queries >= 2 && h.state->mode_toggles == 0,
+            "backend recovery did not query the mode without toggling it");
+}
+
+void backend_lost_recovery_test() {
+    Harness h;
+    h.worker->refresh_input_mode();
+    h.worker->predict(1, 1, u"lost", one_entry());
+    h.drain_until(1);
+    require(h.worker->cached_input_mode() == tsf::InputMode::English,
+            "a lost backend did not switch to English before recovery");
+    h.wait_until([&] {
+        return h.worker->cached_backend_state() == tsf::BackendState::Connected &&
+               h.worker->cached_input_mode() == tsf::InputMode::Chinese;
+    }, "recovery after a lost prediction used a stale mode revision");
+}
+
+void disconnected_shutdown_test() {
+    Harness h;
+    h.state->available = false;
+    h.worker->refresh_input_mode();
+    // A barrier ensures that draining also consumes the initial mode result.
+    h.worker->discard_commit(h.worker->record_commit({}));
+    h.state->complete.wait();
+    h.ui.drain();
+    require(h.worker->cached_backend_state() == tsf::BackendState::Unavailable,
+            "shutdown test did not disconnect");
+    h.ui.posted.wait(); // Leave a reconnect task queued on the UI thread.
+    const auto start = std::chrono::steady_clock::now();
+    h.worker.reset();
+    require(std::chrono::steady_clock::now() - start < 2s, "shutdown waited for a reconnect timer");
+    h.ui.drain(); // A posted retry must be safe to discard after worker destruction.
 }
 
 // ---- composition buffer --------------------------------------------------
@@ -624,6 +687,10 @@ int main() {
         worker_groups_test();
         backend_lost_test();
         shutdown_test();
+        backend_recovery_test(tsf::InputMode::Chinese);
+        backend_recovery_test(tsf::InputMode::English);
+        backend_lost_recovery_test();
+        disconnected_shutdown_test();
         conversion_merge_test();
         candidate_lock_test();
         detach_test();

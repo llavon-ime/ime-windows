@@ -13,7 +13,8 @@ namespace tsf {
 
 // Driven by the engine worker's single pump coroutine, one request at a time.
 // The backend is a local named pipe: while its process lives every request is
-// answered, and when it dies the pipe breaks. There are no timeouts or retries.
+// answered, and when it dies the pipe breaks. In-flight requests have no timeout;
+// the worker retries mode queries while the transport is unavailable.
 class IEngine {
 public:
     using IAsyncAction = winrt::Windows::Foundation::IAsyncAction;
