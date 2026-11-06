@@ -9,9 +9,10 @@ option(LLAVON_IME_FRONTEND_ONLY "Build the TSF frontend without the x64 backend"
 
 if(LLAVON_IME_FRONTEND_ONLY)
     set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES ON)
-    if(VCPKG_TARGET_TRIPLET MATCHES "-static$")
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    if(NOT VCPKG_TARGET_TRIPLET MATCHES "-static$")
+        message(FATAL_ERROR "The TSF frontend links the C++ runtime statically; use a *-windows-static triplet")
     endif()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 # vcpkg's toolchain is loaded by project(). Select optional manifest features
@@ -187,11 +188,11 @@ add_subdirectory(ipc)
 add_subdirectory(debugger)
 add_subdirectory(service)
 add_subdirectory(frontend)
-include(cmake/FrontendX86.cmake)
+include(cmake/StaticFrontends.cmake)
 
 add_custom_target(llavon-ime-artifacts
     DEPENDS
-        llavon-ime
+        llavon-ime-frontend-x64
         llavon-ime-lifecycle
         llavon-ime-uninstaller
         llavon-ime-service

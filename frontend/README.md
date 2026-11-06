@@ -32,8 +32,14 @@ ctest --preset windows-x86
 ```
 
 完整建置使用 Visual Studio generator；若現有 x64 build 使用非預設版本，
-獨立設定 x86 時也須指定相同的 `-G`。x86 使用 `x86-windows-static`，
-靜態連結 C++ runtime 和 JSON 相依項目，不要求宿主另有 x86 VC runtime。
+獨立設定 x86 時也須指定相同的 `-G`。
+
+兩種架構的 DLL 都在獨立的子建置中以 `x64-windows-static`／`x86-windows-static`
+編譯（`build/windows/frontend-x64`、`build/windows/frontend-x86`），靜態連結
+C++ runtime 和 JSON 相依項目；x64 產物再複製到 `build/windows/bin`。
+TSF 會把 DLL 載入任意宿主，宿主可能在 exe 旁附帶較舊的 `msvcp140.dll`
+（例如 Dropbox 附 14.29），動態連結時 DLL 會綁到該舊版而在 `std::mutex`
+等處崩潰，因此前端不得改回 `/MD`。主建置的 service 等元件仍用 `x64-windows`。
 開發版 x86 DLL 會尋找 `build/windows/bin/llavon-ime-service.exe`；
 也可透過 `LLAVON_IME_SERVICE_PATH` 指定後端路徑。
 

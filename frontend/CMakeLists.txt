@@ -1,11 +1,5 @@
-file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h" "src/*.hpp")
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
-file(GLOB_RECURSE RESOURCES CONFIGURE_DEPENDS "src/*.rc")
-set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/ime.def")
-
 include_directories(src)
 
-add_library(llavon-ime SHARED ${SOURCES} ${HEADERS} ${RESOURCES} ${DEF_FILE})
 add_executable(llavon-ime-lifecycle WIN32
     tools/tsf_lifecycle.cpp
     src/system/serviceLauncher.cpp
@@ -15,27 +9,14 @@ add_executable(llavon-ime-uninstaller WIN32
     tools/uninstall_purge.cpp
     tools/uninstall_purge.hpp
 )
-target_compile_features(llavon-ime PRIVATE cxx_std_23)
 target_compile_features(llavon-ime-lifecycle PRIVATE cxx_std_23)
 target_compile_features(llavon-ime-uninstaller PRIVATE cxx_std_23)
-set_target_properties(llavon-ime PROPERTIES
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS NO
-)
 set_target_properties(llavon-ime-lifecycle llavon-ime-uninstaller PROPERTIES
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 
-target_compile_definitions(llavon-ime PRIVATE
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-    UNICODE
-    _UNICODE
-    WINVER=0x0A00        # Windows 10
-    _WIN32_WINNT=0x0A00
-)
 target_compile_definitions(llavon-ime-lifecycle PRIVATE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
@@ -53,11 +34,6 @@ target_compile_definitions(llavon-ime-uninstaller PRIVATE
     _WIN32_WINNT=0x0A00
 )
 
-target_compile_options(llavon-ime PRIVATE
-    /W4         # 高警告等級
-    /WX         # 警告視為錯誤
-    /utf-8      # 原始碼 UTF-8 編碼
-)
 target_compile_options(llavon-ime-lifecycle PRIVATE
     /W4
     /WX
@@ -75,28 +51,6 @@ find_package(cppwinrt CONFIG REQUIRED)
 find_package(reflectcpp CONFIG REQUIRED)
 find_package(utf8cpp CONFIG REQUIRED)
 
-# A shared yyjson dependency prevents AppContainer hosts from loading the TIP.
-# Check custom triplets too, before producing an unusable installer.
-get_target_property(_llavon_yyjson_type yyjson::yyjson TYPE)
-if(NOT _llavon_yyjson_type STREQUAL "STATIC_LIBRARY")
-    message(FATAL_ERROR
-        "The TSF frontend requires static yyjson. Configure with the repository's "
-        "cmake/triplets overlay and rebuild the vcpkg dependencies.")
-endif()
-
-target_link_libraries(llavon-ime PRIVATE
-    Microsoft::CppWinRT
-    WindowsApp
-    advapi32    # Registry API
-    ole32       # COM
-    oleaut32    # COM Automation
-    uuid        # TSF GUID constants
-    reflectcpp::reflectcpp
-    llavon::debug-client
-    llavon::ipc
-    utf8::cpp
-    utf8cpp::utf8cpp
-)
 target_link_libraries(llavon-ime-lifecycle PRIVATE
     llavon::ipc
     advapi32
@@ -111,21 +65,68 @@ target_link_libraries(llavon-ime-uninstaller PRIVATE
     shell32
 )
 
+if(LLAVON_IME_FRONTEND_ONLY)
+    file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h" "src/*.hpp")
+    file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
+    file(GLOB_RECURSE RESOURCES CONFIGURE_DEPENDS "src/*.rc")
+    set(DEF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/ime.def")
 
-set_target_properties(llavon-ime PROPERTIES
-    OUTPUT_NAME "llavon-ime"
-    PREFIX      ""
-)
+    add_library(llavon-ime SHARED ${SOURCES} ${HEADERS} ${RESOURCES} ${DEF_FILE})
+    target_compile_features(llavon-ime PRIVATE cxx_std_23)
+    set_target_properties(llavon-ime PROPERTIES
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+        OUTPUT_NAME "llavon-ime"
+        PREFIX      ""
+    )
+    target_compile_definitions(llavon-ime PRIVATE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        UNICODE
+        _UNICODE
+        WINVER=0x0A00        # Windows 10
+        _WIN32_WINNT=0x0A00
+    )
+    target_compile_options(llavon-ime PRIVATE
+        /W4         # 高警告等級
+        /WX         # 警告視為錯誤
+        /utf-8      # 原始碼 UTF-8 編碼
+    )
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 4)
-    set(_llavon_frontend_install_dir bin/x86)
-else()
-    set(_llavon_frontend_install_dir bin)
+    # A shared yyjson dependency prevents AppContainer hosts from loading the TIP.
+    # Check custom triplets too, before producing an unusable installer.
+    get_target_property(_llavon_yyjson_type yyjson::yyjson TYPE)
+    if(NOT _llavon_yyjson_type STREQUAL "STATIC_LIBRARY")
+        message(FATAL_ERROR
+            "The TSF frontend requires static yyjson. Configure with the repository's "
+            "cmake/triplets overlay and rebuild the vcpkg dependencies.")
+    endif()
+
+    target_link_libraries(llavon-ime PRIVATE
+        Microsoft::CppWinRT
+        WindowsApp
+        advapi32    # Registry API
+        ole32       # COM
+        oleaut32    # COM Automation
+        uuid        # TSF GUID constants
+        reflectcpp::reflectcpp
+        llavon::debug-client
+        llavon::ipc
+        utf8::cpp
+        utf8cpp::utf8cpp
+    )
+
+    if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        set(_llavon_frontend_install_dir bin/x86)
+    else()
+        set(_llavon_frontend_install_dir bin)
+    endif()
+    install(TARGETS llavon-ime
+        RUNTIME DESTINATION "${_llavon_frontend_install_dir}"
+        COMPONENT Runtime
+    )
 endif()
-install(TARGETS llavon-ime
-    RUNTIME DESTINATION "${_llavon_frontend_install_dir}"
-    COMPONENT Runtime
-)
 
 if(BUILD_TESTING)
     add_executable(frontend-mapping-layout-tests tests/mapping_layout_tests.cpp)
@@ -216,10 +217,16 @@ if(BUILD_TESTING)
         CXX_STANDARD_REQUIRED YES
         CXX_EXTENSIONS NO
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    add_dependencies(frontend-dll-load-tests llavon-ime)
+    if(TARGET llavon-ime)
+        add_dependencies(frontend-dll-load-tests llavon-ime)
+        set(_llavon_frontend_dll "$<TARGET_FILE:llavon-ime>")
+    else()
+        add_dependencies(frontend-dll-load-tests llavon-ime-frontend-x64)
+        set(_llavon_frontend_dll "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/llavon-ime.dll")
+    endif()
     target_link_libraries(frontend-dll-load-tests PRIVATE uuid)
     add_test(NAME frontend-dll-load
-        COMMAND frontend-dll-load-tests "$<TARGET_FILE:llavon-ime>")
+        COMMAND frontend-dll-load-tests "${_llavon_frontend_dll}")
 
     add_executable(uninstall-purge-tests
         tests/uninstall_purge_tests.cpp

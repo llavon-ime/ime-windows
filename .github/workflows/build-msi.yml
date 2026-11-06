@@ -132,6 +132,7 @@ jobs:
           name: llavon-ime-vcpkg-abi
           path: |
             build/windows/vcpkg_installed/**/share/*/vcpkg_abi_info.txt
+            build/windows/frontend-x64/vcpkg_installed/**/share/*/vcpkg_abi_info.txt
             build/windows/frontend-x86/vcpkg_installed/**/share/*/vcpkg_abi_info.txt
             vcpkg/buildtrees/**/*.vcpkg_abi_info.txt
             vcpkg/buildtrees/detect_compiler/**
