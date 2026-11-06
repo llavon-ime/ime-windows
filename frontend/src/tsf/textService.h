@@ -20,7 +20,6 @@
 #include "core/e2e_trace.hpp"
 #include "engine/engine_types.hpp"
 #include "engine/engine_worker.hpp"
-#include "system/sysutil.hpp"
 #include "tsf/key_router.hpp"
 
 namespace tsf {
@@ -41,7 +40,7 @@ class TextService :
         ITfKeyEventSink,
         ITfCompositionSink,
         ITfTextEditSink,
-        ITfDisplayAttributeProvider>, private module_lock_updater, private CompositionHost {
+        ITfDisplayAttributeProvider>, private CompositionHost {
     // clang-format on
 public:
     TextService();

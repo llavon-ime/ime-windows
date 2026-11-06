@@ -12,7 +12,6 @@
 
 #include "engine/engine_types.hpp"
 #include "system/globals.h"
-#include "system/sysutil.hpp"
 #include "system/taskbar_theme.hpp"
 
 namespace tsf {
@@ -20,8 +19,7 @@ namespace tsf {
 enum class InputIndicator { Chinese, English, Unavailable };
 
 class InputModeLangBarItem
-    : public winrt::implements<InputModeLangBarItem, ITfLangBarItem, ITfLangBarItemButton, ITfSource>,
-      public module_lock_updater {
+    : public winrt::implements<InputModeLangBarItem, ITfLangBarItem, ITfLangBarItemButton, ITfSource> {
 public:
     explicit InputModeLangBarItem(std::function<void()> on_click = {},
                                   std::function<void()> on_open_settings = {},

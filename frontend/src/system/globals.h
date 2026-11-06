@@ -2,8 +2,6 @@
 
 #include <windows.h>
 
-#include <atomic>
-
 namespace tsf {
 
 struct Globals {
@@ -11,10 +9,6 @@ struct Globals {
      * @brief DLL module handle
      */
     inline static HINSTANCE hinstance = nullptr;
-    /**
-     * @brief DLL reference count for managing lifetime
-     */
-    inline static std::atomic<LONG> dll_ref_count = 0;
     /**
      * @brief tsf language ID
      */

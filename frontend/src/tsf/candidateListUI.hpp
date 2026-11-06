@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "system/sysutil.hpp"
 #include "candidateUiClient.hpp"
 
 namespace tsf {
@@ -25,7 +24,7 @@ class CandidateListUIElement
     : public winrt::implements<
         CandidateListUIElement,
         ITfCandidateListUIElementBehavior
-    >, public module_lock_updater {
+    > {
     // clang-format on
 public:
     // ITfUIElement

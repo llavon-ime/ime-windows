@@ -854,51 +854,37 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* pThreadMgr, TfClientId tfClie
 HRESULT TextService::activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId) {
     if (!pThreadMgr) return E_INVALIDARG;
 
-    start_engine_worker();
-    threadMgr.copy_from(pThreadMgr);
-    _tfClientId = tfClientId;
-    candidate_ui_->attach(pThreadMgr, tfClientId);
+    try {
+        start_engine_worker();
+        threadMgr.copy_from(pThreadMgr);
+        _tfClientId = tfClientId;
+        candidate_ui_->attach(pThreadMgr, tfClientId);
 
-    input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>(
-        [this]() {
-            if (engine_worker_) engine_worker_->toggle_input_mode();
-            refresh_input_mode_indicator();
-        },
-        [] { request_settings_window(); },
-        [](POINT location) { request_settings_menu(location); });
-    input_mode_lang_bar_item_->add_to_language_bar(threadMgr.get());
-    refresh_input_settings();
-    refresh_input_mode_indicator();
-    watch_taskbar_theme();
+        input_mode_lang_bar_item_ = winrt::make_self<InputModeLangBarItem>(
+            [this]() {
+                if (engine_worker_) engine_worker_->toggle_input_mode();
+                refresh_input_mode_indicator();
+            },
+            [] { request_settings_window(); },
+            [](POINT location) { request_settings_menu(location); });
+        input_mode_lang_bar_item_->add_to_language_bar(threadMgr.get());
+        refresh_input_settings();
+        refresh_input_mode_indicator();
+        watch_taskbar_theme();
 
-    winrt::com_ptr<ITfSource> itfSource;
-    HRESULT hr = threadMgr->QueryInterface<ITfSource>(itfSource.put());
-    if (FAILED(hr)) {
+        const auto itfSource = threadMgr.as<ITfSource>();
+        itfSource->AdviseSink(IID_ITfThreadMgrEventSink, static_cast<ITfThreadMgrEventSink*>(this),
+                              &dwThreadMgrEventSinkCookie) | win::check{};
+
+        const auto itfKeystrokeMgr = threadMgr.as<ITfKeystrokeMgr>();
+        itfKeystrokeMgr->AdviseKeyEventSink(tfClientId, static_cast<ITfKeyEventSink*>(this), TRUE) |
+            win::check{};
+        return S_OK;
+    } catch (...) {
+        const HRESULT hr = handle_com_exception();
         deactivate();
         return hr;
     }
-
-    hr = itfSource->AdviseSink(
-        IID_ITfThreadMgrEventSink, static_cast<ITfThreadMgrEventSink*>(this), &dwThreadMgrEventSinkCookie);
-    if (FAILED(hr)) {
-        deactivate();
-        return hr;
-    }
-
-    winrt::com_ptr<ITfKeystrokeMgr> itfKeystrokeMgr;
-    hr = threadMgr->QueryInterface<ITfKeystrokeMgr>(itfKeystrokeMgr.put());
-    if (FAILED(hr)) {
-        deactivate();
-        return hr;
-    }
-
-    hr = itfKeystrokeMgr->AdviseKeyEventSink(tfClientId, static_cast<ITfKeyEventSink*>(this), TRUE);
-    if (FAILED(hr)) {
-        deactivate();
-        return hr;
-    }
-
-    return S_OK;
 }
 
 /**

@@ -45,7 +45,9 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void** ppv) {
 }
 
 STDAPI DllCanUnloadNow() {
-    return (tsf::Globals::dll_ref_count == 0) ? S_OK : S_FALSE;
+    if (winrt::get_module_lock()) return S_FALSE;
+    winrt::clear_factory_cache();
+    return S_OK;
 }
 
 /**
