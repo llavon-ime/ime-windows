@@ -57,18 +57,17 @@ jobs:
           }
           $releaseTag = "v$version"
 
-          gh release download $releaseTag --pattern latest.json --pattern '*.exe' --pattern '*.msi' --dir $source
+          gh release download $releaseTag --pattern latest.json --pattern '*.exe' --dir $source
           if ($LASTEXITCODE -ne 0) {
-            throw "$releaseTag does not have a manifest, setup and MSI to promote"
+            throw "$releaseTag does not have a manifest and setup to promote"
           }
           $rolling = Get-Content -Raw -Encoding utf8 (Join-Path $source 'latest.json') | ConvertFrom-Json
           if ($rolling.version -ne $version -or $null -eq $rolling.setup) {
             throw "$releaseTag has an unexpected manifest"
           }
           $setups = @(Get-ChildItem $source -Filter *.exe)
-          $msis = @(Get-ChildItem $source -Filter *.msi)
-          if ($setups.Count -ne 1 -or $msis.Count -ne 1) {
-            throw "Expected one setup and one MSI in $releaseTag"
+          if ($setups.Count -ne 1) {
+            throw "Expected one setup in $releaseTag"
           }
           $setupSha256 = (Get-FileHash -LiteralPath $setups[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($setupSha256 -ne $rolling.setup.sha256 -or $setups[0].Length -ne [long]$rolling.setup.size) {
@@ -155,7 +154,7 @@ jobs:
             }
           }
 
-          gh release create stable $setups[0].FullName $msis[0].FullName $manifestPath `
+          gh release create stable $setups[0].FullName $manifestPath `
             --title "Stable Windows build $version" `
             --notes-file $releaseNotesPath `
             --latest

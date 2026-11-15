@@ -242,12 +242,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download MSI artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: llavon-ime-windows-msi
-          path: release-assets
-
       - name: Download web installer artifact
         uses: actions/download-artifact@v4
         with:
@@ -259,11 +253,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $msis = @(Get-ChildItem release-assets -Filter *.msi | Sort-Object Name)
-          if ($msis.Count -ne 1) {
-            throw "Expected one MSI, found $($msis.Count)"
-          }
-          $msi = $msis[0]
           $setups = @(Get-ChildItem release-assets -Filter *.exe | Sort-Object Name)
           if ($setups.Count -ne 1) {
             throw "Expected one web installer, found $($setups.Count)"
@@ -282,13 +271,13 @@ jobs:
             if ($targetCommit -ne "${{ github.sha }}") {
               throw "$releaseTag already exists for another commit: $targetCommit"
             }
-            gh release upload $releaseTag $setup.FullName $msi.FullName --clobber
+            gh release upload $releaseTag $setup.FullName --clobber
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
             gh release edit $releaseTag --notes-file $releaseNotesPath
           } else {
-            gh release create $releaseTag $setup.FullName $msi.FullName `
+            gh release create $releaseTag $setup.FullName `
               --target "${{ github.sha }}" `
               --title "Llavon IME $releaseVersion" `
               --notes-file $releaseNotesPath `
@@ -346,7 +335,7 @@ jobs:
             }
           }
 
-          gh release create latest $setup.FullName $msi.FullName $manifestPath `
+          gh release create latest $setup.FullName $manifestPath `
             --title "Rolling Windows build" `
             --notes-file $releaseNotesPath `
             --prerelease `
